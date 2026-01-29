@@ -32,13 +32,15 @@ BACKUP_USD_PKR_API = "https://api.exchangerate-api.com/v4/latest/USD"
 
 def _get_streamlit_secret(key: str) -> Optional[str]:
     """Read a secret from Streamlit secrets or environment variables."""
+    import os
     try:
         if hasattr(st, "secrets") and key in st.secrets:
             val = st.secrets.get(key)
             return str(val) if val is not None else None
     except Exception:
         pass
-    return str(os.environ.get(key)) if os.environ.get(key) else None
+    env_val = os.environ.get(key)
+    return str(env_val) if env_val else None
 
 
 @st.cache_resource
