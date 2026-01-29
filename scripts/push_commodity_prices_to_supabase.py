@@ -7,13 +7,14 @@ This is the easiest way to fix "No data available" on Streamlit Cloud.
    $env:SUPABASE_URL = "https://..."
    $env:SUPABASE_SERVICE_ROLE_KEY = "..."
 3) Run:
-   python scripts/push_commodity_prices_to_supabase.py
+    python scripts/push_commodity_prices_to_supabase.py
 
 It will read the standard monthly CSVs from data/raw/* and upsert them.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import pandas as pd
@@ -54,24 +55,63 @@ def detect_value_col(df: pd.DataFrame) -> str:
     raise ValueError("No numeric value column found")
 
 
+def asset_path_from_csv_path(csv_path: Path) -> str:
+    rel = csv_path.relative_to(RAW_DATA_DIR)
+    # Remove one or more .csv suffixes (handles accidental .csv.csv)
+    name = rel.as_posix()
+    while name.lower().endswith(".csv"):
+        name = name[:-4]
+    return name
+
+
+def discover_csv_assets() -> list[Path]:
+    # Skip backups and non-data folders
+    all_csvs = [p for p in RAW_DATA_DIR.rglob("*.csv") if p.is_file()]
+    filtered = []
+    for p in all_csvs:
+        parts = [x.lower() for x in p.parts]
+        if "backups" in parts:
+            continue
+        filtered.append(p)
+    return sorted(filtered)
+
+
 def main() -> int:
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    parser = argparse.ArgumentParser(description="Upload data/raw CSV history into Supabase commodity_prices")
+    parser.add_argument("--url", dest="url", default=os.environ.get("SUPABASE_URL"))
+    parser.add_argument(
+        "--key",
+        dest="key",
+        default=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY"),
+        help="Prefer SUPABASE_SERVICE_ROLE_KEY",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="List CSVs that would be uploaded")
+    parser.add_argument("--limit", type=int, default=0, help="Only upload first N CSV files (0 = all)")
+    args = parser.parse_args()
+
+    url = args.url
+    key = args.key
     if not url or not key:
-        raise SystemExit("Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)")
+        raise SystemExit("Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY).")
 
     from supabase import create_client
 
     client = create_client(url, key)
 
-    total_rows = 0
-    for asset_path, currency in DEFAULT_ASSETS:
-        csv_files = list(RAW_DATA_DIR.glob(f"{asset_path}*.csv"))
-        if not csv_files:
-            print(f"skip (missing csv): {asset_path}")
-            continue
+    csvs = discover_csv_assets()
+    if args.limit and args.limit > 0:
+        csvs = csvs[: int(args.limit)]
 
-        df = pd.read_csv(csv_files[0])
+    if args.dry_run:
+        for p in csvs:
+            print(asset_path_from_csv_path(p))
+        print(f"count: {len(csvs)}")
+        return 0
+
+    total_rows = 0
+    for csv_path in csvs:
+        asset_path = asset_path_from_csv_path(csv_path)
+        df = pd.read_csv(csv_path)
         ts_col = detect_timestamp_col(df)
         val_col = detect_value_col(df)
 
@@ -79,7 +119,7 @@ def main() -> int:
             "asset_path": asset_path,
             "timestamp": pd.to_datetime(df[ts_col], errors="coerce"),
             "value": pd.to_numeric(df[val_col], errors="coerce"),
-            "currency": currency,
+            "currency": None,
             "source": "csv_import",
         }).dropna(subset=["timestamp", "value"])
 
