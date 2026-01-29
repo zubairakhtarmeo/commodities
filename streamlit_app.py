@@ -148,6 +148,40 @@ def supabase_fetch_prediction_history(
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
+def supabase_fetch_commodity_series(asset_path: str, limit: int = 600) -> pd.DataFrame:
+    """Fetch commodity time series from Supabase if available.
+
+    Expects a table named `commodity_prices` with columns:
+    - asset_path (text)
+    - timestamp (date or timestamptz)
+    - value (numeric)
+    Optional: currency (text), source (text)
+    """
+    client = get_supabase_client()
+    if client is None:
+        return pd.DataFrame()
+    try:
+        resp = (
+            client.table("commodity_prices")
+            .select("timestamp,value")
+            .eq("asset_path", asset_path)
+            .order("timestamp", desc=False)
+            .limit(int(limit))
+            .execute()
+        )
+        rows = resp.data or []
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        df = df.dropna(subset=["timestamp", "value"]).sort_values("timestamp")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 def render_ai_predictions_page():
     st.markdown("""
     <div style='border-left: 4px solid #7c3aed; padding-left: 1rem; margin: 1rem 0 1.25rem 0;'>
@@ -716,6 +750,23 @@ def load_commodity_data(asset_path: str, currency: str):
         except Exception as e:
             st.error(f"Error loading {asset_path}: {str(e)}")
             pass
+
+    # Cloud fallback: load from Supabase (keeps repo code-only, data stays private)
+    sb_df = supabase_fetch_commodity_series(asset_path)
+    if sb_df is not None and not sb_df.empty:
+        latest_price = float(sb_df["value"].iloc[-1])
+        prev_price = float(sb_df["value"].iloc[-2]) if len(sb_df) > 1 else latest_price
+        price_change = ((latest_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0.0
+        return {
+            'current_price': latest_price,
+            'price_change': price_change,
+            'data_points': len(sb_df),
+            'df': sb_df,
+            'value_col': 'value',
+            'time_col': 'timestamp',
+            'currency': currency,
+            'source': 'supabase'
+        }
     
     # Fallback
     return {
@@ -988,6 +1039,15 @@ def load_predictions(asset: str):
                         base_price = float(derived)
             except Exception:
                 pass
+
+    # Cloud fallback: derive base price from Supabase commodity series
+    if base_price == 1500:
+        sb_df = supabase_fetch_commodity_series(asset)
+        try:
+            if sb_df is not None and not sb_df.empty:
+                base_price = float(sb_df["value"].iloc[-1])
+        except Exception:
+            pass
     
     # Commodity forecasting: Use MONTHS not hours (standard industry practice)
     predictions = {}

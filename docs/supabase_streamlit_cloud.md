@@ -32,6 +32,30 @@ create unique index if not exists prediction_records_unique
 on prediction_records(asset, as_of_date, target_date, model_name, horizon);
 ```
 
+### (Recommended) Also store commodity history in Supabase
+
+If you deploy the dashboard as **code-only** to Streamlit Cloud (recommended), the cloud app will not have your local `data/raw/*.csv` files.
+
+Create this table so the dashboard can load commodity history from Supabase:
+
+```sql
+create table if not exists commodity_prices (
+  id bigserial primary key,
+  asset_path text not null,
+  timestamp date not null,
+  value numeric not null,
+  currency text null,
+  source text null,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists commodity_prices_unique
+on commodity_prices(asset_path, timestamp);
+```
+
+Then upload your existing CSV history once using:
+- `python scripts/push_commodity_prices_to_supabase.py`
+
 ## 3) Add Streamlit Cloud Secrets
 In Streamlit Cloud:
 - App → **Settings** → **Secrets**
