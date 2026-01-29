@@ -1,0 +1,73 @@
+project:
+  name: "eurusd_monthly"
+
+frequency:
+  rule: "M"
+  timezone: null
+
+assets:
+  - asset_id: "EURUSD"
+    target:
+      role: "target"
+      connector:
+        type: "csv"
+        path: "data/raw/EURUSD_monthly.csv"
+        time_col: "timestamp"
+        value_col: "value"
+      availability_lag_steps: 0
+    exogenous: []
+
+features:
+  packs:
+    - name: "lags"
+      enabled: true
+      params:
+        lags: [1, 2, 3, 6, 12]
+    - name: "rolling_stats"
+      enabled: true
+      params:
+        windows: [3, 6, 12]
+        stats: ["mean", "std"]
+        min_periods: 3
+    - name: "volatility"
+      enabled: true
+      params:
+        windows: [3, 6, 12]
+        min_periods: 3
+    - name: "spreads"
+      enabled: false
+      params: {}
+
+dataset:
+  horizon_steps: [1, 3, 6]
+  lookback_steps: 12
+  drop_na_target: true
+
+validation:
+  strategy: "walk_forward"
+  initial_train_periods: 12
+  step_size: 1
+  test_periods: 3
+  embargo_steps: 0
+  purge_steps: 0
+
+model_ladder:
+  - name: "baseline_last_value"
+    type: "naive"
+    enabled: true
+  - name: "linear_ridge"
+    type: "ridge"
+    enabled: true
+    params:
+      alpha: 1.0
+  - name: "tree_hist_gbrt"
+    type: "hist_gbrt"
+    enabled: false
+    params: {}
+
+explainability:
+  enabled: true
+  method: "permutation"
+
+output:
+  artifacts_dir: "artifacts"

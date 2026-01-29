@@ -1,0 +1,316 @@
+{
+  "collection_time": "2026-01-28T15:11:47.123593",
+  "news": {
+    "cotton": [
+      {
+        "timestamp": "Mon, 26 Jan 2026 17:56:00 GMT",
+        "commodity": "cotton",
+        "title": "Sugarcane boom threatens cotton production",
+        "description": "Cotton Ginners Forum chairman stresses strengthening of national economy via strict enforcement of crop zoning laws.",
+        "source": "Bing News",
+        "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6979e0f3e635444196d5601ffc8f8d0d&url=https%3a%2f%2fwww.dawn.com%2fnews%2f1969293&c=917406883264475982&mkt=en-ww",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:03.682623"
+      },
+      {
+        "timestamp": "Mon, 26 Jan 2026 08:07:00 GMT",
+        "commodity": "cotton",
+        "title": "Pakistan’s Cotton Yarn Exports to China Surpass $451 Million in 2025",
+        "description": "Pakistan's cotton yarn exports to China recorded solid growth in 2025, exceeding $451 million, underscoring the resilience and ...",
+        "source": "Bing News",
+        "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6979e0f3e635444196d5601ffc8f8d0d&url=https%3a%2f%2fwww.app.com.pk%2fforeign-correspondent%2fpakistans-cotton-yarn-exports-to-china-surpass-451-million-in-2025%2f&c=9628515010463987324&mkt=en-ww",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:03.683110"
+      },
+      {
+        "timestamp": "Tue, 18 Feb 2025 01:33:00 GMT",
+        "commodity": "cotton",
+        "title": "Pakistan’s cotton industry: pivot to premium or perish",
+        "description": "Pakistan’s cotton economy stands at a crossroads. Once a dominant force in textile exports, the sector now struggles to remain viable in an increasingly competitive global landscape. Structural ...",
+        "source": "Bing News",
+        "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6979e0f3e635444196d5601ffc8f8d0d&url=https%3a%2f%2fwww.brecorder.com%2fnews%2f40348619&c=4092998388053427335&mkt=en-ww",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:03.683189"
+      }
+    ],
+    "polyester": [
+      {
+        "timestamp": "Tue, 09 Sep 2025 07:00:00 GMT",
+        "commodity": "polyester",
+        "title": "Purified Terephthalic Acid (PTA) Prices Witness Regional Fluctuations in Q2 2025, Says IMARC - IMARC Group",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMiekFVX3lxTE1wbl96ZGhQSTAyelctcTVKOHdSVXcwWUZqaVlIYXA4LVlMMVE4X1RSWkZ1UkVPOEMxa3N1anZNVGtfSVFFYWV1VUx0MjhoRE1fdldMZ1V2TVZaY0U0S2o4UDVNZUM2d2FJdVFEbThtZX",
+        "source": "IMARC Group",
+        "url": "https://news.google.com/rss/articles/CBMiekFVX3lxTE1wbl96ZGhQSTAyelctcTVKOHdSVXcwWUZqaVlIYXA4LVlMMVE4X1RSWkZ1UkVPOEMxa3N1anZNVGtfSVFFYWV1VUx0MjhoRE1fdldMZ1V2TVZaY0U0S2o4UDVNZUM2d2FJdVFEbThtZXhueEZ0dE16bEZB?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:06.078953"
+      },
+      {
+        "timestamp": "Mon, 12 May 2025 07:00:00 GMT",
+        "commodity": "polyester",
+        "title": "Chinese PET Resin Prices Rise as Lower Prices Fuel Exports - czapp.com",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMinwFBVV95cUxPbHpzWTJGY3pVWkx2NnV5OFhxRHdDRVRoSDQ2UHVQLTl1N19LcFFJX0RlamUtaWh4TFlNMUFfb3RxcE9tcjhpUF9MZUY0TXZqWHJmOXZwRzkyZm85bE1Zb2JsOU5fdndWY2p3UC1zeV",
+        "source": "czapp.com",
+        "url": "https://news.google.com/rss/articles/CBMinwFBVV95cUxPbHpzWTJGY3pVWkx2NnV5OFhxRHdDRVRoSDQ2UHVQLTl1N19LcFFJX0RlamUtaWh4TFlNMUFfb3RxcE9tcjhpUF9MZUY0TXZqWHJmOXZwRzkyZm85bE1Zb2JsOU5fdndWY2p3UC1zeVprTVlNZmhzVGd6bTZZRHdKMDgxUHFRZWtWV0djV3lNUDBNdlVOQVRXYk40MVdvaUU?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:06.078989"
+      },
+      {
+        "timestamp": "Tue, 09 Sep 2025 07:00:00 GMT",
+        "commodity": "polyester",
+        "title": "Indian polymer prices mixed: PET, PVC gain; PE, PP weaken - ALCHEMPro",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMivwFBVV95cUxPMkV4VFczd0p1amFNQkVwYTRNSGJpSkVobzduUUoxMDhRUzN6MEZfdVBSelhkU0UwT09GdFg3MklkM2dqZU85RzBQWnNob3lwOG1BOGZNeXVBVUU0VENiS0NJS2FYUUN4cERlcWJ6eG",
+        "source": "ALCHEMPro",
+        "url": "https://news.google.com/rss/articles/CBMivwFBVV95cUxPMkV4VFczd0p1amFNQkVwYTRNSGJpSkVobzduUUoxMDhRUzN6MEZfdVBSelhkU0UwT09GdFg3MklkM2dqZU85RzBQWnNob3lwOG1BOGZNeXVBVUU0VENiS0NJS2FYUUN4cERlcWJ6eGF0Y0tmRVZCRk9jSnRhSndQbzBlQXRRM1NQdkRrb2tqOS1taUpVT1NHWmliTE5FalEzZ1JCdGphTDl0N2pSWDN4Ymx4SDFSR0M4OWg2eGpocw?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:06.079021"
+      },
+      {
+        "timestamp": "Fri, 23 May 2025 11:27:00 GMT",
+        "commodity": "polyester",
+        "title": "China’s Antimony Ban May Drive Up US PET Prices - ICIS",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMia0FVX3lxTE8zSEVjVmZSOGxTR2NWd3BqTUdnU0RSQi1jRkxEcHFCWHF2MkxEY2JZcFNCRjlyNTBpVnRkOTRTamppYUlMTzRtZkgzOWsxZS1UUDhuc1RjYmtleE54TWVFd0cyYU82UHViLWc4?oc=5\"",
+        "source": "ICIS",
+        "url": "https://news.google.com/rss/articles/CBMia0FVX3lxTE8zSEVjVmZSOGxTR2NWd3BqTUdnU0RSQi1jRkxEcHFCWHF2MkxEY2JZcFNCRjlyNTBpVnRkOTRTamppYUlMTzRtZkgzOWsxZS1UUDhuc1RjYmtleE54TWVFd0cyYU82UHViLWc4?oc=5",
+        "category": "policy",
+        "collected_at": "2026-01-28T15:12:06.079058"
+      },
+      {
+        "timestamp": "Thu, 13 Nov 2025 08:00:00 GMT",
+        "commodity": "polyester",
+        "title": "India revokes BIS quality controls across chemicals - Argus Media",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMixAFBVV95cUxPWFZJbXd5a21NU080UWVhYnRJbTQ0c2hBc2QyUmRacVVXZ21EYTUtU1Q0UGVQUHBWYU02TnlmQTJWRnowVHpucktQSzViZnhUbVU3aVUzaDZKR192ZnlZczJab1ZyTThCLXNSMDRfWW",
+        "source": "Argus Media",
+        "url": "https://news.google.com/rss/articles/CBMixAFBVV95cUxPWFZJbXd5a21NU080UWVhYnRJbTQ0c2hBc2QyUmRacVVXZ21EYTUtU1Q0UGVQUHBWYU02TnlmQTJWRnowVHpucktQSzViZnhUbVU3aVUzaDZKR192ZnlZczJab1ZyTThCLXNSMDRfWWRGMWZFLVlUcE5ZRkFJd2FSOWI0bjdJb3lHUUExUVpTdno1TUxpV3FaUG5SalpHaHNjWUNwcFZodnRSbHljY2FrSEZpeHI3X0pIR00tcEVvNUwzMlBV?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:06.079088"
+      }
+    ],
+    "oil": [
+      {
+        "timestamp": "Fri, 23 Jan 2026 10:15:00 GMT",
+        "commodity": "oil",
+        "title": "Oil price forecast | Brent and WTI crude oil outlook - Capital.com",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMickFVX3lxTFBJa0RuX3pOUTBuemVpYmhoU3NBcGNHMjNMTTdna01Pb0k4dkNhNmRiVzllQ1l1T1lfNm1fSmQxYkVHWmZMb01QRXB3dGh5S19xUG5CVUppcm1HSjEzZHlUeFljeTZzdXRHeGJVMEFmVk",
+        "source": "Capital.com",
+        "url": "https://news.google.com/rss/articles/CBMickFVX3lxTFBJa0RuX3pOUTBuemVpYmhoU3NBcGNHMjNMTTdna01Pb0k4dkNhNmRiVzllQ1l1T1lfNm1fSmQxYkVHWmZMb01QRXB3dGh5S19xUG5CVUppcm1HSjEzZHlUeFljeTZzdXRHeGJVMEFmVklXQQ?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:08.447298"
+      },
+      {
+        "timestamp": "Wed, 19 Nov 2025 08:00:00 GMT",
+        "commodity": "oil",
+        "title": "Crude oil price chart 2020-2025 - Statista",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMidkFVX3lxTFBQOTAyZ1hCMjVFUkNlSlVkbkFfVUt0c2xtVHNqbHFNUE00SnUtV2lXbXRHcVhoUEdIMnFGU2tVcThKdUdjY2tDR3NjNEd1YnhlcHZNazg4QU1tbWFhWTY2WjJucDhTMEFRQWhTOVlCRD",
+        "source": "Statista",
+        "url": "https://news.google.com/rss/articles/CBMidkFVX3lxTFBQOTAyZ1hCMjVFUkNlSlVkbkFfVUt0c2xtVHNqbHFNUE00SnUtV2lXbXRHcVhoUEdIMnFGU2tVcThKdUdjY2tDR3NjNEd1YnhlcHZNazg4QU1tbWFhWTY2WjJucDhTMEFRQWhTOVlCRDlwRVd5VlE?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:08.447338"
+      },
+      {
+        "timestamp": "Sat, 06 Dec 2025 18:35:19 GMT",
+        "commodity": "oil",
+        "title": "Crude Oil Price Assessment Methodology - S&P Global",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMiqgFBVV95cUxQcjhueFlCNjZVZkZoYmVkSXMwTVBvem1CVEJEZFRYM282T2VFUzZ6YTQzUklSUjFKeFpSVUFBUnBwRlJKb3NoYkVXUGdiRWF3MmlHYldobm1zTHlEMVpPMWFQSEpDZkQ1aWtuekVJWV",
+        "source": "S&P Global",
+        "url": "https://news.google.com/rss/articles/CBMiqgFBVV95cUxQcjhueFlCNjZVZkZoYmVkSXMwTVBvem1CVEJEZFRYM282T2VFUzZ6YTQzUklSUjFKeFpSVUFBUnBwRlJKb3NoYkVXUGdiRWF3MmlHYldobm1zTHlEMVpPMWFQSEpDZkQ1aWtuekVJWVlMelZUQlhDS3FBS3BlRlpETzNvejgtT0s4SXZwNU5Mb3BBajdUV2VLS2xhZGFNY05Va3ZKQ2FqUFJ1UQ?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:08.447376"
+      },
+      {
+        "timestamp": "Mon, 26 Jan 2026 12:03:31 GMT",
+        "commodity": "oil",
+        "title": "Brent oil price holds near $66 as winter storm Fern and Iran risks frame the week - TechStock²",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMiowFBVV95cUxQMXl1X0RzSjhoSkVZR0NuYk40bUw3dmR2Z2JqNnVBZ0I0RnpJVFJLc2VsMGFaY0dpdkVMMW5CZEpYanVtc25pWFJWbjF6anphenJFcF85QXFjVXZueUFmQl9BcGNsaVh0UTF1cm1BeV",
+        "source": "TechStock²",
+        "url": "https://news.google.com/rss/articles/CBMiowFBVV95cUxQMXl1X0RzSjhoSkVZR0NuYk40bUw3dmR2Z2JqNnVBZ0I0RnpJVFJLc2VsMGFaY0dpdkVMMW5CZEpYanVtc25pWFJWbjF6anphenJFcF85QXFjVXZueUFmQl9BcGNsaVh0UTF1cm1BeVU0T3l6allvQnM4bF9nYVY1bFRDcTZHZjZMZWQ3eG9hOFdaMk9YVFJYSVRTdEVSWENVcTFr?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:08.447430"
+      },
+      {
+        "timestamp": "Mon, 05 Jan 2026 08:00:00 GMT",
+        "commodity": "oil",
+        "title": "Why Oil Prices Are Falling? Brent and WTI Slip after Maduro Capture in Venezuela as Gold Surges - TradingView",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMi8gFBVV95cUxQb1Z6a3Zqc2ptS04tZDY2MEdxSWU5TGVjLXlXVV92VDZ3eDdOZGxnNXVWR0kzUHdwVXZuNkdFcWNEZHY5U2s2LWZic0p2QzI2ZUs3MG55NzB2eTZtbUU0R3QyVzhTX1Q3UFJoVzZYdn",
+        "source": "TradingView",
+        "url": "https://news.google.com/rss/articles/CBMi8gFBVV95cUxQb1Z6a3Zqc2ptS04tZDY2MEdxSWU5TGVjLXlXVV92VDZ3eDdOZGxnNXVWR0kzUHdwVXZuNkdFcWNEZHY5U2s2LWZic0p2QzI2ZUs3MG55NzB2eTZtbUU0R3QyVzhTX1Q3UFJoVzZYdnowemNfdUNObkNHV0RHT0lLVXNxdmFfb1RsMDJuZHl2UWJyRFNQTmJDWTY1a1VHRmNIYldWbG90S0p5NGhublgwVzJBRmdxY1BMTURkckRaMHRvQUhtbFJyQXRkS21QUk4yM1E0ZlMxY09QVHRTdklqZklPWUVJOVBrNXlZT2NhVjRqZw?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:08.447476"
+      }
+    ],
+    "gas": [
+      {
+        "timestamp": "Tue, 27 Jan 2026 19:29:09 GMT",
+        "commodity": "gas",
+        "title": "Natural gas prices swing again after Winter Storm Fern — Henry Hub traders eye Thursday storage data - TechStock²",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMiuwFBVV95cUxQTk8wVWF0UXpUZWhlZTBXSVIwSW52Rk9kZzhEc0tzMVpMVHR0b0w1OVBTQTRIRGZ5U1BrU2pqTUJ5ZVFNTEtvN0poRDdRSXJuTVl3SmFBUXlFTkM4YndYT1U2UzU5LW4xbDlobm0yZn",
+        "source": "TechStock²",
+        "url": "https://news.google.com/rss/articles/CBMiuwFBVV95cUxQTk8wVWF0UXpUZWhlZTBXSVIwSW52Rk9kZzhEc0tzMVpMVHR0b0w1OVBTQTRIRGZ5U1BrU2pqTUJ5ZVFNTEtvN0poRDdRSXJuTVl3SmFBUXlFTkM4YndYT1U2UzU5LW4xbDlobm0yZnZWdVJGWG9mbjBDWGEwdWZqdERrNVQtZ2VPYXFqU05aNDYtWXlCODZBNTh2MUdWTG0ydW9TQzRKQUJ2RzV1a2JtN29zOURtQ2F5T2I0?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:10.732266"
+      },
+      {
+        "timestamp": "Thu, 22 Jan 2026 23:48:45 GMT",
+        "commodity": "gas",
+        "title": "Natural Gas Weekly Update - U.S. Energy Information Administration (EIA) (.gov)",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMiT0FVX3lxTFBRWFJZMllOeUZGVExQa0JZLWVrUWgzbFhVcDk1OHg4YVB3d2ZUYjJ3Y0VaaUJleVo2Z3hNWkV5SDJXUTFzRnNRU1Z1ZzNoVzA?oc=5\" target=\"_blank\">Natural Gas Weekly U",
+        "source": "U.S. Energy Information Administration (EIA) (.gov)",
+        "url": "https://news.google.com/rss/articles/CBMiT0FVX3lxTFBRWFJZMllOeUZGVExQa0JZLWVrUWgzbFhVcDk1OHg4YVB3d2ZUYjJ3Y0VaaUJleVo2Z3hNWkV5SDJXUTFzRnNRU1Z1ZzNoVzA?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:10.732287"
+      },
+      {
+        "timestamp": "Tue, 27 Jan 2026 01:41:13 GMT",
+        "commodity": "gas",
+        "title": "The Commodities Feed: Have US natural gas prices peaked? - ING THINK economic and financial analysis | ING THINK",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMimAFBVV95cUxQMldlU25reTdla3d0OF9OVkpodUtEbG54YU5lb1JEZU9WQkhuaVdiX1ptNDBDRXFkQ05UYXdrdER0dTJLYnZYNDlxRFdmeWFHdzlMTFlFZnlQbXFiVFlSYWVhcWE2RGNUcHZMdlNob0",
+        "source": "ING THINK economic and financial analysis | ING THINK",
+        "url": "https://news.google.com/rss/articles/CBMimAFBVV95cUxQMldlU25reTdla3d0OF9OVkpodUtEbG54YU5lb1JEZU9WQkhuaVdiX1ptNDBDRXFkQ05UYXdrdER0dTJLYnZYNDlxRFdmeWFHdzlMTFlFZnlQbXFiVFlSYWVhcWE2RGNUcHZMdlNob09PNTZFd0E3aFZQbmNlbl8wTmVyNzRwalNVODBmRklOSm9qQklSelhqVw?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:10.732309"
+      },
+      {
+        "timestamp": "Sat, 24 Jan 2026 00:08:57 GMT",
+        "commodity": "gas",
+        "title": "US spot gas prices soar near LNG terminals - Argus Media",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMiuAFBVV95cUxQblo2V1hpM09GeHNHY0tvOUxaNldPbGpBWklFczZrQ2d1em1nTl9COVNGLTJ4dFNheDYtMHB4bmUxYVFENkEwby13czJmNEFYc0V0NzJRMUVERm5FczM1QUlVY0xQZzU0bDJSQTBjaX",
+        "source": "Argus Media",
+        "url": "https://news.google.com/rss/articles/CBMiuAFBVV95cUxQblo2V1hpM09GeHNHY0tvOUxaNldPbGpBWklFczZrQ2d1em1nTl9COVNGLTJ4dFNheDYtMHB4bmUxYVFENkEwby13czJmNEFYc0V0NzJRMUVERm5FczM1QUlVY0xQZzU0bDJSQTBjaXlzVG9Rd2Uyd3VkY3hMWWZYaVcyTlFxbTNIVGludGtIUVVOS2NVS2NySGUxb1pzTlA2dXVBU2JIVHNoT2JwWC1wNkJHVkw4ZE5L?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:10.732327"
+      },
+      {
+        "timestamp": "Mon, 26 Jan 2026 11:00:00 GMT",
+        "commodity": "gas",
+        "title": "When the US freezes, the global LNG market catches a cold - Reuters",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMipAFBVV95cUxPUUFpMDk0R2xXZDJudG1lcmU4N3E4cTE0eGVWcXJyUzEwZlhLTFVmRzBvQ2Q5S1BmMUs5VjVDcE9hLXUxSGhPUHlTVml6d0drLXNJb2pieG93UmlGbTBZZC1ySkJsSGpmcTJDdXpiOE",
+        "source": "Reuters",
+        "url": "https://news.google.com/rss/articles/CBMipAFBVV95cUxPUUFpMDk0R2xXZDJudG1lcmU4N3E4cTE0eGVWcXJyUzEwZlhLTFVmRzBvQ2Q5S1BmMUs5VjVDcE9hLXUxSGhPUHlTVml6d0drLXNJb2pieG93UmlGbTBZZC1ySkJsSGpmcTJDdXpiOE9YWjM2NVRTbktsUUhvUFdyVzgwNnozWVYwZjRmVGNLZzREZmwybnpabjNzQmFQZjI0cF82Yg?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:10.732345"
+      }
+    ],
+    "pakistan": [
+      {
+        "timestamp": "Wed, 28 Jan 2026 02:46:42 GMT",
+        "commodity": "pakistan",
+        "title": "Rupee Up 88th Day in a Row Against US Dollar After SBP News - Vocal",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMikAFBVV95cUxPRmVTU0tna0V6UnRlWERocXhPMm4yRTZwRnJfS0dwTGNzMFZoS3lZLXl4YW9Nbk1iN1FzcWx5UUVQNUxKby1iYnB2OUdRSUVHZlBFUFNteWR4bGNoZmpsSXB4dTVFcUNDV1RHeUczVE",
+        "source": "Vocal",
+        "url": "https://news.google.com/rss/articles/CBMikAFBVV95cUxPRmVTU0tna0V6UnRlWERocXhPMm4yRTZwRnJfS0dwTGNzMFZoS3lZLXl4YW9Nbk1iN1FzcWx5UUVQNUxKby1iYnB2OUdRSUVHZlBFUFNteWR4bGNoZmpsSXB4dTVFcUNDV1RHeUczVEtyVFVwOWNTVDQweEx3RUxNTGtNQjlfWDJMMGVXSHFIa0s?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:11.909692"
+      },
+      {
+        "timestamp": "Fri, 23 Jan 2026 09:57:40 GMT",
+        "commodity": "pakistan",
+        "title": "Rupee Up 85th Consecutive Day Against US Dollar: A Historic Trend and What It Means for Pakistan’s Economy - Vocal",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMizwFBVV95cUxPa1ZGZnk5d2FkNTZra2RVRWI5NmRtVzZMV1Y5N3JZVXFsQU5hZE8yekRWRjYyN3NfSmhZWnFHNWs5MU4zZnVYSmVHQWJPUmw5NGRkNHBYUFJvVEVMZ3VYWEVPZ0hNNUVpckExeFZJd0",
+        "source": "Vocal",
+        "url": "https://news.google.com/rss/articles/CBMizwFBVV95cUxPa1ZGZnk5d2FkNTZra2RVRWI5NmRtVzZMV1Y5N3JZVXFsQU5hZE8yekRWRjYyN3NfSmhZWnFHNWs5MU4zZnVYSmVHQWJPUmw5NGRkNHBYUFJvVEVMZ3VYWEVPZ0hNNUVpckExeFZJd0ZPbmFrWHZ0TkZSazJyVGhHWkdCSWU2SVI1b19LTFREaFVfMWpsamhfZ2h1OHB1Z3BlZVVhbnhDb3R2X19sZ1FWSWpqdzFtbVdORTdxRGoyOEdsYW91VlJxMm1vVmFtWjA?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:11.910100"
+      },
+      {
+        "timestamp": "Fri, 05 Dec 2025 08:00:00 GMT",
+        "commodity": "pakistan",
+        "title": "USD to PKR exchange rate today in Pakistan - Abb Takk News",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMib0FVX3lxTE5jNEl4VWRQQU1xdm0yX3RPYkllVmVPejV6c3RYTDJqcjNpb3hhbjZzclVTRldMb0F2OUp0NGdkdElnT0FITHRQVmdpR3k1dS13RVpZYjBBRDJmTUh2SVFRWjdMaWxqZXZjLUNUNml5dw",
+        "source": "Abb Takk News",
+        "url": "https://news.google.com/rss/articles/CBMib0FVX3lxTE5jNEl4VWRQQU1xdm0yX3RPYkllVmVPejV6c3RYTDJqcjNpb3hhbjZzclVTRldMb0F2OUp0NGdkdElnT0FITHRQVmdpR3k1dS13RVpZYjBBRDJmTUh2SVFRWjdMaWxqZXZjLUNUNml5dw?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:11.910199"
+      },
+      {
+        "timestamp": "Wed, 07 May 2025 12:33:32 GMT",
+        "commodity": "pakistan",
+        "title": "USD/PKR Forecast | Will USD/PKR Go Up or Down? - Capital.com",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMiZkFVX3lxTE5DcDZFM0VWQ1RELVdXc2hlOXNtWDRBX3lhalY4N3ZyV05GOGtZamdIajItMU1QY0NiWnI0a2RMZmlMdUc0Qkpxb05zc01SbzhpLVBENDJvYTR5WTRHXzVHcFhwRF9sUQ?oc=5\" targe",
+        "source": "Capital.com",
+        "url": "https://news.google.com/rss/articles/CBMiZkFVX3lxTE5DcDZFM0VWQ1RELVdXc2hlOXNtWDRBX3lhalY4N3ZyV05GOGtZamdIajItMU1QY0NiWnI0a2RMZmlMdUc0Qkpxb05zc01SbzhpLVBENDJvYTR5WTRHXzVHcFhwRF9sUQ?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:11.910227"
+      },
+      {
+        "timestamp": "Fri, 23 May 2025 07:00:00 GMT",
+        "commodity": "pakistan",
+        "title": "AED steady at 76.44 PKR amid strong UAE-Pakistan economic ties - The Nation (Pakistan )",
+        "description": "<a href=\"https://news.google.com/rss/articles/CBMiogFBVV95cUxPRnhUZW0yQWJpMGhRZHdsaWRJcjFnX1RMRG9nbV9QVzJMNDAyMG1ONkFZVndtNnlPVmxQejhEd3FpMXd4RFJXVmpodXFRRy1xZU1Bc040V2E3WF9VRThZYlJESVJtMWp6WG1SZFR1LX",
+        "source": "The Nation (Pakistan )",
+        "url": "https://news.google.com/rss/articles/CBMiogFBVV95cUxPRnhUZW0yQWJpMGhRZHdsaWRJcjFnX1RMRG9nbV9QVzJMNDAyMG1ONkFZVndtNnlPVmxQejhEd3FpMXd4RFJXVmpodXFRRy1xZU1Bc040V2E3WF9VRThZYlJESVJtMWp6WG1SZFR1LXg1bnhPbk5wUjF5c1ZIUG96ZGdqREZaMEVGOWxPQjQ5ZGZhNjEzR3lxUU5KTVNHdTl4MXc?oc=5",
+        "category": "general",
+        "collected_at": "2026-01-28T15:12:11.910438"
+      }
+    ]
+  },
+  "weather": [
+    {
+      "timestamp": "2026-01-28T15:12:20.436319",
+      "type": "weather",
+      "region": "Punjab, Pakistan",
+      "crop": "cotton",
+      "alert": "Current: 20.1°C, 43% humidity",
+      "severity": "info",
+      "temperature": 20.1,
+      "humidity": 43,
+      "collected_at": "2026-01-28T15:12:20.436335"
+    },
+    {
+      "timestamp": "2026-01-28T15:12:28.398074",
+      "type": "weather",
+      "region": "Sindh, Pakistan",
+      "crop": "cotton",
+      "alert": "Current: 24.2°C, 28% humidity",
+      "severity": "info",
+      "temperature": 24.2,
+      "humidity": 28,
+      "collected_at": "2026-01-28T15:12:28.398086"
+    },
+    {
+      "timestamp": "2026-01-28T15:12:35.638804",
+      "type": "weather",
+      "region": "Sindh, Pakistan",
+      "crop": "cotton",
+      "alert": "Current: 22.8°C, 33% humidity",
+      "severity": "info",
+      "temperature": 22.8,
+      "humidity": 33,
+      "collected_at": "2026-01-28T15:12:35.638833"
+    }
+  ],
+  "geopolitical": [
+    {
+      "timestamp": "2026-01-28T15:12:35.639444",
+      "type": "geopolitical",
+      "region": "Middle East",
+      "affected_commodities": [
+        "oil",
+        "gas"
+      ],
+      "status": "monitor",
+      "collected_at": "2026-01-28T15:12:35.639461"
+    },
+    {
+      "timestamp": "2026-01-28T15:12:35.639474",
+      "type": "geopolitical",
+      "region": "Red Sea",
+      "affected_commodities": [
+        "oil",
+        "shipping"
+      ],
+      "status": "monitor",
+      "collected_at": "2026-01-28T15:12:35.639481"
+    },
+    {
+      "timestamp": "2026-01-28T15:12:35.639488",
+      "type": "geopolitical",
+      "region": "Ukraine",
+      "affected_commodities": [
+        "oil",
+        "gas",
+        "wheat"
+      ],
+      "status": "monitor",
+      "collected_at": "2026-01-28T15:12:35.639494"
+    }
+  ]
+}

@@ -1,0 +1,163 @@
+asset_id: "COTTON"
+description: "Cotton commodity price with supply/demand elasticity drivers"
+
+variables:
+  # Global supply factors
+  - name: "india_production"
+    category: "international"
+    description: "India cotton production (world's largest producer)"
+    unit: "million bales"
+    default_value: 25.0
+    
+  - name: "china_production"
+    category: "international"
+    description: "China cotton production"
+    unit: "million bales"
+    default_value: 5.5
+    
+  - name: "usa_production"
+    category: "international"
+    description: "US cotton production"
+    unit: "million bales"
+    default_value: 12.0
+    
+  - name: "global_supply_shock"
+    category: "international"
+    description: "Supply disruptions (weather, disease, policy)"
+    unit: "% deviation"
+    default_value: 0.0
+    
+  # Global demand factors
+  - name: "china_demand"
+    category: "international"
+    description: "China cotton mill usage (world's largest consumer)"
+    unit: "million bales"
+    default_value: 12.0
+    
+  - name: "apparel_demand"
+    category: "international"
+    description: "Global apparel demand growth (proxy: PMI, textile shipments)"
+    unit: "% YoY growth"
+    default_value: 2.5
+    
+  - name: "synthetic_price"
+    category: "international"
+    description: "Polyester fiber price (key substitute)"
+    unit: "USD/kg"
+    default_value: 1.8
+    
+  # Macroeconomic factors
+  - name: "usd_strength"
+    category: "international"
+    description: "US Dollar Index (affects export competitiveness)"
+    unit: "index"
+    default_value: 103.5
+    
+  - name: "oil_price"
+    category: "international"
+    description: "Crude oil price (production, transport, synthetics cost)"
+    unit: "USD/bbl"
+    default_value: 82.5
+    
+  - name: "freight_index"
+    category: "international"
+    description: "Shipping costs (affects landed cost in importing regions)"
+    unit: "USD/TEU"
+    default_value: 1200.0
+    
+  # Weather / seasonal factors
+  - name: "india_monsoon"
+    category: "local"
+    description: "India monsoon rainfall (affects yield)"
+    unit: "% of normal"
+    default_value: 100.0
+    
+  - name: "global_inflation"
+    category: "international"
+    description: "Global CPI (affects input costs, labor)"
+    unit: "% YoY"
+    default_value: 3.5
+
+elasticities:
+  # Supply drivers (positive elasticity: more supply → lower price)
+  - variable: "india_production"
+    elasticity: -0.6
+    lag_periods: 1
+    
+  - variable: "china_production"
+    elasticity: -0.3
+    lag_periods: 1
+    
+  - variable: "usa_production"
+    elasticity: -0.4
+    lag_periods: 1
+    
+  - variable: "global_supply_shock"
+    elasticity: -1.2
+    lag_periods: 0
+    
+  # Demand drivers (positive elasticity: more demand → higher price)
+  - variable: "china_demand"
+    elasticity: 0.5
+    lag_periods: 0
+    
+  - variable: "apparel_demand"
+    elasticity: 0.4
+    lag_periods: 0
+    
+  # Substitution: higher synthetic prices → higher cotton demand/price
+  - variable: "synthetic_price"
+    elasticity: 0.35
+    lag_periods: 1
+    
+  # Macro factors
+  - variable: "usd_strength"
+    elasticity: -0.2
+    lag_periods: 0
+    
+  # Oil: higher oil → higher production costs, synthetics cheaper → mixed effect
+  - variable: "oil_price"
+    elasticity: 0.15
+    lag_periods: 0
+    
+  # Freight: higher shipping → higher import costs for producers → higher cotton
+  - variable: "freight_index"
+    elasticity: 0.25
+    lag_periods: 0
+    
+  # Weather: good monsoon → higher yield → lower price
+  - variable: "india_monsoon"
+    elasticity: -0.8
+    lag_periods: 1
+    
+  # Inflation: higher input costs → higher price
+  - variable: "global_inflation"
+    elasticity: 0.3
+    lag_periods: 0
+
+hierarchy:
+  - name: "supply_side"
+    parent: null
+    children: ["india_production", "china_production", "usa_production", "global_supply_shock"]
+    
+  - name: "demand_side"
+    parent: null
+    children: ["china_demand", "apparel_demand", "synthetic_price"]
+    
+  - name: "macroeconomic"
+    parent: null
+    children: ["usd_strength", "oil_price", "freight_index", "global_inflation"]
+    
+  - name: "weather_seasonal"
+    parent: null
+    children: ["india_monsoon"]
+
+metadata:
+  source: "USDA WASDE, ICE Futures, World Bank, Textile Exchange"
+  frequency: "monthly"
+  last_updated: "2026-01-21"
+  notes: |
+    Elasticities based on historical cotton price relationships (2015-2026).
+    India monsoon lag of 1 period reflects typical impact on next season's market.
+    Synthetic elasticity reflects substitution dynamics.
+    Supply shocks (disease, extreme weather) modeled as disruption variable.

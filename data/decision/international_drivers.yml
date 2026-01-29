@@ -1,0 +1,765 @@
+# International Drivers for Cotton, Polyester, Viscose
+# Source: data/decision/source/international_variables.xlsx
+# Purpose: Scenario engine + Explainability (NOT ML features)
+# Last updated: 2026-01-26
+
+asset_id: "INTERNATIONAL_DRIVERS"
+description: "Causal variables affecting Cotton, Polyester, Viscose prices (international market)"
+source_file: "international_variables.xlsx"
+last_updated: "2026-01-26"
+usage: "scenario_and_explainability"  # NOT ml_features
+
+# Parent Variables (direct commodity drivers)
+parent_drivers:
+  local_market:
+    - name: "Electricity Price"
+      assumed_increment: "1 PKR (3.33%)"
+      unit: "PKR/unit"
+      impact:
+        cotton: 1.0323
+        polyester: 1.332
+        viscose: null
+
+    - name: "Gas Price"
+      assumed_increment: "1 PKR (0.08%)"
+      unit: "PKR/MMBTU"
+      impact:
+        cotton: 0.010096
+        polyester: 0.013882
+        viscose: null
+
+    - name: "Interest Rate"
+      assumed_increment: "1% (9.52%)"
+      unit: "%"
+      impact:
+        cotton: -0.2
+        polyester: -1.428
+        viscose: null
+
+    - name: "Local Cotton Production"
+      assumed_increment: "1 PKR (11%)"
+      unit: "maund"
+      impact:
+        cotton: -3.8885
+        polyester: 0
+        viscose: null
+
+    - name: "Local Demand Index"
+      assumed_increment: "1 PKR (6.6%)"
+      unit: "maund"
+      impact:
+        cotton: 2.97
+        polyester: -1.32
+        viscose: null
+
+    - name: "Govt Energy Policy"
+      assumed_increment: "+1 month delay"
+      unit: "months"
+      impact:
+        cotton: -1
+        polyester: 1.2
+        viscose: null
+
+  international_market:
+    - name: "ICE Cotton Futures"
+      current_value: 0.015385
+      unit: "US cents/lb"
+      impact:
+        cotton: 0.3
+        polyester: 0.4
+        viscose: 0.45
+
+    - name: "USD Index"
+      current_value: 1.021811
+      unit: "index"
+      impact:
+        cotton: -0.13
+        polyester: -0.5
+        viscose: -0.2
+
+    - name: "Crude Oil Price"
+      current_value: 1.066787
+      unit: "USD/barrel"
+      impact:
+        cotton: 0.14
+        polyester: 0.5
+        viscose: 0.25
+
+    - name: "China Demand Index"
+      current_value: 0.650602
+      unit: "M Bales"
+      impact:
+        cotton: 0.3
+        polyester: 0.5
+        viscose: 0.5
+
+    - name: "Vietnam Demand Index"
+      current_value: 1.057143
+      unit: "M Bales"
+      impact:
+        cotton: 0.03
+        polyester: 0.15
+        viscose: 0.1
+
+    - name: "Global Supply Index"
+      current_value: 1.120301
+      unit: "M Bales"
+      impact:
+        cotton: -0.5
+        polyester: -0.25
+        viscose: -0.25
+
+    - name: "International Market Production"
+      current_value: 132
+      unit: "M Tonnes"
+      impact:
+        cotton: -0.6
+        polyester: -0.3
+        viscose: -0.35
+
+    - name: "International Market Demand"
+      current_value: 122
+      unit: "M Tonnes"
+      impact:
+        cotton: 0.7
+        polyester: 0.6
+        viscose: 0.55
+
+    - name: "Major Countries Inhouse Production"
+      current_value: 77.7
+      unit: "M Tonnes"
+      impact:
+        cotton: -0.45
+        polyester: -0.35
+        viscose: -0.3
+
+    - name: "Major Countries Inhouse Consumption"
+      current_value: 55
+      unit: "M Tonnes"
+      impact:
+        cotton: 0.6
+        polyester: 0.45
+        viscose: 0.4
+
+    - name: "International Market Consumption"
+      current_value: 132
+      unit: "M Tonnes"
+      impact:
+        cotton: 0.65
+        polyester: 0.55
+        viscose: 0.5
+
+    - name: "Geopolitics and Trade Policy"
+      current_value: 12
+      unit: "%"
+      impact:
+        cotton: -0.3
+        polyester: -0.2
+        viscose: -0.25
+
+    - name: "Currency Fluctuations"
+      current_value: 0.5
+      unit: "%"
+      impact:
+        cotton: -0.55
+        polyester: -0.4
+        viscose: -0.35
+
+    - name: "Weather and Climate Patterns"
+      current_value: null
+      unit: null
+      impact:
+        cotton: 0.8
+        polyester: 0.05
+        viscose: 0.15
+
+    - name: "Global Inflation"
+      current_value: 3.7
+      unit: "%"
+      impact:
+        cotton: 0.35
+        polyester: 0.45
+        viscose: 0.39
+
+    - name: "Fast Fashion Trends"
+      current_value: 150
+      unit: "Billion USD"
+      impact:
+        cotton: -0.3
+        polyester: 0.6
+        viscose: 0.4
+
+    - name: "Industry Growth"
+      current_value: 5
+      unit: "%"
+      impact:
+        cotton: 0.5
+        polyester: 0.4
+        viscose: 0.35
+
+    - name: "Population (annual consumption rate)"
+      current_value: 0.85
+      unit: "%"
+      impact:
+        cotton: 0.55
+        polyester: 0.5
+        viscose: 0.45
+
+    - name: "Natural Disaster"
+      current_value: null
+      unit: null
+      impact:
+        cotton: 0.7
+        polyester: 0.1
+        viscose: 0.15
+
+    - name: "Freight & Logistics Cost Index"
+      current_value: 2428
+      unit: "index points"
+      impact:
+        cotton: 0.08
+        polyester: 0.08
+        viscose: 0.18
+
+    - name: "Wood Pulp Price Index (Dissolving Pulp)"
+      current_value: 113
+      unit: "index"
+      impact:
+        cotton: 0.65
+        polyester: 0.63
+        viscose: 0.34
+
+# Child Variables (sub-drivers of parent variables)
+child_drivers:
+  ice_cotton_futures:
+    - name: "US Cotton Production"
+      current_value: 13.9
+      unit: "M Bales"
+      impact:
+        cotton: -0.3
+        polyester: 0.06
+        viscose: 0.04
+
+    - name: "Indian Cotton Production"
+      current_value: 23.8
+      unit: "M Bales"
+      impact:
+        cotton: -0.3
+        polyester: 0.12
+        viscose: 0.07
+
+    - name: "Brazil Cotton Production"
+      current_value: 18.7
+      unit: "M Bales"
+      impact:
+        cotton: -0.3
+        polyester: 0.1
+        viscose: 0.06
+
+    - name: "Turkey Cotton Production"
+      current_value: 3.05
+      unit: "M Bales"
+      impact:
+        cotton: -0.01
+        polyester: 0
+        viscose: 0
+
+    - name: "China Cotton Production"
+      current_value: 34.5
+      unit: "M Bales"
+      impact:
+        cotton: -0.1
+        polyester: 0.02
+        viscose: 0.01
+
+  usd_index:
+    - name: "US Fed Funds Rate"
+      current_value: 3.64
+      unit: "%"
+      impact:
+        cotton: -0.07
+        polyester: -0.25
+        viscose: -0.13
+
+    - name: "US Inflation Rate"
+      current_value: 2.7
+      unit: "%"
+      impact:
+        cotton: 0.04
+        polyester: 0.15
+        viscose: 0.08
+
+    - name: "ECB Interest Rate"
+      current_value: 2
+      unit: "%"
+      impact:
+        cotton: 0.05
+        polyester: 0.2
+        viscose: 0.1
+
+  crude_oil_price:
+    - name: "OPEC Oil Production"
+      current_value: 30.07
+      unit: "M Barrels/Day"
+      impact:
+        cotton: 0.05
+        polyester: -0.5
+        viscose: -0.2
+
+    - name: "US Oil Production"
+      current_value: 13.6
+      unit: "M Barrels/Day"
+      impact:
+        cotton: 0.04
+        polyester: -0.45
+        viscose: -0.15
+
+    - name: "Global Oil Demand"
+      current_value: 104.5
+      unit: "M Barrels/Day"
+      impact:
+        cotton: 0.1
+        polyester: 0.5
+        viscose: 0.2
+
+  china_demand_index:
+    - name: "China GDP Growth"
+      current_value: 4.8
+      unit: "%"
+      impact:
+        cotton: 0.7
+        polyester: 0.15
+        viscose: 0.8
+
+    - name: "China Textile Exports"
+      current_value: 287.96
+      unit: "B USD"
+      impact:
+        cotton: 0.5
+        polyester: 0.8
+        viscose: 0.6
+
+    - name: "China Consumer Spending Growth"
+      current_value: 5.5
+      unit: "%"
+      impact:
+        cotton: 0.6
+        polyester: 0.9
+        viscose: 0.7
+
+  vietnam_demand_index:
+    - name: "Vietnam GDP Growth"
+      current_value: 6.7
+      unit: "%"
+      impact:
+        cotton: 0.7
+        polyester: 0.5
+        viscose: 0.7
+
+    - name: "Vietnam Textile Exports"
+      current_value: 39.6
+      unit: "%"
+      impact:
+        cotton: 0.5
+        polyester: 0.6
+        viscose: 0.7
+
+  global_supply_index:
+    - name: "US Cotton Exports"
+      current_value: 12.2
+      unit: "M Bales"
+      impact:
+        cotton: -0.03
+        polyester: -0.15
+        viscose: -0.15
+
+  international_market_production:
+    - name: "Global Cotton Output"
+      current_value: 24.5
+      unit: "Million T"
+      impact:
+        cotton: -2
+        polyester: 0.5
+        viscose: 0.3
+
+    - name: "Global Polyester Output"
+      current_value: 78
+      unit: "Million T"
+      impact:
+        cotton: 0.5
+        polyester: -1.5
+        viscose: 0.1
+
+    - name: "Global Viscose (MMCF) Output"
+      current_value: 8.4
+      unit: "Million T"
+      impact:
+        cotton: 0.3
+        polyester: 0.1
+        viscose: -2
+
+    - name: "Global Textile Growth"
+      current_value: 3.7
+      unit: "%"
+      impact:
+        cotton: 2
+        polyester: 1.5
+        viscose: 1.8
+
+  international_market_demand:
+    - name: "Global Cotton Consumption"
+      current_value: 115.2
+      unit: "M Bales"
+      impact:
+        cotton: 2.5
+        polyester: -0.5
+        viscose: -0.3
+
+    - name: "MMF Consumption"
+      current_value: 90
+      unit: "Million T"
+      impact:
+        cotton: -0.3
+        polyester: 0.2
+        viscose: 1
+
+    - name: "Synthetic Fiber Demand"
+      current_value: 99
+      unit: "Million T"
+      impact:
+        cotton: -0.5
+        polyester: 2
+        viscose: 0.1
+
+    - name: "Apparel Textile Output"
+      current_value: 98
+      unit: "Million T"
+      impact:
+        cotton: 2
+        polyester: 1.5
+        viscose: 1.8
+
+  major_countries_inhouse_production:
+    - name: "China Cotton Production"
+      current_value: 5.5
+      unit: "Million T"
+      impact:
+        cotton: -0.45
+        polyester: 0.2
+        viscose: 0.1
+
+    - name: "India Cotton Production"
+      current_value: 6
+      unit: "Million T"
+      impact:
+        cotton: -0.49
+        polyester: 0.15
+        viscose: 0.1
+
+    - name: "US Cotton Prod"
+      current_value: 4
+      unit: "Million T"
+      impact:
+        cotton: -0.33
+        polyester: 0.2
+        viscose: 0.15
+
+  major_countries_inhouse_consumption:
+    - name: "China Cotton Consumption"
+      current_value: 7.9
+      unit: "Million T"
+      impact:
+        cotton: 0.35
+        polyester: -0.12
+        viscose: -0.1
+
+    - name: "Bangladesh Cotton Consumption"
+      current_value: 3
+      unit: "Million T"
+      impact:
+        cotton: 0.13
+        polyester: -0.1
+        viscose: -0.1
+
+    - name: "Vietnam Cotton Consumption"
+      current_value: 2
+      unit: "Million T"
+      impact:
+        cotton: 0.09
+        polyester: -0.15
+        viscose: -0.1
+
+    - name: "China Polyester Consumption"
+      current_value: 45
+      unit: "Million T"
+      impact:
+        cotton: -0.15
+        polyester: 0.3
+        viscose: -0.08
+
+    - name: "India Polyester Consumption"
+      current_value: 10
+      unit: "Million T"
+      impact:
+        cotton: -0.1
+        polyester: 0.15
+        viscose: -0.05
+
+    - name: "Vietnam Polyester Consumption"
+      current_value: 4
+      unit: "Million T"
+      impact:
+        cotton: -0.06
+        polyester: 0.08
+        viscose: -0.04
+
+    - name: "China Viscose Consumption"
+      current_value: 4
+      unit: "Million T"
+      impact:
+        cotton: -0.12
+        polyester: -0.05
+        viscose: 0.3
+
+    - name: "India Viscose Consumption"
+      current_value: 1.2
+      unit: "Million T"
+      impact:
+        cotton: -0.08
+        polyester: -0.03
+        viscose: 0.2
+
+    - name: "Vietnam Viscose Consumption"
+      current_value: 0.8
+      unit: "Million T"
+      impact:
+        cotton: -0.05
+        polyester: -0.02
+        viscose: 0.09
+
+  geopolitics_trade_policy:
+    - name: "Tariffs on Cotton Imports"
+      current_value: 10.5
+      unit: "% duty"
+      impact:
+        cotton: -0.15
+        polyester: -0.1
+        viscose: -0.1
+
+    - name: "WTO Tariff Average on Textiles"
+      current_value: 5
+      unit: "%"
+      impact:
+        cotton: -0.1
+        polyester: -0.08
+        viscose: -0.1
+
+  currency_fluctuations:
+    - name: "USD Index Volatility"
+      current_value: 4.5
+      unit: "%"
+      impact:
+        cotton: -0.35
+        polyester: -0.3
+        viscose: -0.2
+
+    - name: "EUR/USD Change"
+      current_value: null
+      unit: null
+      impact:
+        cotton: -0.3
+        polyester: -0.28
+        viscose: -0.25
+
+    - name: "Yuan FX Variation"
+      current_value: null
+      unit: null
+      impact:
+        cotton: -0.28
+        polyester: -0.45
+        viscose: -0.3
+
+  china_gdp_growth:
+    - name: "Net Exports Growth"
+      current_value: 5.5
+      unit: "%"
+      impact:
+        cotton: -0.05
+        polyester: -0.04
+        viscose: -0.05
+
+    - name: "Fixed Asset Investment Growth"
+      current_value: -3.8
+      unit: "%"
+      impact:
+        cotton: -0.01
+        polyester: -0.02
+        viscose: -0.01
+
+    - name: "Industrial Production Growth"
+      current_value: 5.4
+      unit: "%"
+      impact:
+        cotton: -0.1
+        polyester: -0.2
+        viscose: -0.1
+
+  china_textile_export:
+    - name: "Exchange Rate (CNY/USD)"
+      current_value: 7.1
+      unit: "ratio"
+      impact:
+        cotton: -0.01
+        polyester: -0.02
+        viscose: -0.01
+
+    - name: "Global Importer GDP Growth"
+      current_value: 3
+      unit: "%"
+      impact:
+        cotton: -0.05
+        polyester: -0.04
+        viscose: -0.05
+
+    - name: "Input Costs Index"
+      current_value: 105
+      unit: "index"
+      impact:
+        cotton: -0.3
+        polyester: -0.2
+        viscose: -0.1
+
+  china_consumer_spending_growth:
+    - name: "Household Income Growth"
+      current_value: 5.3
+      unit: "%"
+      impact:
+        cotton: -0.01
+        polyester: -0.02
+        viscose: -0.01
+
+    - name: "Unemployment Rate"
+      current_value: 5.1
+      unit: "%"
+      impact:
+        cotton: -0.01
+        polyester: -0.01
+        viscose: -0.01
+
+    - name: "Consumer Confidence Index"
+      current_value: 89
+      unit: "index"
+      impact:
+        cotton: -0.05
+        polyester: -0.04
+        viscose: -0.05
+
+  vietnam_textile_export:
+    - name: "Labor Costs"
+      current_value: 300
+      unit: "USD"
+      impact:
+        cotton: -0.05
+        polyester: -0.04
+        viscose: -0.05
+
+    - name: "Global Apparel Demand Growth"
+      current_value: 4
+      unit: "%"
+      impact:
+        cotton: -0.3
+        polyester: -0.2
+        viscose: -0.1
+
+  vietnam_gdp_growth:
+    - name: "Industrial Production Growth"
+      current_value: 9.9
+      unit: "%"
+      impact:
+        cotton: -0.1
+        polyester: -0.1
+        viscose: -0.05
+
+    - name: "FDI Inflows"
+      current_value: 31.5
+      unit: "USD Billion"
+      impact:
+        cotton: -0.01
+        polyester: -0.02
+        viscose: -0.01
+
+    - name: "Export Growth"
+      current_value: 18.2
+      unit: "%"
+      impact:
+        cotton: -0.05
+        polyester: -0.04
+        viscose: -0.05
+
+  global_cotton_output:
+    - name: "Global Cotton Production"
+      current_value: 119.4
+      unit: "M Bales"
+      impact:
+        cotton: 0.2
+        polyester: -0.15
+        viscose: 0.05
+
+  global_textile_growth:
+    - name: "Global Fiber Production Growth"
+      current_value: 4
+      unit: "% annual growth"
+      impact:
+        cotton: -0.3
+        polyester: -0.5
+        viscose: -0.2
+
+    - name: "Recycled Fibre Growth"
+      current_value: 0.075
+      unit: "%"
+      impact:
+        cotton: -0.1
+        polyester: -0.4
+        viscose: -0.3
+
+  global_cotton_consumption:
+    - name: "Global Cotton Mill Use/Consumption"
+      current_value: 118.9
+      unit: "M Bales"
+      impact:
+        cotton: -0.4
+        polyester: 0.35
+        viscose: 0.6
+
+    - name: "Cotton in Apparel Use"
+      current_value: 62.5
+      unit: "%"
+      impact:
+        cotton: -0.45
+        polyester: 0.4
+        viscose: 0.65
+
+  apparel_textile_output:
+    - name: "Global Apparel Output"
+      current_value: 1.85
+      unit: "$ Trillion"
+      impact:
+        cotton: -0.5
+        polyester: -0.6
+        viscose: -0.35
+
+    - name: "Synthetic Share in Apparel"
+      current_value: 59
+      unit: "%"
+      impact:
+        cotton: 0.3
+        polyester: -0.5
+        viscose: -0.2
+
+    - name: "Global Apparel Fiber Volume"
+      current_value: 85
+      unit: "M Tonnes"
+      impact:
+        cotton: -0.4
+        polyester: -0.7
+        viscose: -0.4

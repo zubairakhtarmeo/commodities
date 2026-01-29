@@ -1,0 +1,27 @@
+Layer 1 — ML Forecasting (DONE)
+
+Predicts future prices
+
+Leakage-safe
+
+Generic, asset-agnostic
+
+Validated on real data
+
+Layer 2 — Decision & Elasticity (DONE)
+
+Explains why prices move
+
+Runs scenarios
+
+Uses your 3-day elasticity work correctly
+
+Layer 3 — Economic Guardrails (DONE)
+
+Prevents impossible outputs
+
+Keeps extreme risks visible but controlled
+
+Makes results management-safe
+
+This is exactly how real commodity decision platforms are built.

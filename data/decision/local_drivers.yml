@@ -1,0 +1,338 @@
+# Local (Pakistan) Drivers for Cotton, Polyester, Viscose
+# Source: data/decision/source/local_variables.xlsx
+# Purpose: Scenario engine + Explainability (NOT ML features)
+# Last updated: 2026-01-26
+
+asset_id: "LOCAL_DRIVERS"
+description: "Pakistan cost pass-through drivers for Cotton, Polyester, Viscose prices"
+source_file: "local_variables.xlsx"
+last_updated: "2026-01-26"
+usage: "scenario_and_explainability"  # NOT ml_features
+
+# Parent Variables (direct commodity drivers in local market)
+parent_drivers:
+  local_market:
+    - name: "Electricity Price"
+      assumed_increment: "1 PKR (3.33%)"
+      unit: "PKR/unit"
+      impact:
+        cotton: 1.0323
+        polyester: 1.332
+        viscose: 1.4985
+
+    - name: "Gas Price"
+      assumed_increment: "1 PKR (0.0254%)"
+      unit: "PKR/MMBTU"
+      impact:
+        cotton: 0.010096
+        polyester: 0.013882
+        viscose: 0.052
+
+    - name: "Interest Rate"
+      assumed_increment: "1% (9.52%)"
+      unit: "%"
+      impact:
+        cotton: -0.2
+        polyester: -0.15
+        viscose: -0.18
+
+    - name: "Local Cotton Production"
+      assumed_increment: "1 PKR (0.00625%)"
+      unit: "maund"
+      impact:
+        cotton: -0.002187
+        polyester: 0
+        viscose: 0
+
+    - name: "Local Demand Index"
+      assumed_increment: "1 PKR (0.00625%)"
+      unit: "maund"
+      impact:
+        cotton: 2.97
+        polyester: -0.00125
+        viscose: -0.000625
+
+    - name: "Govt Energy Policy"
+      assumed_increment: "+1 month delay"
+      unit: "months"
+      impact:
+        cotton: 1
+        polyester: 1.2
+        viscose: 1.5
+
+  international_reference:
+    # These are index definitions, not direct elasticities
+    - name: "ICE Cotton Futures"
+      current_value: 64.35
+      unit: "cents/lb"
+      note: "Reference price for international cotton"
+
+    - name: "USD Index"
+      formula: "Current_USD / AVERAGE(Last_12_Months_USD)"
+      unit: "index"
+      note: "Dollar strength indicator"
+
+    - name: "Crude Oil Price"
+      formula: "Current_Oil_Price / AVERAGE(Last_12_Months_Oil_Price)"
+      unit: "USD/barrel"
+      note: "Oil price index"
+
+    - name: "China Demand Index"
+      formula: "Current Period China Imports / Historical Average China Imports"
+      unit: "index"
+      note: "China import demand indicator"
+
+    - name: "Vietnam Demand Index"
+      formula: "Current Period Vietnam Imports / Historical Average Vietnam Imports"
+      unit: "index"
+      note: "Vietnam import demand indicator"
+
+    - name: "Global Supply Index"
+      formula: "Current Global Stocks / Long-term Average Stocks"
+      unit: "index"
+      note: "Global inventory indicator"
+
+# Child Variables (sub-drivers of parent variables)
+child_drivers:
+  electricity_price:
+    - name: "Fuel Price Index"
+      unit: "PKR/unit"
+      assumed_increment: "1 PKR"
+      elasticity: 0.6
+      impact:
+        local_cotton: 0.6
+        polyester: 0.9
+        viscose: 1.1
+
+    - name: "USD / PKR"
+      unit: "USD/PKR"
+      assumed_increment: "1 PKR"
+      elasticity: 0.4
+      impact:
+        local_cotton: 0.4
+        polyester: 0.85
+        viscose: 0.9
+
+    - name: "Capacity Payment"
+      unit: "PKR/unit"
+      assumed_increment: "1 PKR"
+      elasticity: 2
+      impact:
+        local_cotton: 2
+        polyester: 1.2
+        viscose: 1.4
+
+    - name: "Circular Debt Level"
+      unit: "PKR"
+      assumed_increment: "1 PKR"
+      elasticity: 0.015
+      impact:
+        local_cotton: 0.015
+        polyester: 0.02
+        viscose: 0.03
+
+    - name: "Govt Subsidy Level"
+      unit: "PKR/unit"
+      assumed_increment: "-1 PKR"
+      elasticity: -3
+      impact:
+        local_cotton: -3
+        polyester: -2.5
+        viscose: -3.2
+
+    - name: "Renewable Share"
+      unit: "%"
+      assumed_increment: "1%"
+      elasticity: -0.5
+      impact:
+        local_cotton: -0.005
+        polyester: -0.4
+        viscose: -0.6
+
+    - name: "Seasonal Demand"
+      unit: "index"
+      assumed_increment: "1%"
+      elasticity: 0.2
+      impact:
+        local_cotton: 0.002
+        polyester: 0.3
+        viscose: 0.25
+
+  gas_price:
+    - name: "International Gas / LNG Price Index"
+      unit: "index"
+      assumed_increment: "1%"
+      elasticity: 0.8
+      impact:
+        local_cotton: 0.008
+        polyester: 0.55
+        viscose: 1.05
+
+    - name: "USD / PKR"
+      unit: "rate"
+      assumed_increment: "1 PKR"
+      elasticity: 0.9
+      impact:
+        local_cotton: 0.9
+        polyester: 0.85
+        viscose: 0.95
+
+    - name: "Domestic Supply Gap"
+      unit: "index"
+      assumed_increment: "1%"
+      elasticity: 0.25
+      impact:
+        local_cotton: 0.0025
+        polyester: 0.3
+        viscose: 0.45
+
+    - name: "Govt Gas Levy"
+      unit: "PKR/MMBTU"
+      assumed_increment: "+1 PKR"
+      elasticity: 1
+      impact:
+        local_cotton: 1
+        polyester: 0.9
+        viscose: 1.2
+
+    - name: "Gas Sector Circular Debt"
+      unit: "PKR bn"
+      assumed_increment: "+100 bn"
+      elasticity: 0.015
+      impact:
+        local_cotton: 1.5
+        polyester: 0.02
+        viscose: 0.03
+
+    - name: "Seasonal Demand Index"
+      unit: "index"
+      assumed_increment: "1%"
+      elasticity: 0.2
+      impact:
+        local_cotton: 0.002
+        polyester: 0.0025
+        viscose: 0.0035
+
+    - name: "Long-Term Contract Share"
+      unit: "%"
+      assumed_increment: "1%"
+      elasticity: -0.35
+      impact:
+        local_cotton: -0.0035
+        polyester: -0.003
+        viscose: -0.0045
+
+  local_cotton_production:
+    - name: "Total Cotton Crop Size"
+      unit: "maund"
+      assumed_increment: "1 PKR increment"
+      elasticity: -0.3
+      impact:
+        local_cotton: -0.3
+
+    - name: "Cotton Yield per Acre"
+      unit: "kg/acre"
+      assumed_increment: "1%"
+      elasticity: -0.2
+      impact:
+        local_cotton: -0.002
+
+    - name: "Area Under Cultivation"
+      unit: "%"
+      assumed_increment: "1%"
+      elasticity: -0.15
+      impact:
+        local_cotton: -0.0015
+
+    - name: "Pest / Disease Impact"
+      unit: "index"
+      assumed_increment: "+1 unit"
+      elasticity: 0.1
+      impact:
+        local_cotton: 0.1
+
+    - name: "Weather Shock (Flood / Heat)"
+      unit: "index"
+      assumed_increment: "+1 unit"
+      elasticity: 0.25
+      impact:
+        local_cotton: 0.25
+
+    - name: "Govt Support Price (Phutti)"
+      unit: "PKR/40kg"
+      assumed_increment: "1 PKR"
+      elasticity: 0.05
+      impact:
+        local_cotton: 0.05
+
+  local_demand_index:
+    - name: "Spinning Mill Utilization"
+      unit: "%"
+      assumed_increment: "1%"
+      elasticity: 0.3
+      impact:
+        local_cotton: 0.003
+
+    - name: "Yarn Export Orders"
+      unit: "%"
+      assumed_increment: "1%"
+      elasticity: 0.25
+      impact:
+        local_cotton: 0.0025
+
+    - name: "Garment Export Orders"
+      unit: "%"
+      assumed_increment: "1%"
+      elasticity: 0.2
+      impact:
+        local_cotton: 0.002
+
+    - name: "Polyester-Cotton Price Gap"
+      unit: "PKR"
+      assumed_increment: "1%"
+      elasticity: -0.15
+      impact:
+        local_cotton: -0.0015
+
+    - name: "Working Capital Availability"
+      unit: "index"
+      assumed_increment: "+1 unit"
+      elasticity: 0.1
+      impact:
+        local_cotton: 0.1
+
+  govt_energy_policy:
+    - name: "Electricity Tariff Change"
+      unit: "PKR/unit"
+      assumed_increment: "+1 PKR"
+      elasticity: 0.3
+      impact:
+        fiber_cost: 0.3
+
+    - name: "Gas Tariff Change"
+      unit: "PKR/MMBTU"
+      assumed_increment: "1 PKR"
+      elasticity: 0.2
+      impact:
+        fiber_cost: 0.2
+
+    - name: "Energy Subsidy Withdrawal"
+      unit: "PKR/unit"
+      assumed_increment: "-1 PKR"
+      elasticity: 0.25
+      impact:
+        fiber_cost: 0.25
+
+    - name: "Solar / Captive Incentives"
+      unit: "%"
+      assumed_increment: "1%"
+      elasticity: -0.2
+      impact:
+        fiber_cost: -0.002
+
+    - name: "Tariff Pass-Through Delay"
+      unit: "months"
+      assumed_increment: "+1 month"
+      elasticity: -0.1
+      impact:
+        fiber_cost: -0.1

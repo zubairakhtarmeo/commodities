@@ -1,0 +1,89 @@
+asset_id: "EURUSD"
+description: "EUR/USD exchange rate with elasticity drivers"
+
+variables:
+  - name: "usd_index"
+    category: "international"
+    description: "US Dollar Index (USD/basket of major currencies)"
+    unit: "index points"
+    default_value: 103.5
+    
+  - name: "eur_inflation"
+    category: "local"
+    description: "Eurozone inflation rate (YoY)"
+    unit: "%"
+    default_value: 2.1
+    
+  - name: "us_inflation"
+    category: "international"
+    description: "US inflation rate (YoY)"
+    unit: "%"
+    default_value: 3.2
+    
+  - name: "brent_crude"
+    category: "international"
+    description: "Brent Crude Oil price"
+    unit: "USD/bbl"
+    default_value: 82.5
+    
+  - name: "us_10y_yield"
+    category: "international"
+    description: "US 10-Year Treasury yield"
+    unit: "%"
+    default_value: 4.2
+    
+  - name: "eur_stocks"
+    category: "local"
+    description: "Eurostoxx 50 equity index"
+    unit: "index points"
+    default_value: 4800.0
+
+elasticities:
+  # Strong inverse: USD strength hurts EUR
+  - variable: "usd_index"
+    elasticity: -0.8
+    lag_periods: 0
+    
+  # EUR inflation mixed effect: high inflation can weaken EUR (capital flight)
+  - variable: "eur_inflation"
+    elasticity: -0.3
+    lag_periods: 0
+    
+  # US inflation: higher US inflation raises USD yields, strengthens USD, hurts EUR
+  - variable: "us_inflation"
+    elasticity: -0.5
+    lag_periods: 0
+    
+  # Oil: positive correlation with EUR (commodity currency link)
+  - variable: "brent_crude"
+    elasticity: 0.2
+    lag_periods: 0
+    
+  # US yields: higher yields = stronger USD = weaker EUR
+  - variable: "us_10y_yield"
+    elasticity: -0.4
+    lag_periods: 1
+    
+  # EU stock strength: positive for EUR (growth sentiment)
+  - variable: "eur_stocks"
+    elasticity: 0.15
+    lag_periods: 0
+
+hierarchy:
+  - name: "macroeconomic_factors"
+    parent: null
+    children: ["usd_index", "us_inflation", "eur_inflation"]
+    
+  - name: "financial_markets"
+    parent: null
+    children: ["us_10y_yield", "eur_stocks"]
+    
+  - name: "commodities"
+    parent: null
+    children: ["brent_crude"]
+
+metadata:
+  source: "ECB, FRED, Yahoo Finance"
+  frequency: "monthly"
+  last_updated: "2026-01-21"
+  notes: "Elasticities estimated from historical correlation analysis (2020-2026)."

@@ -1,0 +1,130 @@
+{
+  "collection_time": "2026-01-26T14:32:54.747823",
+  "news": {
+    "cotton": [
+      {
+        "timestamp": "2026-01-26T14:32:54.747935",
+        "commodity": "cotton",
+        "title": "Monitor Cotton market conditions",
+        "description": "API key required for live news. Add NewsAPI key to enable.",
+        "source": "System",
+        "url": "https://newsapi.org",
+        "category": "general",
+        "collected_at": "2026-01-26T14:32:54.747946"
+      }
+    ],
+    "polyester": [
+      {
+        "timestamp": "2026-01-26T14:32:54.748020",
+        "commodity": "polyester",
+        "title": "Monitor Polyester market conditions",
+        "description": "API key required for live news. Add NewsAPI key to enable.",
+        "source": "System",
+        "url": "https://newsapi.org",
+        "category": "general",
+        "collected_at": "2026-01-26T14:32:54.748028"
+      }
+    ],
+    "oil": [
+      {
+        "timestamp": "2026-01-26T14:32:54.748098",
+        "commodity": "oil",
+        "title": "Monitor Oil market conditions",
+        "description": "API key required for live news. Add NewsAPI key to enable.",
+        "source": "System",
+        "url": "https://newsapi.org",
+        "category": "general",
+        "collected_at": "2026-01-26T14:32:54.748106"
+      }
+    ],
+    "gas": [
+      {
+        "timestamp": "2026-01-26T14:32:54.748181",
+        "commodity": "gas",
+        "title": "Monitor Gas market conditions",
+        "description": "API key required for live news. Add NewsAPI key to enable.",
+        "source": "System",
+        "url": "https://newsapi.org",
+        "category": "general",
+        "collected_at": "2026-01-26T14:32:54.748190"
+      }
+    ],
+    "pakistan": [
+      {
+        "timestamp": "2026-01-26T14:32:54.748256",
+        "commodity": "pakistan",
+        "title": "Monitor Pakistan market conditions",
+        "description": "API key required for live news. Add NewsAPI key to enable.",
+        "source": "System",
+        "url": "https://newsapi.org",
+        "category": "general",
+        "collected_at": "2026-01-26T14:32:54.748262"
+      }
+    ]
+  },
+  "weather": [
+    {
+      "timestamp": "2026-01-26T14:32:54.749466",
+      "type": "weather",
+      "region": "Punjab, Pakistan",
+      "crop": "cotton",
+      "alert": "Monitor seasonal conditions",
+      "severity": "info",
+      "collected_at": "2026-01-26T14:32:54.749481"
+    },
+    {
+      "timestamp": "2026-01-26T14:32:54.749488",
+      "type": "weather",
+      "region": "Sindh, Pakistan",
+      "crop": "cotton",
+      "alert": "Monitor seasonal conditions",
+      "severity": "info",
+      "collected_at": "2026-01-26T14:32:54.749492"
+    },
+    {
+      "timestamp": "2026-01-26T14:32:54.749495",
+      "type": "weather",
+      "region": "India Punjab",
+      "crop": "cotton",
+      "alert": "Monitor seasonal conditions",
+      "severity": "info",
+      "collected_at": "2026-01-26T14:32:54.749497"
+    }
+  ],
+  "geopolitical": [
+    {
+      "timestamp": "2026-01-26T14:32:54.749605",
+      "type": "geopolitical",
+      "region": "Middle East",
+      "affected_commodities": [
+        "oil",
+        "gas"
+      ],
+      "status": "monitor",
+      "collected_at": "2026-01-26T14:32:54.749611"
+    },
+    {
+      "timestamp": "2026-01-26T14:32:54.749615",
+      "type": "geopolitical",
+      "region": "Red Sea",
+      "affected_commodities": [
+        "oil",
+        "shipping"
+      ],
+      "status": "monitor",
+      "collected_at": "2026-01-26T14:32:54.749617"
+    },
+    {
+      "timestamp": "2026-01-26T14:32:54.749619",
+      "type": "geopolitical",
+      "region": "Ukraine",
+      "affected_commodities": [
+        "oil",
+        "gas",
+        "wheat"
+      ],
+      "status": "monitor",
+      "collected_at": "2026-01-26T14:32:54.749620"
+    }
+  ]
+}

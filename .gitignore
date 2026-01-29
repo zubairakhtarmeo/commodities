@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+.egg-info/
+src/*.egg-info/
+.venv/
+.vscode/
+.ipynb_checkpoints/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# local data
+/data/raw/
+/data/interim/
+/data/processed/
+/data/backups/
+
+# artifacts
+/artifacts/
+/logs/
+
+# exports
+/exports/
+
+# large binaries
+*.pdf

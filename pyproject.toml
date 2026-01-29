@@ -1,0 +1,25 @@
+[project]
+name = "asset-agnostic-forecasting"
+version = "0.1.0"
+description = "Leakage-safe, config-driven, asset-agnostic time-series forecasting"
+requires-python = ">=3.10"
+readme = "README.md"
+
+dependencies = [
+  "pandas>=2.1",
+  "numpy>=1.26",
+  "scikit-learn>=1.3",
+  "PyYAML>=6.0",
+  "pydantic>=2.5",
+  "python-dateutil>=2.8",
+  "joblib>=1.3",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+forecast = "forecasting.cli:main"

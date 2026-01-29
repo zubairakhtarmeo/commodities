@@ -1,0 +1,59 @@
+[
+  {
+    "timestamp": "2026-01-26T15:41:09.307750",
+    "results": {
+      "Cotton USD": true,
+      "Cotton PKR": true,
+      "Crude Oil USD": true,
+      "Crude Oil PKR": true,
+      "Natural Gas USD": true,
+      "Natural Gas PKR": true
+    },
+    "usd_pkr_rate": 279.513142,
+    "success_rate": "6/6"
+  },
+  {
+    "timestamp": "2026-01-26T15:46:04.392293",
+    "results": {
+      "Cotton USD": true,
+      "Cotton PKR": true,
+      "Polyester USD": true,
+      "Crude Oil USD": true,
+      "Crude Oil PKR": true,
+      "Natural Gas USD": true,
+      "Natural Gas PKR": true
+    },
+    "usd_pkr_rate": 279.513142,
+    "success_rate": "7/7"
+  },
+  {
+    "timestamp": "2026-01-26T17:07:03.572355",
+    "results": {
+      "Cotton USD": true,
+      "Cotton PKR": true,
+      "Polyester USD": true,
+      "Crude Oil USD": true,
+      "Crude Oil PKR": true,
+      "Natural Gas USD": true,
+      "Natural Gas PKR": true
+    },
+    "usd_pkr_rate": 279.513142,
+    "success_rate": "7/7"
+  },
+  {
+    "timestamp": "2026-01-26T17:07:52.583253",
+    "results": {
+      "Cotton USD": true,
+      "Cotton PKR": true,
+      "Polyester USD": true,
+      "Crude Oil USD": true,
+      "Crude Oil PKR": true,
+      "Natural Gas USD": true,
+      "Natural Gas PKR": true,
+      "Viscose USD": true,
+      "Viscose PKR": true
+    },
+    "usd_pkr_rate": 279.513142,
+    "success_rate": "9/9"
+  }
+]
