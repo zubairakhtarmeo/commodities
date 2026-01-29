@@ -13,11 +13,6 @@ import json
 import sys
 import importlib.util
 
-try:
-    from supabase import create_client
-except Exception:  # pragma: no cover
-    create_client = None
-
 # Add scripts directory to path for imports
 sys.path.append(str(Path(__file__).parent / "scripts"))
 
@@ -44,22 +39,85 @@ def _get_streamlit_secret(key: str) -> Optional[str]:
 
 
 @st.cache_resource
-def get_supabase_client():
-    """Create a Supabase client if configured; otherwise return None."""
-    if create_client is None:
-        return None
+def get_supabase_config() -> tuple[str, str] | None:
+    """Return (url, key) for Supabase PostgREST calls, or None if not configured."""
     url = _get_streamlit_secret("SUPABASE_URL")
     key = _get_streamlit_secret("SUPABASE_SERVICE_ROLE_KEY") or _get_streamlit_secret("SUPABASE_ANON_KEY")
     if not url or not key:
         return None
+    return (str(url).rstrip("/"), str(key).strip())
+
+
+def _supabase_headers(key: str) -> dict:
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _supabase_rest_url(base_url: str, table: str) -> str:
+    return f"{base_url}/rest/v1/{table}"
+
+
+def supabase_rest_select(
+    *,
+    table: str,
+    select: str,
+    eq_filters: dict[str, str] | None = None,
+    order: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    cfg = get_supabase_config()
+    if cfg is None:
+        return []
+    base_url, key = cfg
+    params: dict[str, str] = {"select": select}
+    if eq_filters:
+        for k, v in eq_filters.items():
+            params[k] = f"eq.{v}"
+    if order:
+        params["order"] = order
+    if limit is not None:
+        params["limit"] = str(int(limit))
+
     try:
-        return create_client(url, key)
+        resp = requests.get(
+            _supabase_rest_url(base_url, table),
+            headers=_supabase_headers(key),
+            params=params,
+            timeout=30,
+        )
+        if not resp.ok:
+            return []
+        data = resp.json()
+        return data if isinstance(data, list) else []
     except Exception:
-        return None
+        return []
+
+
+def supabase_rest_upsert(*, table: str, rows: list[dict]) -> bool:
+    cfg = get_supabase_config()
+    if cfg is None:
+        return False
+    base_url, key = cfg
+    try:
+        resp = requests.post(
+            _supabase_rest_url(base_url, table),
+            headers={
+                **_supabase_headers(key),
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            },
+            data=json.dumps(rows),
+            timeout=60,
+        )
+        return bool(resp.ok)
+    except Exception:
+        return False
 
 
 def supabase_is_configured() -> bool:
-    return get_supabase_client() is not None
+    return get_supabase_config() is not None
 
 
 def supabase_upsert_prediction_record(
@@ -89,10 +147,6 @@ def supabase_upsert_prediction_record(
 
     Recommended unique constraint: (asset, as_of_date, target_date, model_name, horizon)
     """
-    client = get_supabase_client()
-    if client is None:
-        return False
-
     row = {
         "asset": asset,
         "as_of_date": as_of_date,
@@ -105,11 +159,7 @@ def supabase_upsert_prediction_record(
         "horizon": horizon,
     }
 
-    try:
-        client.table("prediction_records").upsert(row).execute()
-        return True
-    except Exception:
-        return False
+    return supabase_rest_upsert(table="prediction_records", rows=[row])
 
 
 def supabase_fetch_prediction_history(
@@ -120,22 +170,14 @@ def supabase_fetch_prediction_history(
     horizon: str = "1d",
 ) -> pd.DataFrame:
     """Fetch prediction history for charting validation (predicted vs actual)."""
-    client = get_supabase_client()
-    if client is None:
-        return pd.DataFrame()
     try:
-        # Filter by asset/model/horizon and fetch recent rows.
-        resp = (
-            client.table("prediction_records")
-            .select("asset, as_of_date, target_date, predicted_value, actual_value, unit, model_name, frequency, horizon")
-            .eq("asset", asset)
-            .eq("model_name", model_name)
-            .eq("horizon", horizon)
-            .order("target_date", desc=True)
-            .limit(int(days) * 3)
-            .execute()
+        rows = supabase_rest_select(
+            table="prediction_records",
+            select="asset,as_of_date,target_date,predicted_value,actual_value,unit,model_name,frequency,horizon",
+            eq_filters={"asset": asset, "model_name": model_name, "horizon": horizon},
+            order="target_date.desc",
+            limit=int(days) * 3,
         )
-        rows = resp.data or []
         df = pd.DataFrame(rows)
         if df.empty:
             return df
@@ -158,19 +200,14 @@ def supabase_fetch_commodity_series(asset_path: str, limit: int = 600) -> pd.Dat
     - value (numeric)
     Optional: currency (text), source (text)
     """
-    client = get_supabase_client()
-    if client is None:
-        return pd.DataFrame()
     try:
-        resp = (
-            client.table("commodity_prices")
-            .select("timestamp,value")
-            .eq("asset_path", asset_path)
-            .order("timestamp", desc=False)
-            .limit(int(limit))
-            .execute()
+        rows = supabase_rest_select(
+            table="commodity_prices",
+            select="timestamp,value",
+            eq_filters={"asset_path": asset_path},
+            order="timestamp.asc",
+            limit=int(limit),
         )
-        rows = resp.data or []
         df = pd.DataFrame(rows)
         if df.empty:
             return df
@@ -204,11 +241,10 @@ def render_ai_predictions_page():
         )
         return
 
-    client = get_supabase_client()
     assets: list[str] = []
     try:
-        resp = client.table("prediction_records").select("asset").execute()
-        assets = sorted({r.get("asset") for r in (resp.data or []) if r.get("asset")})
+        rows = supabase_rest_select(table="prediction_records", select="asset", limit=5000)
+        assets = sorted({r.get("asset") for r in (rows or []) if r.get("asset")})
     except Exception:
         assets = []
 

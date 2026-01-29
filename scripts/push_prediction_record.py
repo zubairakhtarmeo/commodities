@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 from datetime import date
+import requests
 
 
 def main() -> int:
@@ -32,12 +33,8 @@ def main() -> int:
     if not url or not key:
         raise SystemExit("Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)")
 
-    try:
-        from supabase import create_client
-    except Exception as e:
-        raise SystemExit(f"Missing dependency 'supabase'. Install requirements.txt first. ({e})")
-
-    client = create_client(url, key)
+    base_url = str(url).rstrip("/")
+    key = str(key).strip()
 
     row = {
         "asset": args.asset,
@@ -51,7 +48,19 @@ def main() -> int:
         "horizon": args.horizon,
     }
 
-    client.table("prediction_records").upsert(row).execute()
+    resp = requests.post(
+        f"{base_url}/rest/v1/prediction_records",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates,return=minimal",
+        },
+        json=[row],
+        timeout=60,
+    )
+    if not resp.ok:
+        raise SystemExit(f"Supabase upsert failed: HTTP {resp.status_code} {resp.text}")
     print("ok")
     return 0
 

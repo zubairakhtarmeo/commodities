@@ -11,5 +11,3 @@ streamlit>=1.31
 plotly>=5.18
 openpyxl>=3.1
 xlsxwriter>=3.1
-# Pinned to avoid newer `storage3` -> `pyiceberg` -> `pyroaring` (requires MSVC build tools on some Windows/Python combos)
-supabase==2.6.0

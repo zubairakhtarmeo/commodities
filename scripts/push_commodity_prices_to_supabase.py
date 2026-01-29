@@ -18,6 +18,7 @@ import argparse
 import os
 from pathlib import Path
 import pandas as pd
+import requests
 
 RAW_DATA_DIR = Path("data/raw")
 
@@ -94,9 +95,28 @@ def main() -> int:
     if not url or not key:
         raise SystemExit("Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY).")
 
-    from supabase import create_client
+    base_url = str(url).rstrip("/")
+    key = str(key).strip()
 
-    client = create_client(url, key)
+    def headers(extra: dict | None = None) -> dict:
+        h = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        if extra:
+            h.update(extra)
+        return h
+
+    def upsert_rows(table: str, rows: list[dict]) -> None:
+        resp = requests.post(
+            f"{base_url}/rest/v1/{table}",
+            headers=headers({"Prefer": "resolution=merge-duplicates,return=minimal"}),
+            json=rows,
+            timeout=60,
+        )
+        if not resp.ok:
+            raise SystemExit(f"Supabase upsert failed: HTTP {resp.status_code} {resp.text}")
 
     csvs = discover_csv_assets()
     if args.limit and args.limit > 0:
@@ -128,7 +148,7 @@ def main() -> int:
         batch_size = 500
         for i in range(0, len(rows), batch_size):
             batch = rows[i:i + batch_size]
-            client.table("commodity_prices").upsert(batch).execute()
+            upsert_rows("commodity_prices", batch)
 
         total_rows += len(rows)
         print(f"ok: {asset_path} ({len(rows)} rows)")
