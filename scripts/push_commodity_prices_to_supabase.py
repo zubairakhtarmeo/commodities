@@ -144,6 +144,11 @@ def main() -> int:
             "source": "csv_import",
         }).dropna(subset=["timestamp", "value"])
 
+        # Ensure JSON-serializable primitives for REST upsert
+        # Supabase expects `date` or `timestamptz` as strings.
+        out["timestamp"] = out["timestamp"].dt.strftime("%Y-%m-%d")
+        out["value"] = out["value"].astype(float)
+
         # Upsert in batches to avoid request limits
         rows = out.to_dict(orient="records")
         batch_size = 500
