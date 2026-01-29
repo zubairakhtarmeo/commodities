@@ -112,6 +112,7 @@ def main() -> int:
         resp = requests.post(
             f"{base_url}/rest/v1/{table}",
             headers=headers({"Prefer": "resolution=merge-duplicates,return=minimal"}),
+            params={"on_conflict": "asset_path,timestamp"} if table == "commodity_prices" else None,
             json=rows,
             timeout=60,
         )

@@ -56,6 +56,7 @@ def main() -> int:
             "Content-Type": "application/json",
             "Prefer": "resolution=merge-duplicates,return=minimal",
         },
+        params={"on_conflict": "asset,as_of_date,target_date,model_name,horizon"},
         json=[row],
         timeout=60,
     )

@@ -96,18 +96,22 @@ def supabase_rest_select(
         return []
 
 
-def supabase_rest_upsert(*, table: str, rows: list[dict]) -> bool:
+def supabase_rest_upsert(*, table: str, rows: list[dict], on_conflict: str | None = None) -> bool:
     cfg = get_supabase_config()
     if cfg is None:
         return False
     base_url, key = cfg
     try:
+        params = {}
+        if on_conflict:
+            params["on_conflict"] = on_conflict
         resp = requests.post(
             _supabase_rest_url(base_url, table),
             headers={
                 **_supabase_headers(key),
                 "Prefer": "resolution=merge-duplicates,return=minimal",
             },
+            params=params,
             data=json.dumps(rows),
             timeout=60,
         )
@@ -159,7 +163,11 @@ def supabase_upsert_prediction_record(
         "horizon": horizon,
     }
 
-    return supabase_rest_upsert(table="prediction_records", rows=[row])
+    return supabase_rest_upsert(
+        table="prediction_records",
+        rows=[row],
+        on_conflict="asset,as_of_date,target_date,model_name,horizon",
+    )
 
 
 def supabase_fetch_prediction_history(
