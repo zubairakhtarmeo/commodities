@@ -875,137 +875,389 @@ def compound_factor(monthly_rates: list[float]) -> float:
     return float(np.prod([1.0 + r for r in monthly_rates]))
 
 
-def _norm_cdf(x: float) -> float:
-    import math
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
-def render_call_put_recommender(*, expander_title: str, expanded: bool = False, key_prefix: str = "hedge") -> None:
-    """Simple-but-smart hedging helper: suggests Call vs Put using forecast direction + uncertainty."""
+def render_hedging_compounding_simulator(*, expander_title: str, expanded: bool = False, key_prefix: str = "hedge") -> None:
+    """Planning calculator: bank compounding vs fixed-price agreement vs call-style ceiling."""
     with st.expander(expander_title, expanded=expanded):
         st.caption(
-            "Select your exposure and horizon. The tool uses the model forecast (base/low/high) to suggest whether a Call or Put is more appropriate. "
-            "This is a decision aid (not full options pricing)."
+            "Compare procurement strategies using bank compounding and a fixed-price agreement (forward) or a call-style ceiling. "
+            "This is a planning calculator (not full options pricing / Greeks)."
         )
 
         all_assets: dict[str, dict] = {}
         all_assets.update(INTERNATIONAL_COMMODITIES)
         all_assets.update(LOCAL_COMMODITIES)
+
         asset_names = list(all_assets.keys())
         if not asset_names:
             st.info("No commodities configured.")
             return
 
-        c1, c2, c3 = st.columns([2.2, 1.2, 1.6])
+        c1, c2, c3, c4 = st.columns([2.2, 1.2, 1.2, 1.4])
         with c1:
             selected_name = st.selectbox("Commodity", asset_names, index=0, key=f"{key_prefix}_asset")
         with c2:
-            months = st.number_input("Horizon (months)", min_value=1, max_value=24, value=3, step=1, key=f"{key_prefix}_months")
+            months = st.number_input("Months (n)", min_value=1, max_value=24, value=6, step=1, key=f"{key_prefix}_months")
         with c3:
-            exposure = st.selectbox(
-                "Exposure",
-                ["Buyer (need to buy)", "Seller/Inventory (need to sell)", "Inventory value hedge"],
+            qty = st.number_input("Quantity (units)", min_value=1.0, value=1.0, step=1.0, key=f"{key_prefix}_qty")
+        with c4:
+            strategy_view = st.selectbox(
+                "View",
+                ["Leftover Cash at Maturity", "Effective Purchase Cost"],
                 index=0,
-                key=f"{key_prefix}_exposure",
+                key=f"{key_prefix}_view",
             )
 
         info = all_assets[selected_name]
         md = load_commodity_data(info["path"], info["currency"])
-        if not md or md.get("df") is None:
-            st.warning("No data available for this asset.")
-            return
-
-        current_price = float(md.get("current_price", 0.0))
+        current_price = float(md.get("current_price", 0.0)) if md else 0.0
         predictions = load_predictions(info["path"]) if info else {}
         pred = get_prediction_by_index(predictions, int(months))
-        mu = float(pred.get("price", current_price)) if pred else current_price
-        low = float(pred.get("lower", mu)) if pred else mu
-        high = float(pred.get("upper", mu)) if pred else mu
+        pred_base = float(pred.get("price", current_price)) if pred else current_price
+        pred_low = float(pred.get("lower", pred_base)) if pred else pred_base
+        pred_high = float(pred.get("upper", pred_base)) if pred else pred_base
 
-        # Derive a rough sigma from (high-low). If the interval is not calibrated, this still provides a usable scale.
-        interval = max(1e-9, high - low)
-        sigma = interval / 3.92  # approx 95% interval width = 2*1.96*sigma
-        sigma = max(1e-9, sigma)
+        st.markdown("#### Inputs")
+        i1, i2, i3 = st.columns([1.3, 1.3, 1.4])
+        with i1:
+            s0 = st.number_input(
+                f"Current price (S) [{info['currency']}]",
+                min_value=0.0,
+                value=float(current_price) if current_price else 10.0,
+                key=f"{key_prefix}_s",
+            )
+            cash_today = st.number_input(
+                f"Cash today to invest [{info['currency']}]",
+                min_value=0.0,
+                value=float(s0) * float(qty),
+                help="Typical use: set cash = S × quantity (your purchase budget parked in bank).",
+                key=f"{key_prefix}_cash",
+            )
+        with i2:
+            k = st.number_input(
+                f"Agreement / Strike price (K) [{info['currency']}]",
+                min_value=0.0,
+                value=float(s0) * 1.3 if s0 else 13.0,
+                key=f"{key_prefix}_k",
+            )
+            premium = st.number_input(
+                f"Call premium (paid today, per unit) [{info['currency']}]",
+                min_value=0.0,
+                value=0.0,
+                help="Set to 0 if you only want to compare bank vs fixed-price agreement.",
+                key=f"{key_prefix}_premium",
+            )
+        with i3:
+            rate_mode = st.selectbox(
+                "Interest-rate scenario",
+                ["Constant", "Declining (linear)"],
+                key=f"{key_prefix}_rate_mode",
+            )
+            annual_start = st.number_input(
+                "Annual interest rate start (%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=18.0,
+                step=0.5,
+                key=f"{key_prefix}_r_start",
+            )
+            annual_end = annual_start
+            if rate_mode != "Constant":
+                annual_end = st.number_input(
+                    "Annual interest rate end (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=14.0,
+                    step=0.5,
+                    key=f"{key_prefix}_r_end",
+                )
 
-        # Simple probabilities under normal assumption
-        p_up = 1.0 - _norm_cdf((current_price - mu) / sigma)
-        p_down = 1.0 - p_up
+        monthly_rates = build_monthly_rate_schedule(int(months), float(annual_start), float(annual_end), rate_mode)
+        cf = compound_factor(monthly_rates)
+        fv_cash = float(cash_today) * cf
 
-        # Confidence heuristic: narrower interval and larger move => higher confidence
-        expected_move_pct = 0.0
-        if current_price > 0:
-            expected_move_pct = (mu / current_price - 1.0) * 100.0
-        confidence = min(0.99, max(0.01, abs(mu - current_price) / interval))
+        st.markdown("#### Price scenarios at month n")
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            st.metric("Low (forecast lower)", f"{pred_low:,.2f}")
+        with s2:
+            st.metric("Base (forecast)", f"{pred_base:,.2f}")
+        with s3:
+            st.metric("High (forecast upper)", f"{pred_high:,.2f}")
 
-        # Decide recommendation
-        small_band = 0.01  # 1%
-        action = "MONITOR"
-        option = "None"
+        scenarios = [("Low", pred_low), ("Base", pred_base), ("High", pred_high)]
 
-        if exposure == "Buyer (need to buy)":
-            if (mu > current_price * (1 + small_band)) and (p_up >= 0.55):
-                option = "CALL"
-                action = "HEDGE"
-            elif (mu < current_price * (1 - small_band)) and (p_down >= 0.55):
-                option = "WAIT / STAGGER BUYS"
-                action = "MONITOR"
-            else:
-                option = "COLLAR (optional)"
-                action = "MONITOR"
-        else:
-            # Seller / inventory hedge: protect downside with a PUT if forecast points lower
-            if (mu < current_price * (1 - small_band)) and (p_down >= 0.55):
-                option = "PUT"
-                action = "HEDGE"
-            elif (mu > current_price * (1 + small_band)) and (p_up >= 0.55):
-                option = "HOLD / SELL LATER"
-                action = "MONITOR"
-            else:
-                option = "COLLAR (optional)"
-                action = "MONITOR"
+        def _leftover_wait(spot_t: float) -> float:
+            return fv_cash - float(qty) * float(spot_t)
 
-        # Suggest a strike in a simple, transparent way
-        protection = st.slider(
-            "Protection level (higher = more conservative strike)",
-            min_value=0.5,
-            max_value=0.95,
-            value=0.8,
-            step=0.05,
-            key=f"{key_prefix}_prot",
+        def _leftover_forward() -> float:
+            return fv_cash - float(qty) * float(k)
+
+        def _leftover_call_ceiling(spot_t: float) -> float:
+            cash_after_premium = float(cash_today) - float(qty) * float(premium)
+            cash_after_premium = max(0.0, cash_after_premium)
+            fv_after = cash_after_premium * cf
+            return fv_after - float(qty) * min(float(spot_t), float(k))
+
+        rows = []
+        for label, spot_t in scenarios:
+            rows.append(
+                {
+                    "Scenario": label,
+                    "Spot @ n": float(spot_t),
+                    "Wait+Bank": _leftover_wait(spot_t),
+                    "Fixed agreement": _leftover_forward(),
+                    "Call ceiling": _leftover_call_ceiling(spot_t),
+                }
+            )
+
+        df_out = pd.DataFrame(rows)
+        if strategy_view == "Effective Purchase Cost":
+            df_out["Wait+Bank"] = float(cash_today) - (df_out["Wait+Bank"] / cf)
+            df_out["Fixed agreement"] = float(cash_today) - (df_out["Fixed agreement"] / cf)
+            df_out["Call ceiling"] = float(cash_today) - (df_out["Call ceiling"] / cf)
+            df_out = df_out.rename(
+                columns={
+                    "Wait+Bank": "Wait+Bank effective cost",
+                    "Fixed agreement": "Fixed agreement effective cost",
+                    "Call ceiling": "Call ceiling effective cost",
+                }
+            )
+
+        st.markdown("#### Results")
+        st.dataframe(df_out, use_container_width=True, height=180)
+
+
+def _annualized_volatility_from_history(series: pd.Series, periods_per_year: int = 12) -> float:
+    """Estimate annualized volatility from a price series."""
+    try:
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        if len(s) < 6:
+            return 0.25
+        returns = np.log(s).diff().dropna()
+        if returns.empty:
+            return 0.25
+        vol = float(returns.std()) * float(np.sqrt(periods_per_year))
+        if not np.isfinite(vol) or vol <= 0:
+            return 0.25
+        return min(max(vol, 0.05), 1.50)
+    except Exception:
+        return 0.25
+
+
+def _mc_expected_payoffs_lognormal(
+    *,
+    s0: float,
+    s_mean: float,
+    sigma_ann: float,
+    t_years: float,
+    k: float,
+    n: int = 20000,
+    seed: int = 7,
+) -> tuple[float, float, float, float]:
+    """Return (p_itm_call, p_itm_put, e_call_payoff, e_put_payoff)."""
+    s0 = float(s0)
+    s_mean = float(s_mean)
+    sigma_ann = float(sigma_ann)
+    t_years = float(max(t_years, 1e-6))
+    k = float(k)
+
+    sigma_t = sigma_ann * np.sqrt(t_years)
+    sigma_t = float(max(sigma_t, 1e-6))
+    mu = np.log(max(s_mean, 1e-9)) - 0.5 * sigma_t * sigma_t
+    rng = np.random.default_rng(seed)
+    z = rng.standard_normal(int(n))
+    st_sim = np.exp(mu + sigma_t * z)
+
+    call_payoff = np.maximum(st_sim - k, 0.0)
+    put_payoff = np.maximum(k - st_sim, 0.0)
+
+    p_itm_call = float(np.mean(st_sim > k))
+    p_itm_put = float(np.mean(st_sim < k))
+    return p_itm_call, p_itm_put, float(np.mean(call_payoff)), float(np.mean(put_payoff))
+
+
+def render_call_put_hedge_advisor(
+    *,
+    expander_title: str,
+    expanded: bool = False,
+    key_prefix: str = "cp_advisor",
+    commodity_payloads: list[dict] | None = None,
+) -> None:
+    """Simple but advanced advisor: suggests Call vs Put based on exposure + forecast + uncertainty."""
+    with st.expander(expander_title, expanded=expanded):
+        st.caption("Smart suggestion: Call vs Put using forecast direction + historical volatility + strike/premium.")
+
+        exposure = st.radio(
+            "Exposure",
+            ["Procurement (we will BUY later)", "Inventory (we HOLD stock)", "Sales (we will SELL later)"],
+            horizontal=True,
+            key=f"{key_prefix}_exposure",
         )
 
-        suggested_k = None
-        if option == "CALL":
-            # choose K between base and upper
-            suggested_k = mu + (high - mu) * float(protection)
-        elif option == "PUT":
-            # choose K between lower and base
-            suggested_k = mu - (mu - low) * float(protection)
+        if not commodity_payloads:
+            st.info("Advisor needs commodity data (run from Executive Summary).")
+            return
 
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            st.metric("Spot", f"{current_price:,.2f}")
-        with m2:
-            st.metric(f"Forecast ({int(months)}m)", f"{mu:,.2f}", f"{expected_move_pct:+.1f}%")
-        with m3:
-            st.metric("P(up)", f"{p_up*100:.0f}%")
-        with m4:
-            st.metric("Confidence", f"{confidence*100:.0f}%")
+        options = []
+        payload_map: dict[str, dict] = {}
+        for item in commodity_payloads:
+            for side in ("int_payload", "local_payload"):
+                p = item.get(side)
+                if p and p.get("name"):
+                    label = f"{p['name']} ({'International' if side=='int_payload' else 'Local'})"
+                    options.append(label)
+                    payload_map[label] = p
 
-        headline = f"Suggested: {option}" if option != "None" else "Suggested: Monitor"
-        if action == "HEDGE":
-            st.success(headline)
-        else:
-            st.info(headline)
+        if not options:
+            st.info("No commodities available for recommendation.")
+            return
 
-        if suggested_k is not None:
-            st.caption(f"Suggested strike K ≈ {suggested_k:,.2f} {info['currency']} (based on forecast interval + your protection level).")
+        sel = st.selectbox("Asset", options, key=f"{key_prefix}_asset")
+        payload = payload_map.get(sel)
+        if not payload:
+            return
 
-        st.markdown("**Why**")
-        st.write(
-            f"Forecast base is {expected_move_pct:+.1f}% vs spot over {int(months)} months. "
-            f"Model range is [{low:,.2f}, {high:,.2f}] and implied P(up) ≈ {p_up*100:.0f}%."
+        horizons = get_prediction_horizons(payload.get("predictions", {}) or {})
+        if not horizons:
+            horizons = get_month_horizons(12)
+
+        default_h = "6M" if "6M" in horizons else ("3M" if "3M" in horizons else horizons[-1])
+        horizon = st.selectbox("Horizon", horizons, index=horizons.index(default_h), key=f"{key_prefix}_h")
+
+        s0 = float(payload.get("current_price") or 0.0)
+        unit = str(payload.get("info", {}).get("currency", ""))
+        s_mean = s0
+        if payload.get("predictions") and horizon in payload["predictions"]:
+            s_mean = float(payload["predictions"][horizon].get("price") or s0)
+
+        months = int(horizon.replace("M", "")) if horizon.endswith("M") else 6
+        t_years = months / 12.0
+
+        hist_df = payload.get("history_df") or payload.get("info", {}).get("df") or payload.get("df")
+        sigma_ann = 0.25
+        if isinstance(hist_df, pd.DataFrame):
+            vcol = payload.get("info", {}).get("value_col") or payload.get("value_col")
+            if vcol and vcol in hist_df.columns:
+                sigma_ann = _annualized_volatility_from_history(hist_df[vcol])
+            elif "value" in hist_df.columns:
+                sigma_ann = _annualized_volatility_from_history(hist_df["value"])
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            strike_pct = st.number_input("Strike (% of spot)", min_value=80.0, max_value=140.0, value=105.0, step=1.0, key=f"{key_prefix}_k")
+        with c2:
+            call_premium = st.number_input(f"Call premium ({unit} per unit)", min_value=0.0, value=max(0.01 * s0, 0.0), step=max(0.01 * s0, 0.01), key=f"{key_prefix}_callprem")
+        with c3:
+            put_premium = st.number_input(f"Put premium ({unit} per unit)", min_value=0.0, value=max(0.01 * s0, 0.0), step=max(0.01 * s0, 0.01), key=f"{key_prefix}_putprem")
+
+        k = s0 * (strike_pct / 100.0)
+
+        p_itm_call, p_itm_put, e_call, e_put = _mc_expected_payoffs_lognormal(
+            s0=s0,
+            s_mean=s_mean,
+            sigma_ann=sigma_ann,
+            t_years=t_years,
+            k=k,
+            n=20000,
+            seed=7,
         )
+
+        e_call_net = e_call - float(call_premium)
+        e_put_net = e_put - float(put_premium)
+        exp_ret = ((s_mean - s0) / s0 * 100.0) if s0 else 0.0
+
+        if exposure.startswith("Procurement"):
+            primary = "CALL" if exp_ret > 0 else "MONITOR"
+        elif exposure.startswith("Sales"):
+            primary = "PUT" if exp_ret < 0 else "MONITOR"
+        else:  # Inventory
+            primary = "PUT" if exp_ret < 0 else ("CALL" if exp_ret > 0 else "MONITOR")
+
+        # Refine with expected net payoff signal
+        if primary == "CALL" and e_call_net <= 0 and exp_ret < 2:
+            primary = "MONITOR"
+        if primary == "PUT" and e_put_net <= 0 and exp_ret > -2:
+            primary = "MONITOR"
+
+        rec_color = "#16a34a" if primary == "CALL" else ("#dc2626" if primary == "PUT" else "#334155")
+        rec_text = "Buy CALL (ceiling)" if primary == "CALL" else ("Buy PUT (floor)" if primary == "PUT" else "Monitor / No hedge")
+
+        st.markdown(
+            f"<div style='border-left: 4px solid {rec_color}; padding-left: 1rem; margin: 0.75rem 0;'>"
+            f"<div style='font-weight: 900; font-size: 1.05rem; color: {rec_color};'>Recommendation: {rec_text}</div>"
+            f"<div style='color:#475569; font-weight:600; font-size:0.85rem;'>"
+            f"Forecast {horizon}: {s_mean:,.2f} vs Spot {s0:,.2f} ({exp_ret:+.1f}%) · Vol(ann): {sigma_ann*100:.0f}%"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Metric": "Strike",
+                        "Value": f"{k:,.2f} ({strike_pct:.0f}% of spot)",
+                    },
+                    {"Metric": "P(ITM) Call", "Value": f"{p_itm_call*100:.0f}%"},
+                    {"Metric": "P(ITM) Put", "Value": f"{p_itm_put*100:.0f}%"},
+                    {"Metric": "E[Call payoff]", "Value": f"{e_call:,.2f}"},
+                    {"Metric": "E[Put payoff]", "Value": f"{e_put:,.2f}"},
+                    {"Metric": "E[Call net]", "Value": f"{e_call_net:,.2f}"},
+                    {"Metric": "E[Put net]", "Value": f"{e_put_net:,.2f}"},
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+            height=260,
+        )
+
+
+def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictions: dict, currency: str, key_prefix: str) -> None:
+    st.markdown(f"### {title}")
+    st.caption(caption)
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.plotly_chart(create_forecast_bar_chart(predictions, currency), use_container_width=True, key=f"{key_prefix}_chart")
+    with col2:
+        forecast_df = create_forecast_table(predictions, currency)
+
+        def color_change(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    num = float(val.replace('%', '').replace('+', '').replace(' ', ''))
+                    if num > 5:
+                        return 'background-color: #dcfce7; color: #166534; font-weight: bold'
+                    if num > 0:
+                        return 'background-color: #e0f2fe; color: #075985; font-weight: bold'
+                    if num < -5:
+                        return 'background-color: #fee2e2; color: #991b1b; font-weight: bold'
+                    if num < 0:
+                        return 'background-color: #fed7aa; color: #9a3412; font-weight: bold'
+                except Exception:
+                    return ''
+            return ''
+
+        styled_df = forecast_df.style.applymap(color_change, subset=['Change']).set_properties(**{
+            'text-align': 'center',
+            'font-size': '12px',
+            'font-family': 'Arial, sans-serif',
+            'padding': '10px',
+            'border': '1px solid #e2e8f0'
+        }).set_table_styles([
+            {'selector': 'thead th', 'props': [
+                ('background-color', '#1e40af'),
+                ('color', 'white'),
+                ('font-weight', 'bold'),
+                ('text-align', 'center'),
+                ('font-size', '13px'),
+                ('padding', '12px 8px'),
+                ('border', '1px solid #1e3a8a')
+            ]},
+            {'selector': 'tbody tr:nth-child(even)', 'props': [('background-color', '#f8fafc')]},
+            {'selector': 'tbody tr:nth-child(odd)', 'props': [('background-color', '#ffffff')]},
+        ])
+
+        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=440)
 
 
 @st.cache_data
@@ -1721,16 +1973,16 @@ def main():
     
     st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
     
-    # Main navigation
+    # Main navigation - 4 pages with Executive Summary first
     page = st.radio(
         "Select View:",
-        ["🇵🇰 Pakistan Forecasts", "🌍 International Market", "🇵🇰 Pakistan Local", "🧠 Market Intelligence", "🤖 AI Predictions"],
+        ["📊 Executive Summary", "🌍 International Market", "🇵🇰 Pakistan Local", "🧠 Market Intelligence", "🤖 AI Predictions"],
         horizontal=True,
         label_visibility="collapsed"
     )
     
-    if page == "🇵🇰 Pakistan Forecasts":
-        render_pakistan_forecasts_page()
+    if page == "📊 Executive Summary":
+        render_executive_summary()
     
     elif page == "🌍 International Market":
         render_market_page(
@@ -1945,69 +2197,496 @@ def main():
 
 
 def render_executive_summary():
-    """Deprecated (kept for backward compatibility).
+    """Executive Summary - Commodity-by-commodity comparison (International vs Local)."""
+    # Team request: show Local column in USD (USDT-equivalent) on Summary page.
+    show_local_in_usd = True
+    local_ccy_label = "USD" if show_local_in_usd else "PKR"
 
-    The Summary tables + old Call/Put simulator were removed per team lead feedback.
-    """
-    render_pakistan_forecasts_page()
-
-
-def render_pakistan_forecasts_page():
-    st.markdown("""
+    st.markdown(f"""
     <div style='border-left: 4px solid #2563eb; padding-left: 1rem; margin: 1rem 0 1.25rem 0;'>
         <h2 style='font-size: 1.5rem; font-weight: 800; color: #0f172a; letter-spacing: -0.4px; margin: 0 0 0.35rem 0;'>
-            🇵🇰 Pakistan Forecasts
+            📊 Executive Summary
         </h2>
         <p style='font-size: 0.95rem; color: #475569; font-weight: 600; margin: 0; line-height: 1.5;'>
-            USD/PKR exchange rate and electricity tariff outlook for budgeting and procurement planning
+            Commodity-by-commodity comparison: International (USD) vs Pakistan Local ({local_ccy_label})
         </p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Define commodity pairs (International and Local versions)
+    commodity_pairs = [
+        ("Cotton", "Cotton (Local)"),
+        ("Polyester", "Polyester (Local)"),
+        ("Viscose", "Viscose (Local)"),
+        ("Natural Gas", "Natural Gas"),
+        ("Crude Oil", "Crude Oil")
+    ]
 
-    usd_pkr = fetch_usd_pkr_rate()
-    elec = fetch_wapda_electricity_rate()
+    def _get_usd_pkr_rate_for_summary() -> tuple[float | None, str]:
+        if not show_local_in_usd:
+            return None, "disabled"
 
-    colA, colB = st.columns(2)
-    with colA:
-        if usd_pkr and usd_pkr.get("current_price"):
-            st.metric("USD/PKR (live)", f"{float(usd_pkr['current_price']):,.2f}")
+        # 1) Prefer live FX
+        live = fetch_usd_pkr_rate()
+        try:
+            if live and live.get("current_price"):
+                rate = float(live["current_price"])
+                if rate > 0:
+                    return rate, "live"
+        except Exception:
+            pass
+
+        # 2) Fallback: infer FX from commodities that have both USD and PKR series
+        def implied_fx(usd_asset: str, pkr_asset: str, usd_ccy: str, pkr_ccy: str) -> float | None:
+            usd_md = load_commodity_data(usd_asset, usd_ccy)
+            pkr_md = load_commodity_data(pkr_asset, pkr_ccy)
+            try:
+                usd_val = float(usd_md.get("current_price", 0.0)) if usd_md else 0.0
+                pkr_val = float(pkr_md.get("current_price", 0.0)) if pkr_md else 0.0
+                if usd_val > 0 and pkr_val > 0:
+                    return pkr_val / usd_val
+            except Exception:
+                return None
+            return None
+
+        fx = implied_fx(
+            INTERNATIONAL_COMMODITIES["Crude Oil"]["path"],
+            LOCAL_COMMODITIES["Crude Oil"]["path"],
+            INTERNATIONAL_COMMODITIES["Crude Oil"]["currency"],
+            LOCAL_COMMODITIES["Crude Oil"]["currency"],
+        )
+        if fx and fx > 0:
+            return float(fx), "implied_from_crude"
+
+        fx = implied_fx(
+            INTERNATIONAL_COMMODITIES["Natural Gas"]["path"],
+            LOCAL_COMMODITIES["Natural Gas"]["path"],
+            INTERNATIONAL_COMMODITIES["Natural Gas"]["currency"],
+            LOCAL_COMMODITIES["Natural Gas"]["currency"],
+        )
+        if fx and fx > 0:
+            return float(fx), "implied_from_gas"
+
+        # 3) Last resort default (keeps Summary usable offline)
+        return 280.0, "default"
+
+    usd_pkr_rate, usd_pkr_source = _get_usd_pkr_rate_for_summary()
+    if show_local_in_usd and usd_pkr_rate and usd_pkr_rate > 0:
+        label = {
+            "live": "live",
+            "implied_from_crude": "derived from Crude Oil USD vs PKR",
+            "implied_from_gas": "derived from Natural Gas USD vs PKR",
+            "default": "default",
+        }.get(usd_pkr_source, usd_pkr_source)
+        st.caption(f"Local column shown in USD using USD/PKR = {usd_pkr_rate:,.2f} ({label}).")
+    
+    # Helper function to render commodity chart and table
+    def render_empty_card(message: str):
+        st.markdown(f"""
+        <div style='background: #f8fafc; padding: 2rem; border-radius: 8px; text-align: center; border: 2px dashed #cbd5e1;'>
+            <p style='font-size: 0.9rem; font-weight: 700; color: #64748b; margin: 0;'>
+                {message}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    def build_commodity_payload(commodity_name, commodities_dict):
+        if not commodity_name or commodity_name not in commodities_dict:
+            return None
+
+        info = commodities_dict[commodity_name]
+        metadata = load_commodity_data(info["path"], info["currency"])
+        predictions = load_predictions(info["path"])
+
+        if metadata['df'] is None:
+            return None
+
+        current_price = metadata['df'][metadata['value_col']].iloc[-1]
+        price_change = metadata['price_change']
+        pred_1m = get_prediction_by_index(predictions, 1)
+        pred_3m = get_prediction_by_index(predictions, 3)
+
+        return {
+            "name": commodity_name,
+            "info": info,
+            "current_price": current_price,
+            "price_change": price_change,
+            "pred_1m": pred_1m,
+            "pred_3m": pred_3m,
+            "predictions": predictions,
+            "history_df": metadata.get("df"),
+            "value_col": metadata.get("value_col"),
+            # Display overrides (used by Summary page only)
+            "display_scale": 1.0,
+            "display_currency": info.get("currency")
+        }
+
+    def render_commodity_chart(payload, market_type: str):
+        if payload is None:
+            render_empty_card("No data available")
+            return
+
+        if market_type == "International":
+            header_color = "#1e40af"
+            chart_colors = ['#64748b', '#3b82f6', '#2563eb']
         else:
-            st.warning("USD/PKR live rate unavailable")
+            header_color = "#047857"
+            chart_colors = ['#64748b', '#10b981', '#059669']
 
-    with colB:
-        if elec and elec.get("current_price"):
-            st.metric("Electricity tariff (live)", f"{float(elec['current_price']):,.2f}")
+        st.markdown(f"""
+        <h4 style='font-size: 1rem; font-weight: 800; color: {header_color}; margin: 1rem 0 0.5rem 0;'>
+            📊 Price Forecast
+        </h4>
+        """, unsafe_allow_html=True)
+
+        scale = float(payload.get("display_scale", 1.0) or 1.0)
+        display_currency = payload.get("display_currency") or payload["info"]["currency"]
+
+        horizons = get_prediction_horizons(payload.get("predictions", {}))
+        prices = []
+        periods = []
+        if payload.get("predictions"):
+            for h in horizons:
+                pred = payload["predictions"].get(h)
+                if pred:
+                    periods.append(h)
+                    prices.append(float(pred["price"]) * scale)
         else:
-            st.warning("Electricity tariff live rate unavailable")
+            periods = horizons
+            prices = [float(payload["current_price"]) * scale for _ in horizons]
 
-    if usd_pkr and usd_pkr.get("current_price"):
-        st.markdown("---")
-        st.markdown("### 💱 USD/PKR Exchange Rate Forecast")
-        st.caption("Monthly outlook — use for import budgeting and hedge planning")
-        preds = generate_usd_pkr_forecast(float(usd_pkr["current_price"]))
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.plotly_chart(create_forecast_bar_chart(preds, "PKR/USD"), use_container_width=True, key="pk_fx_chart")
-        with c2:
-            st.dataframe(create_forecast_table(preds, "PKR/USD"), use_container_width=True, hide_index=True)
+        chart_data = pd.DataFrame({
+            'Period': periods,
+            'Price': prices
+        })
 
-    if elec and elec.get("current_price"):
-        st.markdown("---")
-        st.markdown("### ⚡ Electricity Tariff Forecast")
-        st.caption("Monthly outlook — use for factory cost planning")
-        preds = generate_energy_forecast(float(elec["current_price"]), "electricity")
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.plotly_chart(create_forecast_bar_chart(preds, "PKR/Unit"), use_container_width=True, key="pk_elec_chart")
-        with c2:
-            st.dataframe(create_forecast_table(preds, "PKR/Unit"), use_container_width=True, hide_index=True)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=chart_data['Period'],
+            y=chart_data['Price'],
+            marker_color=chart_colors,
+            text=chart_data['Price'],
+            texttemplate='%{text:,.1f}',
+            textposition='outside',
+            textfont=dict(size=9, family='IBM Plex Mono', weight=700, color='#1e293b'),
+            showlegend=False
+        ))
+
+        fig.update_layout(
+            height=320,
+            margin=dict(l=50, r=20, t=10, b=90),
+            plot_bgcolor='#fafafa',
+            paper_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(
+                tickfont=dict(size=9, family='Inter', weight=700, color='#1e293b'),
+                showgrid=False,
+                showline=True,
+                linewidth=2,
+                linecolor='#cbd5e1',
+                tickangle=-35
+            ),
+            yaxis=dict(
+                title=dict(text=f'<b>{display_currency}</b>', font=dict(size=11, family='Inter', weight=800, color=header_color)),
+                tickfont=dict(size=10, family='IBM Plex Mono', weight=600, color='#334155'),
+                showgrid=True,
+                gridcolor='#e2e8f0',
+                showline=True,
+                linewidth=2,
+                linecolor='#cbd5e1'
+            )
+        )
+        fig.update_traces(cliponaxis=False)
+        fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide')
+
+        st.plotly_chart(fig, use_container_width=True, key=f"chart_{market_type}_{payload['name'].replace(' ', '_')}")
+
+    def render_commodity_table(payload, market_type: str):
+        if payload is None:
+            render_empty_card("No data available")
+            return
+
+        if market_type == "International":
+            header_color = "#1e40af"
+        else:
+            header_color = "#047857"
+
+        st.markdown(f"""
+        <h4 style='font-size: 1rem; font-weight: 800; color: {header_color}; margin: 1rem 0 0.5rem 0;'>
+            📋 Forecast Data
+        </h4>
+        """, unsafe_allow_html=True)
+
+        scale = float(payload.get("display_scale", 1.0) or 1.0)
+
+        table_rows = []
+        if payload.get("predictions"):
+            for h in get_prediction_horizons(payload["predictions"]):
+                pred = payload["predictions"].get(h)
+                if pred:
+                    table_rows.append({
+                        "Period": h,
+                        "Value": f"{(float(pred.get('price', 0)) * scale):,.2f}",
+                        "Change": f"{pred.get('change', 0):+.1f}%"
+                    })
+        else:
+            for h in get_prediction_horizons({}):
+                table_rows.append({
+                    "Period": h,
+                    "Value": f"{(float(payload['current_price']) * scale):,.2f}",
+                    "Change": f"{'↑' if payload['price_change'] > 0 else '↓'} {abs(payload['price_change']):.1f}%"
+                })
+
+        table_data = pd.DataFrame(table_rows)
+
+        def color_change(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    if '↑' in val or '+' in val:
+                        return 'background-color: #fee2e2; color: #991b1b; font-weight: 700'
+                    elif '↓' in val or '-' in val:
+                        return 'background-color: #dcfce7; color: #166534; font-weight: 700'
+                except:
+                    pass
+            return ''
+
+        styled_table = table_data.style.map(color_change, subset=['Change'])\
+                                       .set_properties(**{
+                                           'text-align': 'left',
+                                           'font-size': '0.85rem',
+                                           'font-weight': '700',
+                                           'padding': '8px 12px',
+                                           'border': '1px solid #cbd5e1'
+                                       }).set_table_styles([
+                                           {'selector': 'thead th', 'props': [
+                                               ('background-color', header_color),
+                                               ('color', 'white'),
+                                               ('font-weight', '800'),
+                                               ('padding', '10px 12px'),
+                                               ('font-size', '0.75rem'),
+                                               ('text-transform', 'uppercase')
+                                           ]},
+                                           {'selector': 'tbody tr:hover', 'props': [
+                                               ('background-color', '#f0fdf4' if market_type == "Local" else '#eff6ff')
+                                           ]}
+                                       ])
+
+        st.dataframe(styled_table, use_container_width=True, height=360)
+    
+    # Render each commodity pair
+    all_summary = []
+    commodity_payloads = []
+    
+    for int_name, local_name in commodity_pairs:
+        int_payload = build_commodity_payload(int_name, INTERNATIONAL_COMMODITIES)
+        local_payload = build_commodity_payload(local_name, LOCAL_COMMODITIES) if local_name else None
+
+        # Convert Local column display to USD (USDT-equivalent) for Summary page
+        if show_local_in_usd and local_payload and usd_pkr_rate and usd_pkr_rate > 0:
+            local_payload["display_scale"] = 1.0 / float(usd_pkr_rate)
+            cur = str(local_payload["info"].get("currency", ""))
+            # Preserve unit after '/', only replace the currency prefix.
+            local_payload["display_currency"] = cur.replace("PKR", "USD", 1) if "PKR" in cur else f"USD ({cur})"
+
+        if int_payload:
+            all_summary.append({
+                "name": int_payload["name"],
+                "change_1m": int_payload["pred_1m"].get('change', 0) if int_payload["pred_1m"] else 0,
+                "trend": int_payload["price_change"],
+                "market": "International"
+            })
+
+        if local_payload:
+            all_summary.append({
+                "name": local_payload["name"],
+                "change_1m": local_payload["pred_1m"].get('change', 0) if local_payload["pred_1m"] else 0,
+                "trend": local_payload["price_change"],
+                "market": "Local"
+            })
+
+        commodity_payloads.append({
+            "int_name": int_name,
+            "local_name": local_name,
+            "int_payload": int_payload,
+            "local_payload": local_payload
+        })
+
+    # === CHARTS FIRST (for all commodities) ===
+    for item in commodity_payloads:
+        display_name = item["int_name"]
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #334155 0%, #475569 100%); 
+                    padding: 0.75rem 1.25rem; 
+                    border-radius: 8px; 
+                    margin: 1.5rem 0 1rem 0;'>
+            <h3 style='color: white; font-size: 1.2rem; font-weight: 800; margin: 0; text-align: center; letter-spacing: 0.5px;'>
+                {INTERNATIONAL_COMMODITIES.get(item["int_name"], {}).get('icon', '📦')} {display_name.upper()}
+            </h3>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_int, col_local = st.columns(2)
+
+        with col_int:
+            st.markdown("""
+            <div style='background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%); 
+                        padding: 0.75rem; 
+                        border-radius: 6px; 
+                        margin-bottom: 1rem;
+                        text-align: center;'>
+                <p style='color: white; font-size: 0.95rem; font-weight: 800; margin: 0;'>
+                    🌍 INTERNATIONAL (USD)
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            render_commodity_chart(item["int_payload"], "International")
+
+        with col_local:
+            if item["local_name"]:
+                st.markdown("""
+                <div style='background: linear-gradient(135deg, #047857 0%, #059669 100%); 
+                            padding: 0.75rem; 
+                            border-radius: 6px; 
+                            margin-bottom: 1rem;
+                            text-align: center;'>
+                    <p style='color: white; font-size: 0.95rem; font-weight: 800; margin: 0;'>
+                        🇵🇰 PAKISTAN LOCAL (USD)
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                render_commodity_chart(item["local_payload"], "Local")
+            else:
+                render_empty_card("No Local Market Data")
+
+        st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
+
+    # Replace forecast tables with Pakistan-market forecasts (requested by team lead)
+    st.markdown("---")
+    st.markdown(
+        """
+        <div style='background: #f1f5f9; padding: 0.75rem 1rem; border-radius: 8px; margin: 1.25rem 0 0.75rem 0;'>
+            <h3 style='font-size: 1.1rem; font-weight: 800; color: #0f172a; margin: 0; text-align: center;'>
+                🇵🇰 Pakistan Market Forecasts
+            </h3>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    usd = fetch_usd_pkr_rate()
+    if usd and usd.get("current_price"):
+        usd_preds = generate_usd_pkr_forecast(float(usd["current_price"]))
+        _render_pakistan_forecast_chart_table(
+            title="💱 USD/PKR Exchange Rate Forecast",
+            caption="Pakistani market indicator for procurement planning",
+            predictions=usd_preds,
+            currency="PKR/USD",
+            key_prefix="summary_usd_pkr",
+        )
+    else:
+        st.info("USD/PKR live rate unavailable right now.")
 
     st.markdown("---")
-    render_call_put_recommender(
-        expander_title="🧠 Call vs Put — Hedge Recommendation",
+    elec = fetch_wapda_electricity_rate()
+    if elec and elec.get("current_price"):
+        elec_preds = generate_energy_forecast(float(elec["current_price"]), "electricity")
+        _render_pakistan_forecast_chart_table(
+            title="⚡ Electricity Tariff Forecast",
+            caption="Pakistani market indicator (industrial tariff) for budgeting energy cost",
+            predictions=elec_preds,
+            currency="PKR/Unit",
+            key_prefix="summary_electricity",
+        )
+    else:
+        st.info("Electricity tariff data unavailable right now.")
+
+    # Smart Call/Put advisor (replaces the older compounding simulator)
+    st.markdown("---")
+    render_call_put_hedge_advisor(
+        expander_title="🧠 Call/Put Hedge Advisor (Smart Suggestion)",
         expanded=False,
-        key_prefix="pk_hedge",
+        key_prefix="summary_cp",
+        commodity_payloads=commodity_payloads,
     )
+    
+    # === OVERALL SUMMARY - Key insights across all commodities ===
+    if len(all_summary) > 0:
+        st.markdown("---")
+        st.markdown("""
+        <h3 style='font-size: 1.25rem; font-weight: 800; color: #0f172a; margin: 1.5rem 0 1rem 0; text-align: center;'>
+            📈 Overall Market Summary
+        </h3>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            <h4 style='font-size: 1.05rem; font-weight: 800; color: #dc2626; margin: 0.5rem 0;'>
+                🔴 Price Alerts
+            </h4>
+            """, unsafe_allow_html=True)
+            
+            risks = [item for item in all_summary if item['change_1m'] > 5]
+            opportunities = [item for item in all_summary if item['change_1m'] < -5]
+            
+            if risks:
+                st.markdown("""
+                <div style='background: #fef2f2; padding: 1rem; border-radius: 8px; border-left: 4px solid #dc2626; margin: 1rem 0;'>
+                    <p style='margin: 0 0 0.5rem 0; font-size: 0.85rem; font-weight: 800; color: #991b1b;'>RISING >5%</p>
+                </div>
+                """, unsafe_allow_html=True)
+                for r in risks[:5]:
+                    st.markdown(f"<p style='font-size: 0.9rem; font-weight: 700; color: #1e293b; margin: 0.4rem 0;'>• {r['name']} ({r['market']}): +{r['change_1m']:.1f}%</p>", unsafe_allow_html=True)
+            else:
+                st.success("✓ No major price increases")
+            
+            if opportunities:
+                st.markdown("""
+                <div style='background: #f0fdf4; padding: 1rem; border-radius: 8px; border-left: 4px solid #059669; margin: 1rem 0;'>
+                    <p style='margin: 0 0 0.5rem 0; font-size: 0.85rem; font-weight: 800; color: #166534;'>FALLING >5%</p>
+                </div>
+                """, unsafe_allow_html=True)
+                for o in opportunities[:5]:
+                    st.markdown(f"<p style='font-size: 0.9rem; font-weight: 700; color: #1e293b; margin: 0.4rem 0;'>• {o['name']} ({o['market']}): {o['change_1m']:.1f}%</p>", unsafe_allow_html=True)
+            else:
+                st.info("→ Prices stable")
+        
+        with col2:
+            st.markdown("""
+            <h4 style='font-size: 1.05rem; font-weight: 800; color: #2563eb; margin: 0.5rem 0;'>
+                📊 Quick Stats
+            </h4>
+            """, unsafe_allow_html=True)
+            
+            total = len(all_summary)
+            rising = len([item for item in all_summary if item['trend'] > 0])
+            falling = len([item for item in all_summary if item['trend'] < 0])
+            
+            st.markdown(f"""
+            <div style='background: white; padding: 1.25rem; border-radius: 8px; border: 2px solid #cbd5e1;'>
+                <div style='display: flex; justify-content: space-between; margin-bottom: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid #e2e8f0;'>
+                    <span style='font-size: 0.95rem; font-weight: 800; color: #334155;'>Total Tracked:</span>
+                    <span style='font-size: 1.1rem; font-weight: 800; color: #1e293b;'>{total}</span>
+                </div>
+                <div style='display: flex; justify-content: space-between; margin-bottom: 0.75rem;'>
+                    <span style='font-size: 0.95rem; font-weight: 800; color: #059669;'>↑ Rising:</span>
+                    <span style='font-size: 1.1rem; font-weight: 800; color: #059669;'>{rising}</span>
+                </div>
+                <div style='display: flex; justify-content: space-between;'>
+                    <span style='font-size: 0.95rem; font-weight: 800; color: #dc2626;'>↓ Falling:</span>
+                    <span style='font-size: 1.1rem; font-weight: 800; color: #dc2626;'>{falling}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown(f"""
+    <p style='font-size: 0.85rem; color: #64748b; font-weight: 600; text-align: center; margin: 1rem 0;'>
+        💾 Use individual commodity tabs for detailed analysis • Last updated: {datetime.now().strftime("%B %d, %Y %H:%M")}
+    </p>
+    """, unsafe_allow_html=True)
 
 
 def get_critical_alerts(events: dict) -> list:
@@ -2150,11 +2829,7 @@ def render_intelligence_page(events: dict):
                 """, unsafe_allow_html=True)
 
     st.markdown("---")
-    render_call_put_recommender(
-        expander_title="🧠 Call vs Put — Hedge Recommendation",
-        expanded=False,
-        key_prefix="intel_hedge",
-    )
+    st.info("Call/Put Hedge Advisor is available on 📊 Executive Summary.")
 
 
 if __name__ == "__main__":
