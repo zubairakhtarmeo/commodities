@@ -1153,74 +1153,107 @@ def render_call_put_hedge_advisor(
             elif "value" in hist_df.columns:
                 sigma_ann = _annualized_volatility_from_history(hist_df["value"])
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            strike_pct = st.number_input("Strike (% of spot)", min_value=80.0, max_value=140.0, value=105.0, step=1.0, key=f"{key_prefix}_k")
-        with c2:
-            call_premium = st.number_input(f"Call premium ({unit} per unit)", min_value=0.0, value=max(0.01 * s0, 0.0), step=max(0.01 * s0, 0.01), key=f"{key_prefix}_callprem")
-        with c3:
-            put_premium = st.number_input(f"Put premium ({unit} per unit)", min_value=0.0, value=max(0.01 * s0, 0.0), step=max(0.01 * s0, 0.01), key=f"{key_prefix}_putprem")
-
-        k = s0 * (strike_pct / 100.0)
-
-        p_itm_call, p_itm_put, e_call, e_put = _mc_expected_payoffs_lognormal(
-            s0=s0,
-            s_mean=s_mean,
-            sigma_ann=sigma_ann,
-            t_years=t_years,
-            k=k,
-            n=20000,
-            seed=7,
-        )
-
-        e_call_net = e_call - float(call_premium)
-        e_put_net = e_put - float(put_premium)
+        # Simple, market-style inputs
         exp_ret = ((s_mean - s0) / s0 * 100.0) if s0 else 0.0
+        view = "UP" if exp_ret >= 2.0 else ("DOWN" if exp_ret <= -2.0 else "FLAT")
+        vol_band = "HIGH" if sigma_ann >= 0.30 else ("MED" if sigma_ann >= 0.20 else "LOW")
 
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("Spot", f"{s0:,.2f} {unit}".strip())
+        with m2:
+            st.metric(f"Forecast ({horizon})", f"{s_mean:,.2f} {unit}".strip(), f"{exp_ret:+.1f}%")
+        with m3:
+            st.metric("Vol (ann)", f"{sigma_ann*100:.0f}%")
+
+        style_options = ["Conservative (ATM)", "Balanced (5% OTM)", "Aggressive (10% OTM)"]
+        style = st.selectbox("Hedge style", style_options, index=1, key=f"{key_prefix}_style")
+        hedge_pct = st.slider("Hedge coverage (%)", min_value=0, max_value=100, value=50, step=5, key=f"{key_prefix}_coverage")
+
+        prefer_low_cost = False
+        if exposure.startswith("Sales") or exposure.startswith("Inventory"):
+            prefer_low_cost = st.checkbox(
+                "Prefer lower upfront cost (use a Collar: buy put + sell call)",
+                value=True,
+                key=f"{key_prefix}_collar",
+            )
+
+        # Strike conventions: Calls are usually OTM above spot; Puts are usually OTM below spot.
+        if style.startswith("Conservative"):
+            call_pct = 100.0
+            put_pct = 100.0
+        elif style.startswith("Balanced"):
+            call_pct = 105.0
+            put_pct = 95.0
+        else:
+            call_pct = 110.0
+            put_pct = 90.0
+
+        # Recommendation (simple heuristics)
+        primary = "MONITOR"
         if exposure.startswith("Procurement"):
-            primary = "CALL" if exp_ret > 0 else "MONITOR"
+            if view == "UP" or vol_band == "HIGH":
+                primary = "CALL"
         elif exposure.startswith("Sales"):
-            primary = "PUT" if exp_ret < 0 else "MONITOR"
+            if view == "DOWN" or vol_band == "HIGH":
+                primary = "COLLAR" if prefer_low_cost else "PUT"
         else:  # Inventory
-            primary = "PUT" if exp_ret < 0 else ("CALL" if exp_ret > 0 else "MONITOR")
+            if view == "DOWN" or vol_band == "HIGH":
+                primary = "COLLAR" if prefer_low_cost else "PUT"
+            else:
+                primary = "MONITOR"
 
-        # Refine with expected net payoff signal
-        if primary == "CALL" and e_call_net <= 0 and exp_ret < 2:
-            primary = "MONITOR"
-        if primary == "PUT" and e_put_net <= 0 and exp_ret > -2:
-            primary = "MONITOR"
-
-        rec_color = "#16a34a" if primary == "CALL" else ("#dc2626" if primary == "PUT" else "#334155")
-        rec_text = "Buy CALL (ceiling)" if primary == "CALL" else ("Buy PUT (floor)" if primary == "PUT" else "Monitor / No hedge")
+        rec_color = "#16a34a" if primary == "CALL" else ("#dc2626" if primary in ("PUT", "COLLAR") else "#334155")
+        rec_text = (
+            "Buy CALL (cap your buy price)" if primary == "CALL" else
+            ("Buy PUT (protect your sell price)" if primary == "PUT" else
+             ("Use COLLAR (buy put + sell call)" if primary == "COLLAR" else "Monitor / No hedge"))
+        )
 
         st.markdown(
             f"<div style='border-left: 4px solid {rec_color}; padding-left: 1rem; margin: 0.75rem 0;'>"
             f"<div style='font-weight: 900; font-size: 1.05rem; color: {rec_color};'>Recommendation: {rec_text}</div>"
             f"<div style='color:#475569; font-weight:600; font-size:0.85rem;'>"
-            f"Forecast {horizon}: {s_mean:,.2f} vs Spot {s0:,.2f} ({exp_ret:+.1f}%) · Vol(ann): {sigma_ann*100:.0f}%"
+            f"View: {view} ({exp_ret:+.1f}%) · Vol: {vol_band} ({sigma_ann*100:.0f}%) · Coverage: {hedge_pct}%"
             f"</div></div>",
             unsafe_allow_html=True,
         )
 
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "Metric": "Strike",
-                        "Value": f"{k:,.2f} ({strike_pct:.0f}% of spot)",
-                    },
-                    {"Metric": "P(ITM) Call", "Value": f"{p_itm_call*100:.0f}%"},
-                    {"Metric": "P(ITM) Put", "Value": f"{p_itm_put*100:.0f}%"},
-                    {"Metric": "E[Call payoff]", "Value": f"{e_call:,.2f}"},
-                    {"Metric": "E[Put payoff]", "Value": f"{e_put:,.2f}"},
-                    {"Metric": "E[Call net]", "Value": f"{e_call_net:,.2f}"},
-                    {"Metric": "E[Put net]", "Value": f"{e_put_net:,.2f}"},
-                ]
-            ),
-            use_container_width=True,
-            hide_index=True,
-            height=260,
-        )
+        # Suggested strikes / structure
+        rows: list[dict] = []
+        if primary == "CALL":
+            k_call = s0 * (call_pct / 100.0)
+            rows = [
+                {"Item": "Tenor", "Suggestion": f"{months} months"},
+                {"Item": "Coverage", "Suggestion": f"{hedge_pct}% of expected volume"},
+                {"Item": "Call strike", "Suggestion": f"{k_call:,.2f} {unit} ({call_pct:.0f}% of spot)".strip()},
+                {"Item": "Pricing", "Suggestion": "Get premium quote from bank/broker (varies by vol & tenor)"},
+            ]
+        elif primary == "PUT":
+            k_put = s0 * (put_pct / 100.0)
+            rows = [
+                {"Item": "Tenor", "Suggestion": f"{months} months"},
+                {"Item": "Coverage", "Suggestion": f"{hedge_pct}% of expected volume"},
+                {"Item": "Put strike", "Suggestion": f"{k_put:,.2f} {unit} ({put_pct:.0f}% of spot)".strip()},
+                {"Item": "Pricing", "Suggestion": "Get premium quote from bank/broker (varies by vol & tenor)"},
+            ]
+        elif primary == "COLLAR":
+            k_put = s0 * (put_pct / 100.0)
+            k_call = s0 * (call_pct / 100.0)
+            rows = [
+                {"Item": "Tenor", "Suggestion": f"{months} months"},
+                {"Item": "Coverage", "Suggestion": f"{hedge_pct}% of expected volume"},
+                {"Item": "Buy put strike", "Suggestion": f"{k_put:,.2f} {unit} ({put_pct:.0f}% of spot)".strip()},
+                {"Item": "Sell call strike", "Suggestion": f"{k_call:,.2f} {unit} ({call_pct:.0f}% of spot)".strip()},
+                {"Item": "Note", "Suggestion": "Collar reduces premium but caps upside (market standard)"},
+            ]
+        else:
+            rows = [
+                {"Item": "Action", "Suggestion": "No hedge suggested right now"},
+                {"Item": "When to hedge", "Suggestion": "If view turns UP (procurement) or DOWN (sales) or vol becomes HIGH"},
+            ]
+
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=220)
 
 
 def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictions: dict, currency: str, key_prefix: str) -> None:
