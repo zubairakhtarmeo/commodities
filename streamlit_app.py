@@ -2640,11 +2640,19 @@ def render_executive_summary():
             base_scale = 1.0 / float(usd_pkr_rate)
             cur = str(local_payload["info"].get("currency", ""))
 
-            # Keep UOM consistent with International (USD/ton). If Local is per-kg, convert to per-ton.
+            # Keep UOM consistent and market-practice.
+            # - Default: if Local is per-kg, convert to per-ton (x1000).
+            # - Cotton: Local is PKR/maund, convert to USD/lb (1 maund = 40kg = 88.1849 lb).
             uom_scale = 1.0
             cur_uom = cur
             cur_lower = cur.lower()
-            if "/kg" in cur_lower or " per kg" in cur_lower:
+
+            # Cotton special-case: maund -> lb
+            if "cotton" in str(local_payload.get("name", "")).lower() and "/maund" in cur_lower:
+                maund_lb = 40.0 * 2.20462262185
+                uom_scale = 1.0 / maund_lb
+                cur_uom = cur_uom.replace("/maund", "/lb").replace("/MAUND", "/lb").replace("/Maund", "/lb")
+            elif "/kg" in cur_lower or " per kg" in cur_lower:
                 uom_scale = 1000.0
                 cur_uom = cur_uom.replace("/kg", "/ton").replace("/KG", "/ton").replace("/Kg", "/ton")
 
