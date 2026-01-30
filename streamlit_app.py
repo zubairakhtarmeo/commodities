@@ -2732,15 +2732,6 @@ def render_executive_summary():
     </p>
     """, unsafe_allow_html=True)
 
-    st.markdown(
-        """
-    <p style='font-size: 0.80rem; color: #64748b; font-weight: 600; text-align: center; margin: -0.5rem 0 1rem 0;'>
-        contributions: Miss SAFA ASIF & her dear HR bestie
-    </p>
-    """,
-        unsafe_allow_html=True,
-    )
-
 
 def get_critical_alerts(events: dict) -> list:
     """Extract critical alerts from events."""
