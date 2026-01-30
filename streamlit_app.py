@@ -1124,11 +1124,17 @@ def render_call_put_hedge_advisor(
         default_h = "6M" if "6M" in horizons else ("3M" if "3M" in horizons else horizons[-1])
         horizon = st.selectbox("Horizon", horizons, index=horizons.index(default_h), key=f"{key_prefix}_h")
 
-        s0 = float(payload.get("current_price") or 0.0)
-        unit = str(payload.get("info", {}).get("currency", ""))
-        s_mean = s0
+        scale = float(payload.get("display_scale", 1.0) or 1.0)
+        unit = str(payload.get("display_currency") or payload.get("info", {}).get("currency", ""))
+
+        s0_raw = float(payload.get("current_price") or 0.0)
+        s_mean_raw = s0_raw
         if payload.get("predictions") and horizon in payload["predictions"]:
-            s_mean = float(payload["predictions"][horizon].get("price") or s0)
+            s_mean_raw = float(payload["predictions"][horizon].get("price") or s0_raw)
+
+        # Use display scale for all amounts shown/entered on Summary page
+        s0 = s0_raw * scale
+        s_mean = s_mean_raw * scale
 
         months = int(horizon.replace("M", "")) if horizon.endswith("M") else 6
         t_years = months / 12.0
