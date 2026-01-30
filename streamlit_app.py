@@ -676,6 +676,109 @@ st.markdown("""
         padding: 0.875rem 1rem;
         font-size: 0.85rem;
     }
+
+    /* ============================================
+       CALL/PUT ADVISOR - Clean Signal Card
+    ============================================ */
+    .cp-card {
+        background: #ffffff;
+        border: 1.5px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+        margin: 0.5rem 0 1rem 0;
+    }
+
+    .cp-title {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: -0.3px;
+        margin: 0;
+    }
+
+    .cp-subtitle {
+        font-size: 0.85rem;
+        color: #64748b;
+        font-weight: 600;
+        margin-top: 0.2rem;
+    }
+
+    .cp-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 0.7rem;
+        border-radius: 999px;
+        font-weight: 800;
+        font-size: 0.85rem;
+        letter-spacing: 0.2px;
+        border: 1px solid #e2e8f0;
+        background: #f8fafc;
+        color: #0f172a;
+        white-space: nowrap;
+    }
+
+    .cp-pill-call {
+        background: #dcfce7;
+        border-color: #86efac;
+        color: #166534;
+    }
+
+    .cp-pill-put {
+        background: #fee2e2;
+        border-color: #fecaca;
+        color: #991b1b;
+    }
+
+    .cp-pill-hold {
+        background: #e2e8f0;
+        border-color: #cbd5e1;
+        color: #334155;
+    }
+
+    .cp-kv {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 0.25rem;
+        background: #ffffff;
+        border: 1.5px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 0.9rem 1rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        min-height: 92px;
+    }
+
+    .cp-kv-label {
+        font-size: 0.72rem;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        font-weight: 700;
+    }
+
+    .cp-kv-value {
+        font-size: 1.25rem;
+        font-weight: 900;
+        color: #0f172a;
+        font-family: 'IBM Plex Mono', 'Courier New', monospace;
+        letter-spacing: -0.5px;
+        line-height: 1.15;
+    }
+
+    .cp-kv-sub {
+        font-size: 0.82rem;
+        color: #475569;
+        font-weight: 700;
+    }
+
+    .cp-note {
+        font-size: 0.85rem;
+        color: #64748b;
+        font-weight: 600;
+        margin-top: 0.25rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1085,13 +1188,28 @@ def render_call_put_hedge_advisor(
 ) -> None:
     """Simple but advanced advisor: suggests Call vs Put based on exposure + forecast + uncertainty."""
     with st.expander(expander_title, expanded=expanded):
-        st.caption("Direct signal (like BTC model): BUY CALL / BUY PUT / HOLD")
+        st.markdown(
+            """
+<div class="cp-card">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+        <div>
+            <div class="cp-title">Hedge Advisor</div>
+            <div class="cp-subtitle">One-line signal based on forecast direction and volatility.</div>
+        </div>
+        <div class="cp-pill cp-pill-hold">Signal: HOLD</div>
+    </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
 
+        st.markdown("<div class='cp-kv-label' style='margin: 0.25rem 0 0.35rem 0;'>Exposure</div>", unsafe_allow_html=True)
         exposure = st.radio(
             "Exposure",
             ["Procurement (we will BUY later)", "Inventory (we HOLD stock)", "Sales (we will SELL later)"],
             horizontal=True,
             key=f"{key_prefix}_exposure",
+            label_visibility="collapsed",
         )
 
         if not commodity_payloads:
@@ -1112,7 +1230,10 @@ def render_call_put_hedge_advisor(
             st.info("No commodities available for recommendation.")
             return
 
-        sel = st.selectbox("Asset", options, key=f"{key_prefix}_asset")
+        csel1, csel2 = st.columns([2, 1])
+        with csel1:
+            st.markdown("<div class='cp-kv-label' style='margin: 0.25rem 0 0.35rem 0;'>Asset</div>", unsafe_allow_html=True)
+            sel = st.selectbox("Asset", options, key=f"{key_prefix}_asset", label_visibility="collapsed")
         payload = payload_map.get(sel)
         if not payload:
             return
@@ -1122,7 +1243,9 @@ def render_call_put_hedge_advisor(
             horizons = get_month_horizons(12)
 
         default_h = "6M" if "6M" in horizons else ("3M" if "3M" in horizons else horizons[-1])
-        horizon = st.selectbox("Horizon", horizons, index=horizons.index(default_h), key=f"{key_prefix}_h")
+        with csel2:
+            st.markdown("<div class='cp-kv-label' style='margin: 0.25rem 0 0.35rem 0;'>Horizon</div>", unsafe_allow_html=True)
+            horizon = st.selectbox("Horizon", horizons, index=horizons.index(default_h), key=f"{key_prefix}_h", label_visibility="collapsed")
 
         scale = float(payload.get("display_scale", 1.0) or 1.0)
         unit = str(payload.get("display_currency") or payload.get("info", {}).get("currency", ""))
@@ -1158,13 +1281,42 @@ def render_call_put_hedge_advisor(
         view = "UP" if exp_ret >= 2.0 else ("DOWN" if exp_ret <= -2.0 else "FLAT")
         vol_band = "HIGH" if sigma_ann >= 0.30 else ("MED" if sigma_ann >= 0.20 else "LOW")
 
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.metric("Spot", f"{s0:,.2f} {unit}".strip())
-        with m2:
-            st.metric(f"Forecast ({horizon})", f"{s_mean:,.2f} {unit}".strip(), f"{exp_ret:+.1f}%")
-        with m3:
-            st.metric("Vol (ann)", f"{sigma_ann*100:.0f}%")
+        delta_color = "#166534" if exp_ret > 0 else ("#991b1b" if exp_ret < 0 else "#334155")
+        delta_prefix = "+" if exp_ret > 0 else ""
+        kv1, kv2, kv3 = st.columns(3)
+        with kv1:
+            st.markdown(
+                f"""
+<div class="cp-kv">
+  <div class="cp-kv-label">Spot</div>
+  <div class="cp-kv-value">{s0:,.2f}</div>
+  <div class="cp-kv-sub">{unit}</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with kv2:
+            st.markdown(
+                f"""
+<div class="cp-kv">
+  <div class="cp-kv-label">Forecast ({horizon})</div>
+  <div class="cp-kv-value">{s_mean:,.2f}</div>
+  <div class="cp-kv-sub" style="color:{delta_color};">{delta_prefix}{exp_ret:.1f}%</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with kv3:
+            st.markdown(
+                f"""
+<div class="cp-kv">
+  <div class="cp-kv-label">Volatility</div>
+  <div class="cp-kv-value">{sigma_ann*100:.0f}%</div>
+  <div class="cp-kv-sub">{vol_band}</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         # Direct signal (simple heuristics)
         signal = "HOLD"
@@ -1178,23 +1330,41 @@ def render_call_put_hedge_advisor(
             if view == "DOWN" or vol_band == "HIGH":
                 signal = "BUY PUT"
 
-        rec_color = "#16a34a" if signal == "BUY CALL" else ("#dc2626" if signal == "BUY PUT" else "#334155")
+        pill_class = "cp-pill-hold"
+        if signal == "BUY CALL":
+            pill_class = "cp-pill-call"
+        elif signal == "BUY PUT":
+            pill_class = "cp-pill-put"
 
+        reason = f"View: {view} ({exp_ret:+.1f}%) · Vol: {vol_band} ({sigma_ann*100:.0f}%)"
         st.markdown(
-            f"<div style='border-left: 4px solid {rec_color}; padding-left: 1rem; margin: 0.75rem 0;'>"
-            f"<div style='font-weight: 900; font-size: 1.15rem; color: {rec_color};'>Signal: {signal}</div>"
-            f"<div style='color:#475569; font-weight:600; font-size:0.85rem;'>"
-            f"View: {view} ({exp_ret:+.1f}%) · Vol: {vol_band} ({sigma_ann*100:.0f}%)"
-            f"</div></div>",
+            f"""
+<div class="cp-card" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+  <div>
+    <div class="cp-title" style="margin-bottom: 0.2rem;">Signal</div>
+    <div class="cp-subtitle">{reason}</div>
+  </div>
+  <div class="cp-pill {pill_class}">{signal}</div>
+</div>
+            """,
             unsafe_allow_html=True,
         )
 
         if signal == "BUY CALL":
-            st.caption(f"Market practice: ask your bank for a {months}M call, ~5% OTM strike (around {s0*1.05:,.2f} {unit}).")
+            st.markdown(
+                f"<div class='cp-note'>Market practice: ask your bank for a {months}M CALL, ~5% OTM strike (around {s0*1.05:,.2f} {unit}).</div>",
+                unsafe_allow_html=True,
+            )
         elif signal == "BUY PUT":
-            st.caption(f"Market practice: ask your bank for a {months}M put, ~5% OTM strike (around {s0*0.95:,.2f} {unit}).")
+            st.markdown(
+                f"<div class='cp-note'>Market practice: ask your bank for a {months}M PUT, ~5% OTM strike (around {s0*0.95:,.2f} {unit}).</div>",
+                unsafe_allow_html=True,
+            )
         else:
-            st.caption("No hedge suggested right now. Re-check if forecast moves beyond ±2% or volatility spikes.")
+            st.markdown(
+                "<div class='cp-note'>No hedge suggested right now. Re-check if forecast moves beyond ±2% or volatility becomes HIGH.</div>",
+                unsafe_allow_html=True,
+            )
 
 
 def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictions: dict, currency: str, key_prefix: str) -> None:
