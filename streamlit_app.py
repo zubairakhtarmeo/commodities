@@ -356,15 +356,15 @@ def load_latest_events() -> dict:
 # International: ALL prices in standard USD units for consistent comparison
 INTERNATIONAL_COMMODITIES = {
     "Cotton": {"path": "cotton/cotton_usd_monthly", "currency": "USD/lb", "icon": "🌱", "type": "Futures"},
-    "Polyester": {"path": "polyester/polyester_usd_monthly", "currency": "USD/ton", "icon": "🧵", "type": "Futures"},
-    "Viscose": {"path": "viscose/viscose_usd_monthly", "currency": "USD/ton", "icon": "🧬", "type": "Spot"},
+    "Polyester": {"path": "polyester/polyester_usd_monthly", "currency": "USD/kg", "icon": "🧵", "type": "Futures"},
+    "Viscose": {"path": "viscose/viscose_usd_monthly", "currency": "USD/kg", "icon": "🧬", "type": "Spot"},
     "Natural Gas": {"path": "energy/natural_gas_usd_monthly_clean", "currency": "USD/MMBTU", "icon": "🔥", "type": "Spot"},
     "Crude Oil": {"path": "energy/crude_oil_brent_usd_monthly_clean", "currency": "USD/barrel", "icon": "🛢️", "type": "Spot"}
 }
 
 LOCAL_COMMODITIES = {
     "Cotton (Local)": {"path": "cotton/cotton_pkr_monthly", "currency": "PKR/maund", "icon": "🌱", "type": "Local Market"},
-    "Polyester (Local)": {"path": "polyester/polyester_pkr_monthly", "currency": "PKR/ton", "icon": "🧵", "type": "Import Cost"},
+    "Polyester (Local)": {"path": "polyester/polyester_pkr_monthly", "currency": "PKR/kg", "icon": "🧵", "type": "Import Cost"},
     "Viscose (Local)": {"path": "viscose/viscose_pkr_monthly", "currency": "PKR/kg", "icon": "🧬", "type": "Local Market"},
     "Natural Gas": {"path": "energy/natural_gas_pkr_monthly_clean", "currency": "PKR/MMBTU", "icon": "🔥", "type": "Import Cost"},
     "Crude Oil": {"path": "energy/crude_oil_brent_pkr_monthly_clean", "currency": "PKR/barrel", "icon": "🛢️", "type": "Import Cost"}
@@ -856,6 +856,14 @@ def fetch_wapda_electricity_rate() -> Optional[dict]:
 @st.cache_data
 def load_commodity_data(asset_path: str, currency: str):
     """Load commodity price data with full dataframe."""
+    ton_assets_to_kg = (
+        "polyester/polyester_usd_monthly",
+        "viscose/viscose_usd_monthly",
+        "polyester/polyester_pkr_monthly",
+        "viscose/viscose_pkr_monthly",
+    )
+    want_per_kg = "/kg" in str(currency).lower()
+
     csv_files = list(RAW_DATA_DIR.glob(f"{asset_path}*.csv"))
     if csv_files:
         try:
@@ -878,6 +886,10 @@ def load_commodity_data(asset_path: str, currency: str):
                         break
             
             if value_col and len(df) > 0:
+                # If the configured unit is per-kg but the underlying series is per-ton, convert values.
+                if want_per_kg and any(k in str(asset_path) for k in ton_assets_to_kg):
+                    df[value_col] = pd.to_numeric(df[value_col], errors="coerce") / 1000.0
+
                 latest_price = float(df[value_col].iloc[-1])
                 prev_price = float(df[value_col].iloc[-2]) if len(df) > 1 else latest_price
                 price_change = ((latest_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0.0
@@ -901,6 +913,9 @@ def load_commodity_data(asset_path: str, currency: str):
     # Cloud fallback: load from Supabase (keeps repo code-only, data stays private)
     sb_df = supabase_fetch_commodity_series(asset_path)
     if sb_df is not None and not sb_df.empty:
+        if want_per_kg and any(k in str(asset_path) for k in ton_assets_to_kg):
+            sb_df = sb_df.copy()
+            sb_df["value"] = pd.to_numeric(sb_df["value"], errors="coerce") / 1000.0
         latest_price = float(sb_df["value"].iloc[-1])
         prev_price = float(sb_df["value"].iloc[-2]) if len(sb_df) > 1 else latest_price
         price_change = ((latest_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0.0
@@ -1078,14 +1093,16 @@ def render_hedging_compounding_simulator(*, expander_title: str, expanded: bool 
         cf = compound_factor(monthly_rates)
         fv_cash = float(cash_today) * cf
 
+        dec = 3 if "/lb" in str(info.get("currency", "")).lower() else 2
+
         st.markdown("#### Price scenarios at month n")
         s1, s2, s3 = st.columns(3)
         with s1:
-            st.metric("Low (forecast lower)", f"{pred_low:,.2f}")
+            st.metric("Low (forecast lower)", f"{pred_low:,.{dec}f}")
         with s2:
-            st.metric("Base (forecast)", f"{pred_base:,.2f}")
+            st.metric("Base (forecast)", f"{pred_base:,.{dec}f}")
         with s3:
-            st.metric("High (forecast upper)", f"{pred_high:,.2f}")
+            st.metric("High (forecast upper)", f"{pred_high:,.{dec}f}")
 
         scenarios = [("Low", pred_low), ("Base", pred_base), ("High", pred_high)]
 
@@ -1147,6 +1164,272 @@ def _annualized_volatility_from_history(series: pd.Series, periods_per_year: int
         return 0.25
 
 
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF using erf (no scipy dependency)."""
+    import math
+
+    return 0.5 * (1.0 + math.erf(float(x) / math.sqrt(2.0)))
+
+
+def _bs_price(*, s: float, k: float, t: float, sigma: float, opt_type: str) -> float:
+    """Black-Scholes price with r=0, q=0 (good enough for guidance UI)."""
+    import math
+
+    s = float(max(s, 1e-12))
+    k = float(max(k, 1e-12))
+    t = float(max(t, 1e-9))
+    sigma = float(max(sigma, 1e-9))
+    d1 = (math.log(s / k) + 0.5 * sigma * sigma * t) / (sigma * math.sqrt(t))
+    d2 = d1 - sigma * math.sqrt(t)
+
+    opt_type = str(opt_type).upper()
+    if opt_type == "CALL":
+        return s * _norm_cdf(d1) - k * _norm_cdf(d2)
+    if opt_type == "PUT":
+        return k * _norm_cdf(-d2) - s * _norm_cdf(-d1)
+    return 0.0
+
+
+def _lognormal_prob_gt(*, s0: float, s_mean: float, sigma_ann: float, t_years: float, k: float) -> float:
+    """P(S_T > K) for lognormal with mean matched to s_mean."""
+    import math
+
+    s0 = float(max(s0, 1e-12))
+    s_mean = float(max(s_mean, 1e-12))
+    k = float(max(k, 1e-12))
+    t_years = float(max(t_years, 1e-9))
+    sigma_ann = float(max(sigma_ann, 1e-9))
+
+    sigma_t = sigma_ann * math.sqrt(t_years)
+    sigma_t = float(max(sigma_t, 1e-9))
+
+    # Choose drift so that E[S_T] = s_mean
+    mu = math.log(s_mean / s0) / t_years + 0.5 * sigma_ann * sigma_ann
+    mean_log = math.log(s0) + (mu - 0.5 * sigma_ann * sigma_ann) * t_years
+    z = (math.log(k) - mean_log) / sigma_t
+    return float(1.0 - _norm_cdf(z))
+
+
+def _momentum_pct(*, hist_df: pd.DataFrame, value_col: str, months: int) -> float:
+    try:
+        s = pd.to_numeric(hist_df[value_col], errors="coerce").dropna()
+        if len(s) < months + 1:
+            return 0.0
+        last = float(s.iloc[-1])
+        prior = float(s.iloc[-(months + 1)])
+        if prior == 0:
+            return 0.0
+        return (last / prior - 1.0) * 100.0
+    except Exception:
+        return 0.0
+
+
+def _blend_sigma_from_forecast_interval(*, sigma_ann: float, lower: float | None, upper: float | None, t_years: float) -> float:
+    """If forecast provides bounds, infer a minimum sigma consistent with that interval."""
+    import math
+
+    sigma_ann = float(sigma_ann)
+    if lower is None or upper is None:
+        return sigma_ann
+    try:
+        lower = float(lower)
+        upper = float(upper)
+        if not (lower > 0 and upper > 0 and upper > lower and t_years > 0):
+            return sigma_ann
+        # Assume bounds are roughly ~90% interval => z ≈ 1.645
+        z = 1.645
+        sigma_t = (math.log(upper) - math.log(lower)) / (2.0 * z)
+        sigma_from_interval = sigma_t / math.sqrt(float(max(t_years, 1e-9)))
+        if np.isfinite(sigma_from_interval) and sigma_from_interval > 0:
+            return float(min(max(max(sigma_ann, sigma_from_interval), 0.05), 1.50))
+    except Exception:
+        return sigma_ann
+    return sigma_ann
+
+
+def _suggest_strikes(*, s0: float, sigma_ann: float, t_years: float, risk: str) -> tuple[float, float, float, float]:
+    """Return (cap_k1, cap_k2, floor_k1, floor_k2) based on risk + volatility."""
+    import math
+
+    s0 = float(max(s0, 1e-12))
+    sigma_ann = float(max(sigma_ann, 1e-9))
+    t_years = float(max(t_years, 1e-9))
+    sigma_t = sigma_ann * math.sqrt(t_years)
+
+    risk = str(risk).lower()
+    if "conserv" in risk:
+        a1, a2 = 0.25, 0.75
+    elif "aggress" in risk:
+        a1, a2 = 0.60, 1.25
+    else:  # balanced
+        a1, a2 = 0.40, 1.00
+
+    cap_k1 = s0 * math.exp(a1 * sigma_t)
+    cap_k2 = s0 * math.exp(a2 * sigma_t)
+    floor_k1 = s0 * math.exp(-a1 * sigma_t)
+    floor_k2 = s0 * math.exp(-a2 * sigma_t)
+
+    # Avoid strikes too close when sigma is tiny
+    cap_k1 = max(cap_k1, s0 * 1.02)
+    cap_k2 = max(cap_k2, cap_k1 * 1.05)
+    floor_k1 = min(floor_k1, s0 * 0.98)
+    floor_k2 = min(floor_k2, floor_k1 * 0.95)
+    return float(cap_k1), float(cap_k2), float(floor_k1), float(floor_k2)
+
+
+def _recommend_hedge_strategy(
+    *,
+    exposure: str,
+    s0: float,
+    s_mean: float,
+    sigma_ann: float,
+    t_years: float,
+    risk_profile: str,
+    budget_priority: str,
+    allow_selling: bool,
+    qty: float,
+    unit: str,
+) -> dict:
+    """Return a strategy dict with legs + metrics.
+
+    exposure: Procurement / Sales / Inventory
+    budget_priority: Low / Medium / High
+    """
+    exposure = str(exposure)
+    budget_priority = str(budget_priority).lower()
+    risk_profile = str(risk_profile)
+
+    cap_k1, cap_k2, floor_k1, floor_k2 = _suggest_strikes(s0=s0, sigma_ann=sigma_ann, t_years=t_years, risk=risk_profile)
+
+    exp_ret = ((float(s_mean) - float(s0)) / float(s0) * 100.0) if s0 else 0.0
+    p_up_5 = _lognormal_prob_gt(s0=s0, s_mean=s_mean, sigma_ann=sigma_ann, t_years=t_years, k=s0 * 1.05)
+    p_dn_5 = 1.0 - _lognormal_prob_gt(s0=s0, s_mean=s_mean, sigma_ann=sigma_ann, t_years=t_years, k=s0 * 0.95)
+
+    legs: list[dict] = []
+    title = "HOLD / WAIT"
+    rationale_bits: list[str] = []
+
+    # Decide hedge intensity
+    need_up_protection = (exp_ret >= 2.0) or (p_up_5 >= 0.55)
+    need_down_protection = (exp_ret <= -2.0) or (p_dn_5 >= 0.55)
+    high_vol = sigma_ann >= 0.30
+
+    # Procurement: protect against price rising (cap)
+    if exposure.startswith("Procurement"):
+        if need_up_protection or high_vol:
+            if "high" in budget_priority:
+                title = "CALL SPREAD (CAP COST, LOWER PREMIUM)"
+                legs = [
+                    {"side": "BUY", "type": "CALL", "strike": cap_k1, "note": "Caps your purchase price"},
+                    {"side": "SELL", "type": "CALL", "strike": cap_k2, "note": "Funds premium; caps benefit above K2"},
+                ]
+                if not allow_selling:
+                    # Selling requires explicit permission
+                    title = "BUY CALL (CAP COST)"
+                    legs = [{"side": "BUY", "type": "CALL", "strike": cap_k1, "note": "Caps your purchase price"}]
+                    rationale_bits.append("Selling legs disabled → using a simple call instead of a spread.")
+            else:
+                title = "BUY CALL (CAP COST)"
+                legs = [{"side": "BUY", "type": "CALL", "strike": cap_k1, "note": "Caps your purchase price"}]
+
+            # Optional zero-cost collar style for importers (buy call, sell put)
+            if allow_selling and ("high" in budget_priority) and ("conserv" in risk_profile.lower() or high_vol):
+                title = "RANGE FORWARD (BUY CALL + SELL PUT)"
+                legs = [
+                    {"side": "BUY", "type": "CALL", "strike": cap_k1, "note": "Cap"},
+                    {"side": "SELL", "type": "PUT", "strike": floor_k1, "note": "Reduces premium; commits you to buy if price falls"},
+                ]
+                rationale_bits.append("This is often structured near zero-cost, but adds obligation risk.")
+
+            rationale_bits.append("Goal: protect budget if prices rise.")
+        else:
+            title = "HOLD / WAIT"
+            rationale_bits.append("Forecast not strongly up; keep flexibility and re-check monthly.")
+
+    # Sales: protect against price falling (floor)
+    elif exposure.startswith("Sales"):
+        if need_down_protection or high_vol:
+            if "high" in budget_priority:
+                title = "PUT SPREAD (FLOOR, LOWER PREMIUM)"
+                legs = [
+                    {"side": "BUY", "type": "PUT", "strike": floor_k1, "note": "Protects your selling price"},
+                    {"side": "SELL", "type": "PUT", "strike": floor_k2, "note": "Funds premium; limits protection below K2"},
+                ]
+                if not allow_selling:
+                    title = "BUY PUT (PROTECT FLOOR)"
+                    legs = [{"side": "BUY", "type": "PUT", "strike": floor_k1, "note": "Protects your selling price"}]
+                    rationale_bits.append("Selling legs disabled → using a simple put instead of a spread.")
+            else:
+                title = "BUY PUT (PROTECT FLOOR)"
+                legs = [{"side": "BUY", "type": "PUT", "strike": floor_k1, "note": "Protects your selling price"}]
+
+            if allow_selling and ("high" in budget_priority):
+                # Classic collar for sellers: buy put financed by selling call
+                title = "COLLAR (BUY PUT + SELL CALL)"
+                legs = [
+                    {"side": "BUY", "type": "PUT", "strike": floor_k1, "note": "Floor"},
+                    {"side": "SELL", "type": "CALL", "strike": cap_k1, "note": "Funds premium; caps upside"},
+                ]
+                rationale_bits.append("Collar reduces premium but caps upside.")
+
+            rationale_bits.append("Goal: protect margin if prices fall.")
+        else:
+            title = "HOLD / WAIT"
+            if allow_selling and exp_ret > 2.0 and ("aggress" in risk_profile.lower()):
+                title = "COVERED CALL (MONETIZE UPSIDE)"
+                legs = [{"side": "SELL", "type": "CALL", "strike": cap_k1, "note": "Collect premium; caps upside"}]
+                rationale_bits.append("Only appropriate if you are naturally short/covered (sales exposure).")
+            else:
+                rationale_bits.append("No strong downside risk signal; avoid paying premium.")
+
+    # Inventory: protect downside but keep some upside
+    else:
+        if high_vol or need_down_protection:
+            if allow_selling and ("high" in budget_priority):
+                title = "COLLAR (PROTECT + LOWER PREMIUM)"
+                legs = [
+                    {"side": "BUY", "type": "PUT", "strike": floor_k1, "note": "Downside protection"},
+                    {"side": "SELL", "type": "CALL", "strike": cap_k1, "note": "Funds premium; caps upside"},
+                ]
+            else:
+                title = "PROTECTIVE PUT"
+                legs = [{"side": "BUY", "type": "PUT", "strike": floor_k1, "note": "Downside protection"}]
+            rationale_bits.append("Goal: protect inventory value during high volatility.")
+        else:
+            title = "HOLD / WAIT"
+            rationale_bits.append("Volatility is manageable; re-check if moves accelerate.")
+
+    # Premium estimates
+    est_premium_per_unit = 0.0
+    for leg in legs:
+        px = _bs_price(s=s0, k=float(leg["strike"]), t=t_years, sigma=sigma_ann, opt_type=str(leg["type"]))
+        est = float(px)
+        leg["est_premium"] = est
+        if str(leg["side"]).upper() == "BUY":
+            est_premium_per_unit += est
+        else:
+            est_premium_per_unit -= est
+
+        leg["prob_itm"] = (
+            _lognormal_prob_gt(s0=s0, s_mean=s_mean, sigma_ann=sigma_ann, t_years=t_years, k=float(leg["strike"]))
+            if str(leg["type"]).upper() == "CALL"
+            else 1.0
+            - _lognormal_prob_gt(s0=s0, s_mean=s_mean, sigma_ann=sigma_ann, t_years=t_years, k=float(leg["strike"]))
+        )
+
+    metrics = {
+        "exp_ret_pct": float(exp_ret),
+        "p_up_5": float(p_up_5),
+        "p_dn_5": float(p_dn_5),
+        "est_premium_per_unit": float(est_premium_per_unit),
+        "est_premium_total": float(est_premium_per_unit * float(max(qty, 0.0))),
+        "unit": unit,
+    }
+
+    rationale = " ".join([b for b in rationale_bits if b])
+    return {"title": title, "legs": legs, "rationale": rationale, "metrics": metrics}
+
+
 def _mc_expected_payoffs_lognormal(
     *,
     s0: float,
@@ -1186,7 +1469,7 @@ def render_call_put_hedge_advisor(
     key_prefix: str = "cp_advisor",
     commodity_payloads: list[dict] | None = None,
 ) -> None:
-    """Simple but advanced advisor: suggests Call vs Put based on exposure + forecast + uncertainty."""
+    """Strategy advisor: recommends hedges (buy/sell call/put structures) using history + forecast."""
     with st.expander(expander_title, expanded=expanded):
         st.markdown(
             """
@@ -1194,9 +1477,9 @@ def render_call_put_hedge_advisor(
     <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
         <div>
             <div class="cp-title">Hedge Advisor</div>
-            <div class="cp-subtitle">One-line signal based on forecast direction and volatility.</div>
+            <div class="cp-subtitle">Strategy suggestions using history (volatility + momentum) and forecast distribution.</div>
         </div>
-        <div class="cp-pill cp-pill-hold">Signal: HOLD</div>
+        <div class="cp-pill cp-pill-hold">Mode: Strategist</div>
     </div>
 </div>
             """,
@@ -1211,6 +1494,40 @@ def render_call_put_hedge_advisor(
             key=f"{key_prefix}_exposure",
             label_visibility="collapsed",
         )
+
+        copt1, copt2, copt3, copt4 = st.columns([1.2, 1.0, 1.0, 1.0])
+        with copt1:
+            risk_profile = st.selectbox(
+                "Risk profile",
+                ["Conservative", "Balanced", "Aggressive"],
+                index=1,
+                key=f"{key_prefix}_risk",
+                help="Conservative = tighter protection; Aggressive = wider bands / more premium sensitivity.",
+            )
+        with copt2:
+            budget_priority = st.selectbox(
+                "Premium budget",
+                ["Low", "Medium", "High"],
+                index=1,
+                key=f"{key_prefix}_budget",
+                help="High means you prefer lower/zero-cost structures (often includes selling a leg).",
+            )
+        with copt3:
+            allow_selling = st.checkbox(
+                "Allow selling legs",
+                value=False,
+                key=f"{key_prefix}_sell",
+                help="Enable strategies like spreads/collars that SELL an option leg (adds obligation risk).",
+            )
+        with copt4:
+            qty = st.number_input(
+                "Qty (units)",
+                min_value=0.0,
+                value=1.0,
+                step=1.0,
+                key=f"{key_prefix}_qty",
+                help="Used for premium totals (still guidance only).",
+            )
 
         if not commodity_payloads:
             st.info("Advisor needs commodity data (run from Executive Summary).")
@@ -1249,6 +1566,7 @@ def render_call_put_hedge_advisor(
 
         scale = float(payload.get("display_scale", 1.0) or 1.0)
         unit = str(payload.get("display_currency") or payload.get("info", {}).get("currency", ""))
+        dec = 3 if "/lb" in unit.lower() else 2
 
         s0_raw = float(payload.get("current_price") or 0.0)
         s_mean_raw = s0_raw
@@ -1276,9 +1594,30 @@ def render_call_put_hedge_advisor(
             elif "value" in hist_df.columns:
                 sigma_ann = _annualized_volatility_from_history(hist_df["value"])
 
-        # Simple, market-style inputs
+        # Blend sigma with forecast interval if present (uses future distribution info)
+        f_lower = None
+        f_upper = None
+        if payload.get("predictions") and horizon in payload["predictions"]:
+            try:
+                f_lower = float(payload["predictions"][horizon].get("lower")) * float(scale)
+                f_upper = float(payload["predictions"][horizon].get("upper")) * float(scale)
+            except Exception:
+                f_lower, f_upper = None, None
+        sigma_ann = _blend_sigma_from_forecast_interval(sigma_ann=sigma_ann, lower=f_lower, upper=f_upper, t_years=t_years)
+
+        # Add momentum (uses past data)
+        mom3 = 0.0
+        mom6 = 0.0
+        if isinstance(hist_df, pd.DataFrame):
+            vcol = payload.get("info", {}).get("value_col") or payload.get("value_col") or "value"
+            if vcol in hist_df.columns:
+                mom3 = _momentum_pct(hist_df=hist_df, value_col=vcol, months=3)
+                mom6 = _momentum_pct(hist_df=hist_df, value_col=vcol, months=6)
+
+        # Market-style signals
         exp_ret = ((s_mean - s0) / s0 * 100.0) if s0 else 0.0
-        view = "UP" if exp_ret >= 2.0 else ("DOWN" if exp_ret <= -2.0 else "FLAT")
+        score = float(exp_ret) + 0.35 * float(mom3) + 0.15 * float(mom6)
+        view = "UP" if score >= 2.0 else ("DOWN" if score <= -2.0 else "FLAT")
         vol_band = "HIGH" if sigma_ann >= 0.30 else ("MED" if sigma_ann >= 0.20 else "LOW")
 
         delta_color = "#166534" if exp_ret > 0 else ("#991b1b" if exp_ret < 0 else "#334155")
@@ -1289,7 +1628,7 @@ def render_call_put_hedge_advisor(
                 f"""
 <div class="cp-kv">
   <div class="cp-kv-label">Spot</div>
-  <div class="cp-kv-value">{s0:,.2f}</div>
+    <div class="cp-kv-value">{s0:,.{dec}f}</div>
   <div class="cp-kv-sub">{unit}</div>
 </div>
                 """,
@@ -1300,7 +1639,7 @@ def render_call_put_hedge_advisor(
                 f"""
 <div class="cp-kv">
   <div class="cp-kv-label">Forecast ({horizon})</div>
-  <div class="cp-kv-value">{s_mean:,.2f}</div>
+    <div class="cp-kv-value">{s_mean:,.{dec}f}</div>
   <div class="cp-kv-sub" style="color:{delta_color};">{delta_prefix}{exp_ret:.1f}%</div>
 </div>
                 """,
@@ -1318,53 +1657,92 @@ def render_call_put_hedge_advisor(
                 unsafe_allow_html=True,
             )
 
-        # Direct signal (simple heuristics)
-        signal = "HOLD"
-        if exposure.startswith("Procurement"):
-            if view == "UP" or vol_band == "HIGH":
-                signal = "BUY CALL"
-        elif exposure.startswith("Sales"):
-            if view == "DOWN" or vol_band == "HIGH":
-                signal = "BUY PUT"
-        else:  # Inventory
-            if view == "DOWN" or vol_band == "HIGH":
-                signal = "BUY PUT"
+        strat = _recommend_hedge_strategy(
+            exposure=exposure,
+            s0=s0,
+            s_mean=s_mean,
+            sigma_ann=sigma_ann,
+            t_years=t_years,
+            risk_profile=risk_profile,
+            budget_priority=budget_priority,
+            allow_selling=allow_selling,
+            qty=float(qty),
+            unit=unit,
+        )
 
         pill_class = "cp-pill-hold"
-        if signal == "BUY CALL":
+        if "CALL" in str(strat.get("title", "")):
             pill_class = "cp-pill-call"
-        elif signal == "BUY PUT":
+        if "PUT" in str(strat.get("title", "")):
             pill_class = "cp-pill-put"
 
-        reason = f"View: {view} ({exp_ret:+.1f}%) · Vol: {vol_band} ({sigma_ann*100:.0f}%)"
+        reason = (
+            f"View: {view} (score {score:+.1f}%) · Forecast {exp_ret:+.1f}% · Mom3 {mom3:+.1f}% · Vol {sigma_ann*100:.0f}%"
+        )
         st.markdown(
             f"""
 <div class="cp-card" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
   <div>
-    <div class="cp-title" style="margin-bottom: 0.2rem;">Signal</div>
+    <div class="cp-title" style="margin-bottom: 0.2rem;">Strategy</div>
     <div class="cp-subtitle">{reason}</div>
   </div>
-  <div class="cp-pill {pill_class}">{signal}</div>
+  <div class="cp-pill {pill_class}">{strat.get('title','HOLD')}</div>
 </div>
             """,
             unsafe_allow_html=True,
         )
 
-        if signal == "BUY CALL":
+        # Legs + metrics
+        legs = strat.get("legs") or []
+        metrics = strat.get("metrics") or {}
+        if legs:
+            legs_df = pd.DataFrame(
+                [
+                    {
+                        "Action": l.get("side"),
+                        "Type": l.get("type"),
+                        "Strike": f"{float(l.get('strike')):,.{dec}f}",
+                        "Prob ITM": f"{float(l.get('prob_itm', 0.0))*100:.0f}%",
+                        "Est Premium": f"{float(l.get('est_premium', 0.0)):.{dec}f}",
+                        "Note": l.get("note"),
+                    }
+                    for l in legs
+                ]
+            )
+
             st.markdown(
-                f"<div class='cp-note'>Market practice: ask your bank for a {months}M CALL, ~5% OTM strike (around {s0*1.05:,.2f} {unit}).</div>",
+                f"<div class='cp-note'><b>Recommended legs</b> (guidance): {int(months)}M horizon · unit: {unit}</div>",
                 unsafe_allow_html=True,
             )
-        elif signal == "BUY PUT":
-            st.markdown(
-                f"<div class='cp-note'>Market practice: ask your bank for a {months}M PUT, ~5% OTM strike (around {s0*0.95:,.2f} {unit}).</div>",
-                unsafe_allow_html=True,
+            st.dataframe(legs_df, use_container_width=True, height=200)
+
+            m1, m2, m3, m4 = st.columns(4)
+            with m1:
+                st.metric("Prob +5% move", f"{float(metrics.get('p_up_5', 0.0))*100:.0f}%")
+            with m2:
+                st.metric("Prob -5% move", f"{float(metrics.get('p_dn_5', 0.0))*100:.0f}%")
+            with m3:
+                st.metric(
+                    "Est net premium (per unit)",
+                    f"{float(metrics.get('est_premium_per_unit', 0.0)):.{dec}f}",
+                )
+            with m4:
+                st.metric(
+                    "Est net premium (total)",
+                    f"{float(metrics.get('est_premium_total', 0.0)):.{dec}f}",
+                )
+
+            st.caption(
+                "Premiums are rough model estimates (Black-Scholes, r=0). For bank quotes, ask for strikes, maturity, and a quote for each leg."
             )
         else:
             st.markdown(
-                "<div class='cp-note'>No hedge suggested right now. Re-check if forecast moves beyond ±2% or volatility becomes HIGH.</div>",
+                "<div class='cp-note'>No hedge recommended right now. Re-check if forecast or momentum shifts, or volatility rises.</div>",
                 unsafe_allow_html=True,
             )
+
+        if strat.get("rationale"):
+            st.caption(str(strat.get("rationale")))
 
 
 def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictions: dict, currency: str, key_prefix: str) -> None:
@@ -1496,7 +1874,21 @@ def load_predictions(asset: str):
             'upper': upper_bound,
             'confidence': confidence
         }
-    
+
+    # Convert ton-based series to per-kg when the market UOM is kg
+    ton_assets_to_kg = (
+        "polyester/polyester_usd_monthly",
+        "viscose/viscose_usd_monthly",
+        "polyester/polyester_pkr_monthly",
+        "viscose/viscose_pkr_monthly",
+    )
+    if any(k in str(asset) for k in ton_assets_to_kg):
+        for h in list(predictions.keys()):
+            p = predictions[h]
+            p['price'] = float(p['price']) / 1000.0
+            p['lower'] = float(p['lower']) / 1000.0
+            p['upper'] = float(p['upper']) / 1000.0
+
     return predictions
 
 
@@ -1616,7 +2008,8 @@ def create_price_chart(metadata, name):
         fig = go.Figure()
         # Format values for text labels
         values = df[metadata['value_col']].values
-        text_labels = [f"{val:,.2f}" for val in values]
+        dec = 3 if "/lb" in str(metadata.get("currency", "")).lower() else 2
+        text_labels = [f"{val:,.{dec}f}" for val in values]
         
         fig.add_trace(go.Scatter(
             x=df[metadata['time_col']],
@@ -1650,7 +2043,7 @@ def create_price_chart(metadata, name):
                 gridcolor='rgba(148, 163, 184, 0.2)',
                 showgrid=True,
                 title=f'{metadata["currency"]}',
-                tickformat=',.2f' if metadata['df'][metadata['value_col']].mean() < 100 else ',.0f',
+                tickformat=(f',.{dec}f' if metadata['df'][metadata['value_col']].mean() < 100 else ',.0f'),
                 tickfont=dict(size=11)
             ),
             hovermode='x unified'
@@ -1662,14 +2055,15 @@ def create_price_chart(metadata, name):
 
 def create_forecast_table(predictions, currency):
     """Create forecast data table for commodity (monthly horizons)."""
+    dec = 3 if "/lb" in str(currency).lower() else 2
     data = []
     horizons = get_prediction_horizons(predictions)
     for horizon in horizons:
         pred = predictions[horizon]
-        price_range = f"{pred['lower']:,.2f} - {pred['upper']:,.2f}"
+        price_range = f"{pred['lower']:,.{dec}f} - {pred['upper']:,.{dec}f}"
         data.append({
             'Period': horizon,
-            f'Price ({currency})': f"{pred['price']:,.2f}",
+            f'Price ({currency})': f"{pred['price']:,.{dec}f}",
             'Range': price_range,
             'Confidence': f"{pred['confidence']}%",
             'Change': f"{pred['change']:+.1f}%"
@@ -1679,6 +2073,7 @@ def create_forecast_table(predictions, currency):
 
 def create_forecast_bar_chart(predictions, currency):
     """Create bar chart visualization for price forecasts with confidence intervals."""
+    dec = 3 if "/lb" in str(currency).lower() else 2
     horizons = get_prediction_horizons(predictions)
     prices = [predictions[h]['price'] for h in horizons]
     changes = [predictions[h]['change'] for h in horizons]
@@ -1726,14 +2121,14 @@ def create_forecast_bar_chart(predictions, currency):
                 thickness=1,
                 width=0  # Remove the "I" caps for cleaner look
             ),
-            text=[f"<b>{p:,.2f}</b><br><span style='font-size:11px'>{c:+.1f}%</span>" for p, c in zip(prices, changes)],
+            text=[f"<b>{p:,.{dec}f}</b><br><span style='font-size:11px'>{c:+.1f}%</span>" for p, c in zip(prices, changes)],
             textposition='outside',
             textfont=dict(size=12, color='#1e293b', family='Arial, sans-serif'),
             hovertemplate='<b>%{x}</b><br>' +
-                         '<b>Price:</b> %{y:,.2f} ' + currency + '<br>' +
+                         f'<b>Price:</b> %{{y:,.{dec}f}} ' + currency + '<br>' +
                          '<b>Change:</b> %{customdata[0]:+.1f}%<br>' +
                          '<b>Confidence:</b> %{customdata[1]}%<br>' +
-                         '<b>Range:</b> %{customdata[2]:,.2f} - %{customdata[3]:,.2f}<br>' +
+                         f'<b>Range:</b> %{{customdata[2]:,.{dec}f}} - %{{customdata[3]:,.{dec}f}}<br>' +
                          '<extra></extra>',
             customdata=[[c, conf, l, u] for c, conf, l, u in zip(changes, confidences, lower_bounds, upper_bounds)]
         )
@@ -1753,7 +2148,7 @@ def create_forecast_bar_chart(predictions, currency):
         ),
         yaxis=dict(
             title=dict(text=f'<b>Price ({currency})</b>', font=dict(size=12, color='#475569')),
-            tickformat=',.2f',
+            tickformat=f',.{dec}f',
             tickfont=dict(size=10, color='#64748b')
         ),
         height=420,
@@ -1843,7 +2238,11 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
         # Current/Latest Price
         if metadata['df'] is not None:
             current_price = metadata['df'][metadata['value_col']].iloc[-1]
-            price_display = f"{current_price:,.0f}" if current_price > 100 else f"{current_price:.2f}"
+            is_cotton_lb = "/lb" in str(metadata.get("currency", "")).lower()
+            if is_cotton_lb:
+                price_display = f"{float(current_price):.3f}"
+            else:
+                price_display = f"{current_price:,.0f}" if current_price > 100 else f"{current_price:.2f}"
             latest_date = pd.to_datetime(metadata['df'][metadata['time_col']].iloc[-1])
             
             st.markdown(f"""
@@ -1860,8 +2259,12 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
             recent_df = metadata['df'].tail(6)
             price_min = recent_df[metadata['value_col']].min()
             price_max = recent_df[metadata['value_col']].max()
-            
-            range_display = f"{price_min:,.0f} — {price_max:,.0f}" if price_min > 100 else f"{price_min:.2f} — {price_max:.2f}"
+
+            is_cotton_lb = "/lb" in str(metadata.get("currency", "")).lower()
+            if is_cotton_lb:
+                range_display = f"{float(price_min):.3f} — {float(price_max):.3f}"
+            else:
+                range_display = f"{price_min:,.0f} — {price_max:,.0f}" if price_min > 100 else f"{price_min:.2f} — {price_max:.2f}"
             
             st.markdown(f"""
             <div class='metric-card'>
@@ -2024,8 +2427,12 @@ def render_overview_tab(commodities_data: dict, title: str):
                 recent_df = metadata['df'].tail(6)
                 price_min = recent_df[metadata['value_col']].min()
                 price_max = recent_df[metadata['value_col']].max()
-                
-                range_display = f"{price_min:,.0f}-{price_max:,.0f}" if price_min > 100 else f"{price_min:.2f}-{price_max:.2f}"
+
+                is_cotton_lb = "/lb" in str(metadata.get("currency", "")).lower()
+                if is_cotton_lb:
+                    range_display = f"{float(price_min):.3f}-{float(price_max):.3f}"
+                else:
+                    range_display = f"{price_min:,.0f}-{price_max:,.0f}" if price_min > 100 else f"{price_min:.2f}-{price_max:.2f}"
                 change_class = 'trend-positive' if metadata['price_change'] >= 0 else 'trend-negative'
                 arrow = '↑' if metadata['price_change'] >= 0 else '↓'
                 
@@ -2496,6 +2903,7 @@ def render_executive_summary():
 
         scale = float(payload.get("display_scale", 1.0) or 1.0)
         display_currency = payload.get("display_currency") or payload["info"]["currency"]
+        dec = 3 if "/lb" in str(display_currency).lower() else 1
 
         horizons = get_prediction_horizons(payload.get("predictions", {}))
         prices = []
@@ -2521,7 +2929,7 @@ def render_executive_summary():
             y=chart_data['Price'],
             marker_color=chart_colors,
             text=chart_data['Price'],
-            texttemplate='%{text:,.1f}',
+            texttemplate=f'%{{text:,.{dec}f}}',
             textposition='outside',
             textfont=dict(size=9, family='IBM Plex Mono', weight=700, color='#1e293b'),
             showlegend=False
@@ -2572,6 +2980,8 @@ def render_executive_summary():
         """, unsafe_allow_html=True)
 
         scale = float(payload.get("display_scale", 1.0) or 1.0)
+        display_currency = payload.get("display_currency") or payload["info"]["currency"]
+        dec = 3 if "/lb" in str(display_currency).lower() else 2
 
         table_rows = []
         if payload.get("predictions"):
@@ -2580,14 +2990,14 @@ def render_executive_summary():
                 if pred:
                     table_rows.append({
                         "Period": h,
-                        "Value": f"{(float(pred.get('price', 0)) * scale):,.2f}",
+                        "Value": f"{(float(pred.get('price', 0)) * scale):,.{dec}f}",
                         "Change": f"{pred.get('change', 0):+.1f}%"
                     })
         else:
             for h in get_prediction_horizons({}):
                 table_rows.append({
                     "Period": h,
-                    "Value": f"{(float(payload['current_price']) * scale):,.2f}",
+                    "Value": f"{(float(payload['current_price']) * scale):,.{dec}f}",
                     "Change": f"{'↑' if payload['price_change'] > 0 else '↓'} {abs(payload['price_change']):.1f}%"
                 })
 
@@ -2641,8 +3051,8 @@ def render_executive_summary():
             cur = str(local_payload["info"].get("currency", ""))
 
             # Keep UOM consistent and market-practice.
-            # - Default: if Local is per-kg, convert to per-ton (x1000).
             # - Cotton: Local is PKR/maund, convert to USD/lb (1 maund = 40kg = 88.1849 lb).
+            # - If any legacy local series still uses /ton while the CEO wants /kg, convert /ton -> /kg (÷1000).
             uom_scale = 1.0
             cur_uom = cur
             cur_lower = cur.lower()
@@ -2652,9 +3062,9 @@ def render_executive_summary():
                 maund_lb = 40.0 * 2.20462262185
                 uom_scale = 1.0 / maund_lb
                 cur_uom = cur_uom.replace("/maund", "/lb").replace("/MAUND", "/lb").replace("/Maund", "/lb")
-            elif "/kg" in cur_lower or " per kg" in cur_lower:
-                uom_scale = 1000.0
-                cur_uom = cur_uom.replace("/kg", "/ton").replace("/KG", "/ton").replace("/Kg", "/ton")
+            elif ("polyester" in str(local_payload.get("name", "")).lower() or "viscose" in str(local_payload.get("name", "")).lower()) and "/ton" in cur_lower:
+                uom_scale = 1.0 / 1000.0
+                cur_uom = cur_uom.replace("/ton", "/kg").replace("/TON", "/kg").replace("/Ton", "/kg")
 
             # Preserve unit after '/', only replace the currency prefix.
             cur_usd = cur_uom.replace("PKR", "USD", 1) if "PKR" in cur_uom else f"USD ({cur_uom})"
@@ -2873,12 +3283,15 @@ def get_critical_alerts(events: dict) -> list:
         for item in news_items:
             text = (item.get("title", "") + " " + item.get("description", "")).lower()
             if any(keyword in text for keyword in high_impact):
-                alerts.append({
-                    "commodity": commodity,
-                    "title": item.get("title"),
-                    "category": item.get("category", "general"),
-                    "timestamp": item.get("timestamp")
-                })
+                alerts.append(
+                    {
+                        "commodity": commodity,
+                        "title": item.get("title"),
+                        "category": item.get("category", "general"),
+                        "timestamp": item.get("timestamp"),
+                    }
+                )
+
     return alerts
 
 
