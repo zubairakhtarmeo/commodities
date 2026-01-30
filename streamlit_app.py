@@ -1085,7 +1085,7 @@ def render_call_put_hedge_advisor(
 ) -> None:
     """Simple but advanced advisor: suggests Call vs Put based on exposure + forecast + uncertainty."""
     with st.expander(expander_title, expanded=expanded):
-        st.caption("Smart suggestion: Call vs Put using forecast direction + historical volatility + strike/premium.")
+        st.caption("Direct signal (like BTC model): BUY CALL / BUY PUT / HOLD")
 
         exposure = st.radio(
             "Exposure",
@@ -1166,94 +1166,35 @@ def render_call_put_hedge_advisor(
         with m3:
             st.metric("Vol (ann)", f"{sigma_ann*100:.0f}%")
 
-        style_options = ["Conservative (ATM)", "Balanced (5% OTM)", "Aggressive (10% OTM)"]
-        style = st.selectbox("Hedge style", style_options, index=1, key=f"{key_prefix}_style")
-        hedge_pct = st.slider("Hedge coverage (%)", min_value=0, max_value=100, value=50, step=5, key=f"{key_prefix}_coverage")
-
-        prefer_low_cost = False
-        if exposure.startswith("Sales") or exposure.startswith("Inventory"):
-            prefer_low_cost = st.checkbox(
-                "Prefer lower upfront cost (use a Collar: buy put + sell call)",
-                value=True,
-                key=f"{key_prefix}_collar",
-            )
-
-        # Strike conventions: Calls are usually OTM above spot; Puts are usually OTM below spot.
-        if style.startswith("Conservative"):
-            call_pct = 100.0
-            put_pct = 100.0
-        elif style.startswith("Balanced"):
-            call_pct = 105.0
-            put_pct = 95.0
-        else:
-            call_pct = 110.0
-            put_pct = 90.0
-
-        # Recommendation (simple heuristics)
-        primary = "MONITOR"
+        # Direct signal (simple heuristics)
+        signal = "HOLD"
         if exposure.startswith("Procurement"):
             if view == "UP" or vol_band == "HIGH":
-                primary = "CALL"
+                signal = "BUY CALL"
         elif exposure.startswith("Sales"):
             if view == "DOWN" or vol_band == "HIGH":
-                primary = "COLLAR" if prefer_low_cost else "PUT"
+                signal = "BUY PUT"
         else:  # Inventory
             if view == "DOWN" or vol_band == "HIGH":
-                primary = "COLLAR" if prefer_low_cost else "PUT"
-            else:
-                primary = "MONITOR"
+                signal = "BUY PUT"
 
-        rec_color = "#16a34a" if primary == "CALL" else ("#dc2626" if primary in ("PUT", "COLLAR") else "#334155")
-        rec_text = (
-            "Buy CALL (cap your buy price)" if primary == "CALL" else
-            ("Buy PUT (protect your sell price)" if primary == "PUT" else
-             ("Use COLLAR (buy put + sell call)" if primary == "COLLAR" else "Monitor / No hedge"))
-        )
+        rec_color = "#16a34a" if signal == "BUY CALL" else ("#dc2626" if signal == "BUY PUT" else "#334155")
 
         st.markdown(
             f"<div style='border-left: 4px solid {rec_color}; padding-left: 1rem; margin: 0.75rem 0;'>"
-            f"<div style='font-weight: 900; font-size: 1.05rem; color: {rec_color};'>Recommendation: {rec_text}</div>"
+            f"<div style='font-weight: 900; font-size: 1.15rem; color: {rec_color};'>Signal: {signal}</div>"
             f"<div style='color:#475569; font-weight:600; font-size:0.85rem;'>"
-            f"View: {view} ({exp_ret:+.1f}%) · Vol: {vol_band} ({sigma_ann*100:.0f}%) · Coverage: {hedge_pct}%"
+            f"View: {view} ({exp_ret:+.1f}%) · Vol: {vol_band} ({sigma_ann*100:.0f}%)"
             f"</div></div>",
             unsafe_allow_html=True,
         )
 
-        # Suggested strikes / structure
-        rows: list[dict] = []
-        if primary == "CALL":
-            k_call = s0 * (call_pct / 100.0)
-            rows = [
-                {"Item": "Tenor", "Suggestion": f"{months} months"},
-                {"Item": "Coverage", "Suggestion": f"{hedge_pct}% of expected volume"},
-                {"Item": "Call strike", "Suggestion": f"{k_call:,.2f} {unit} ({call_pct:.0f}% of spot)".strip()},
-                {"Item": "Pricing", "Suggestion": "Get premium quote from bank/broker (varies by vol & tenor)"},
-            ]
-        elif primary == "PUT":
-            k_put = s0 * (put_pct / 100.0)
-            rows = [
-                {"Item": "Tenor", "Suggestion": f"{months} months"},
-                {"Item": "Coverage", "Suggestion": f"{hedge_pct}% of expected volume"},
-                {"Item": "Put strike", "Suggestion": f"{k_put:,.2f} {unit} ({put_pct:.0f}% of spot)".strip()},
-                {"Item": "Pricing", "Suggestion": "Get premium quote from bank/broker (varies by vol & tenor)"},
-            ]
-        elif primary == "COLLAR":
-            k_put = s0 * (put_pct / 100.0)
-            k_call = s0 * (call_pct / 100.0)
-            rows = [
-                {"Item": "Tenor", "Suggestion": f"{months} months"},
-                {"Item": "Coverage", "Suggestion": f"{hedge_pct}% of expected volume"},
-                {"Item": "Buy put strike", "Suggestion": f"{k_put:,.2f} {unit} ({put_pct:.0f}% of spot)".strip()},
-                {"Item": "Sell call strike", "Suggestion": f"{k_call:,.2f} {unit} ({call_pct:.0f}% of spot)".strip()},
-                {"Item": "Note", "Suggestion": "Collar reduces premium but caps upside (market standard)"},
-            ]
+        if signal == "BUY CALL":
+            st.caption(f"Market practice: ask your bank for a {months}M call, ~5% OTM strike (around {s0*1.05:,.2f} {unit}).")
+        elif signal == "BUY PUT":
+            st.caption(f"Market practice: ask your bank for a {months}M put, ~5% OTM strike (around {s0*0.95:,.2f} {unit}).")
         else:
-            rows = [
-                {"Item": "Action", "Suggestion": "No hedge suggested right now"},
-                {"Item": "When to hedge", "Suggestion": "If view turns UP (procurement) or DOWN (sales) or vol becomes HIGH"},
-            ]
-
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=220)
+            st.caption("No hedge suggested right now. Re-check if forecast moves beyond ±2% or volatility spikes.")
 
 
 def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictions: dict, currency: str, key_prefix: str) -> None:
