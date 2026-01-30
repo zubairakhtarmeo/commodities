@@ -1086,6 +1086,7 @@ def render_call_put_hedge_advisor(
     """Simple but advanced advisor: suggests Call vs Put based on exposure + forecast + uncertainty."""
     with st.expander(expander_title, expanded=expanded):
         st.caption("Smart suggestion: Call vs Put using forecast direction + historical volatility + strike/premium.")
+        st.caption("contributions: Miss SAFA ASIF & her dear HR bestie")
 
         exposure = st.radio(
             "Exposure",
