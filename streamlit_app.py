@@ -2903,7 +2903,11 @@ def render_executive_summary():
 
         scale = float(payload.get("display_scale", 1.0) or 1.0)
         display_currency = payload.get("display_currency") or payload["info"]["currency"]
-        dec = 3 if "/lb" in str(display_currency).lower() else 1
+        # Summary-only formatting rules:
+        # - Cotton: 3 decimals
+        # - Others: keep existing behavior
+        is_cotton = "cotton" in str(payload.get("name", "")).lower()
+        dec = 3 if is_cotton else (3 if "/lb" in str(display_currency).lower() else 1)
 
         horizons = get_prediction_horizons(payload.get("predictions", {}))
         prices = []
@@ -2981,7 +2985,11 @@ def render_executive_summary():
 
         scale = float(payload.get("display_scale", 1.0) or 1.0)
         display_currency = payload.get("display_currency") or payload["info"]["currency"]
-        dec = 3 if "/lb" in str(display_currency).lower() else 2
+        # Summary-only formatting rules:
+        # - Cotton: 3 decimals
+        # - Others: keep existing behavior
+        is_cotton = "cotton" in str(payload.get("name", "")).lower()
+        dec = 3 if is_cotton else (3 if "/lb" in str(display_currency).lower() else 2)
 
         table_rows = []
         if payload.get("predictions"):
@@ -3045,6 +3053,40 @@ def render_executive_summary():
         int_payload = build_commodity_payload(int_name, INTERNATIONAL_COMMODITIES)
         local_payload = build_commodity_payload(local_name, LOCAL_COMMODITIES) if local_name else None
 
+        # Summary-only unit override: Polyester & Viscose should display as USD/kg (not USD/lb).
+        # We do this via display_currency/display_scale so other pages are unaffected.
+        def _summary_force_usd_per_kg(p: dict | None) -> None:
+            if not p:
+                return
+            nm = str(p.get("name", "")).lower()
+            if not ("polyester" in nm or "viscose" in nm):
+                return
+
+            cur = str(p.get("display_currency") or p.get("info", {}).get("currency", ""))
+            cur_lower = cur.lower()
+            scale0 = float(p.get("display_scale", 1.0) or 1.0)
+            uom_scale = 1.0
+
+            # If current unit is /lb, convert to /kg
+            if "/lb" in cur_lower:
+                uom_scale *= 2.20462262185  # USD/lb -> USD/kg
+                cur = cur.replace("/lb", "/kg").replace("/LB", "/kg").replace("/Lb", "/kg")
+
+            # If current unit is /ton, convert to /kg
+            if "/ton" in cur_lower:
+                uom_scale *= 1.0 / 1000.0
+                cur = cur.replace("/ton", "/kg").replace("/TON", "/kg").replace("/Ton", "/kg")
+
+            # Ensure USD prefix (for Summary consistency)
+            if "USD" not in cur:
+                cur = cur.replace("PKR", "USD", 1) if "PKR" in cur else f"USD ({cur})"
+
+            p["display_scale"] = scale0 * uom_scale
+            p["display_currency"] = cur
+
+        _summary_force_usd_per_kg(int_payload)
+        _summary_force_usd_per_kg(local_payload)
+
         # Convert Local column display to USD (USDT-equivalent) for Summary page
         if show_local_in_usd and local_payload and usd_pkr_rate and usd_pkr_rate > 0:
             base_scale = 1.0 / float(usd_pkr_rate)
@@ -3071,6 +3113,9 @@ def render_executive_summary():
 
             local_payload["display_scale"] = base_scale * uom_scale
             local_payload["display_currency"] = cur_usd
+
+            # Apply Summary-only Polyester/Viscose USD/kg override after FX conversion too
+            _summary_force_usd_per_kg(local_payload)
 
         if int_payload:
             all_summary.append({
