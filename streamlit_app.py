@@ -1086,7 +1086,6 @@ def render_call_put_hedge_advisor(
     """Simple but advanced advisor: suggests Call vs Put based on exposure + forecast + uncertainty."""
     with st.expander(expander_title, expanded=expanded):
         st.caption("Smart suggestion: Call vs Put using forecast direction + historical volatility + strike/premium.")
-        st.caption("contributions: Miss SAFA ASIF & her dear HR bestie")
 
         exposure = st.radio(
             "Exposure",
@@ -2699,6 +2698,15 @@ def render_executive_summary():
         💾 Use individual commodity tabs for detailed analysis • Last updated: {datetime.now().strftime("%B %d, %Y %H:%M")}
     </p>
     """, unsafe_allow_html=True)
+
+    st.markdown(
+        """
+    <p style='font-size: 0.80rem; color: #64748b; font-weight: 600; text-align: center; margin: -0.5rem 0 1rem 0;'>
+        contributions: Miss SAFA ASIF & her dear HR bestie
+    </p>
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 def get_critical_alerts(events: dict) -> list:
