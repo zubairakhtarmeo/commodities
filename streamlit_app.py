@@ -1139,7 +1139,12 @@ def render_call_put_hedge_advisor(
         months = int(horizon.replace("M", "")) if horizon.endswith("M") else 6
         t_years = months / 12.0
 
-        hist_df = payload.get("history_df") or payload.get("info", {}).get("df") or payload.get("df")
+        # Avoid DataFrame truthiness checks (pandas raises: ambiguous truth value)
+        hist_df = payload.get("history_df")
+        if hist_df is None:
+            hist_df = payload.get("info", {}).get("df")
+        if hist_df is None:
+            hist_df = payload.get("df")
         sigma_ann = 0.25
         if isinstance(hist_df, pd.DataFrame):
             vcol = payload.get("info", {}).get("value_col") or payload.get("value_col")
