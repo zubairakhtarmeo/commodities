@@ -2637,10 +2637,22 @@ def render_executive_summary():
 
         # Convert Local column display to USD (USDT-equivalent) for Summary page
         if show_local_in_usd and local_payload and usd_pkr_rate and usd_pkr_rate > 0:
-            local_payload["display_scale"] = 1.0 / float(usd_pkr_rate)
+            base_scale = 1.0 / float(usd_pkr_rate)
             cur = str(local_payload["info"].get("currency", ""))
+
+            # Keep UOM consistent with International (USD/ton). If Local is per-kg, convert to per-ton.
+            uom_scale = 1.0
+            cur_uom = cur
+            cur_lower = cur.lower()
+            if "/kg" in cur_lower or " per kg" in cur_lower:
+                uom_scale = 1000.0
+                cur_uom = cur_uom.replace("/kg", "/ton").replace("/KG", "/ton").replace("/Kg", "/ton")
+
             # Preserve unit after '/', only replace the currency prefix.
-            local_payload["display_currency"] = cur.replace("PKR", "USD", 1) if "PKR" in cur else f"USD ({cur})"
+            cur_usd = cur_uom.replace("PKR", "USD", 1) if "PKR" in cur_uom else f"USD ({cur_uom})"
+
+            local_payload["display_scale"] = base_scale * uom_scale
+            local_payload["display_currency"] = cur_usd
 
         if int_payload:
             all_summary.append({
