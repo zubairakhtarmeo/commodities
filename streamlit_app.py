@@ -1767,21 +1767,144 @@ def render_call_put_hedge_advisor(
         recs = sorted(recs, key=lambda r: (when_rank.get(str(r.get("when")), 9), -float(r.get("score", 0.0))))
 
         if variant == "portfolio":
-            st.markdown("#### Portfolio View")
-            st.caption("Auto-ranked recommendations across all commodities (top 8).")
-            table_rows = []
+            st.markdown(
+                """
+<div class="cp-card" style="padding: 1.0rem 1.0rem;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+    <div>
+      <div class="cp-title">Options Hedge — Portfolio Dashboard</div>
+      <div class="cp-subtitle">Ranked hedges across commodities. Includes both <b>CALL</b> (cap cost) and <b>PUT</b> (protect floor) suggestions.</div>
+    </div>
+    <div class="cp-pill cp-pill-hold">Auto</div>
+  </div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            def _legs_one_liner(legs: list[dict], dec: int) -> str:
+                if not legs:
+                    return "—"
+                parts: list[str] = []
+                for l in legs[:3]:
+                    try:
+                        side = str(l.get("side", "")).upper()
+                        typ = str(l.get("type", "")).upper()
+                        k = float(l.get("strike"))
+                        prem = float(l.get("est_premium", 0.0))
+                        parts.append(f"{side} {typ} @ {k:,.{dec}f} (≈{prem:.{dec}f})")
+                    except Exception:
+                        continue
+                return " · ".join(parts) if parts else "—"
+
+            def _timing_style(val: str) -> str:
+                v = str(val)
+                if "DO NOW" in v:
+                    return "background-color: #7f1d1d; color: #ffffff; font-weight: 800;"
+                if "PLAN" in v:
+                    return "background-color: #92400e; color: #ffffff; font-weight: 800;"
+                return "background-color: #0f172a; color: #e5e7eb; font-weight: 800;"
+
+            rows = []
             for r in recs[:8]:
-                stt = r.get("strategy") or {}
-                table_rows.append(
+                unit = str(r.get("unit", ""))
+                dec = int(r.get("dec", 2))
+                s0 = float(r.get("s0", 0.0))
+                s_mean = float(r.get("s_mean", 0.0))
+                exp_ret = float(r.get("exp_ret", 0.0))
+                sigma_ann = float(r.get("sigma_ann", 0.25))
+                t_years = float(int(r.get("months", 6))) / 12.0
+
+                # Primary (exposure-based) recommendation for the current table is procurement-driven.
+                call_strat = _recommend_hedge_strategy(
+                    exposure="Procurement (we will BUY later)",
+                    s0=s0,
+                    s_mean=s_mean,
+                    sigma_ann=sigma_ann,
+                    t_years=t_years,
+                    risk_profile="Balanced",
+                    budget_priority="Medium",
+                    allow_selling=False,
+                    qty=1.0,
+                    unit=unit,
+                )
+                put_strat = _recommend_hedge_strategy(
+                    exposure="Sales (we will SELL later)",
+                    s0=s0,
+                    s_mean=s_mean,
+                    sigma_ann=sigma_ann,
+                    t_years=t_years,
+                    risk_profile="Balanced",
+                    budget_priority="Medium",
+                    allow_selling=False,
+                    qty=1.0,
+                    unit=unit,
+                )
+
+                rows.append(
                     {
-                        "When": r.get("when"),
-                        "Asset": r.get("label"),
-                        "Strategy": stt.get("title"),
-                        "Horizon": r.get("horizon"),
-                        "Score": round(float(r.get("score", 0.0)), 1),
+                        "Timing": r.get("when"),
+                        "Commodity": r.get("label"),
+                        "Target Month": r.get("horizon"),
+                        "Spot": f"{s0:,.{dec}f}",
+                        "Forecast": f"{s_mean:,.{dec}f}",
+                        "Move %": round(exp_ret, 1),
+                        "Vol %": round(sigma_ann * 100.0, 0),
+                        "Priority": round(float(r.get("score", 0.0)), 1),
+                        "CALL Hedge (Cap Cost)": f"{call_strat.get('title', '—')} · {_legs_one_liner(call_strat.get('legs') or [], dec)}",
+                        "PUT Hedge (Protect Floor)": f"{put_strat.get('title', '—')} · {_legs_one_liner(put_strat.get('legs') or [], dec)}",
+                        "Unit": unit,
                     }
                 )
-            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, height=260)
+
+            dfp = pd.DataFrame(rows)
+
+            def _chg_style(val) -> str:
+                try:
+                    v = float(val)
+                except Exception:
+                    return ""
+                if v >= 0:
+                    return "background-color: #052e16; color: #dcfce7; font-weight: 800;"
+                return "background-color: #3f1d1d; color: #fee2e2; font-weight: 800;"
+
+            styled = (
+                dfp.style
+                .applymap(_timing_style, subset=["Timing"])
+                .applymap(_chg_style, subset=["Move %"])
+                .set_properties(
+                    **{
+                        "text-align": "left",
+                        "font-size": "0.85rem",
+                        "font-weight": "700",
+                        "padding": "10px 12px",
+                        "border": "1px solid rgba(148,163,184,0.20)",
+                    }
+                )
+                .set_table_styles(
+                    [
+                        {
+                            "selector": "thead th",
+                            "props": [
+                                ("background-color", "#0b1220"),
+                                ("color", "#e5e7eb"),
+                                ("font-weight", "900"),
+                                ("padding", "12px 12px"),
+                                ("font-size", "0.75rem"),
+                                ("text-transform", "uppercase"),
+                                ("border", "1px solid rgba(148,163,184,0.25)"),
+                            ],
+                        },
+                        {
+                            "selector": "tbody tr:hover",
+                            "props": [("background-color", "rgba(59,130,246,0.10)")],
+                        },
+                    ]
+                )
+            )
+
+            st.caption("CALL hedge caps future purchase cost. PUT hedge protects selling price / downside. Premiums shown are rough estimates per unit.")
+            st.dataframe(styled, use_container_width=True, height=360)
             return
 
         top = recs[0] if recs else None
