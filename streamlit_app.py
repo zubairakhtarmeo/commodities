@@ -1430,6 +1430,109 @@ def _recommend_hedge_strategy(
     return {"title": title, "legs": legs, "rationale": rationale, "metrics": metrics}
 
 
+def _parse_horizon_months(horizon: str) -> int:
+    """Infer months from horizon label.
+
+    Supports "6M" style as well as month labels like "December 2026".
+    """
+    try:
+        h = str(horizon).strip()
+        if h.upper().endswith("M"):
+            m = int(h[:-1])
+            return int(max(1, min(24, m)))
+
+        dt = pd.to_datetime(h, errors="coerce")
+        if pd.isna(dt):
+            return 6
+        now = pd.Timestamp.now()
+        months = (int(dt.year) * 12 + int(dt.month)) - (int(now.year) * 12 + int(now.month))
+        return int(max(1, min(24, months)))
+    except Exception:
+        return 6
+
+
+def _pick_best_horizon_for_payload(*, payload: dict, exposure: str) -> tuple[str, dict | None, int]:
+    """Pick horizon that best matches exposure risk from the available forecasts."""
+    exposure = str(exposure)
+    preds = payload.get("predictions") or {}
+    horizons = get_prediction_horizons(preds) if preds else []
+    if not horizons:
+        horizons = get_month_horizons(12)
+
+    # Default to ~6M if possible
+    default_h = None
+    for cand in ("6M", "6", "Jun", "June"):
+        for h in horizons:
+            if cand.lower() in str(h).lower():
+                default_h = h
+                break
+        if default_h:
+            break
+    if default_h is None:
+        default_h = horizons[min(len(horizons) - 1, 5)] if horizons else "6M"
+
+    best_h = default_h
+    best_pred = preds.get(best_h)
+    best_m = _parse_horizon_months(best_h)
+
+    s0 = float(payload.get("current_price") or 0.0)
+    scale = float(payload.get("display_scale", 1.0) or 1.0)
+    s0 *= scale
+    if s0 <= 0:
+        return best_h, best_pred, best_m
+
+    def _pred_change(p: dict | None) -> float:
+        if not p:
+            return 0.0
+        try:
+            ch = p.get("change")
+            if ch is not None and np.isfinite(float(ch)):
+                return float(ch)
+        except Exception:
+            pass
+        try:
+            px = float(p.get("price") or s0)
+            return (px / s0 - 1.0) * 100.0
+        except Exception:
+            return 0.0
+
+    best_score = -1e9
+    for h in horizons:
+        p = preds.get(h)
+        ch = _pred_change(p)
+        if exposure.startswith("Procurement"):
+            score = ch
+        elif exposure.startswith("Sales"):
+            score = -ch
+        else:
+            score = abs(ch)
+        # Prefer nearer horizons slightly (avoid always picking far future)
+        m = _parse_horizon_months(h)
+        score = float(score) - 0.08 * float(m)
+        if score > best_score:
+            best_score = score
+            best_h = h
+            best_pred = p
+            best_m = m
+
+    return best_h, best_pred, best_m
+
+
+def _timing_label(*, score: float, sigma_ann: float) -> str:
+    """Translate risk score into an action timing label."""
+    try:
+        score = float(score)
+        sigma_ann = float(sigma_ann)
+    except Exception:
+        return "MONITOR"
+
+    if sigma_ann >= 0.35 or score >= 6.0:
+        return "DO NOW"
+    if sigma_ann >= 0.25 or score >= 3.0:
+        return "PLAN (2–4 WEEKS)"
+    return "MONITOR"
+
+
 def _mc_expected_payoffs_lognormal(
     *,
     s0: float,
@@ -1495,74 +1598,282 @@ def render_call_put_hedge_advisor(
             label_visibility="collapsed",
         )
 
-        copt1, copt2, copt3, copt4 = st.columns([1.2, 1.0, 1.0, 1.0])
-        with copt1:
-            risk_profile = st.selectbox(
-                "Risk profile",
-                ["Conservative", "Balanced", "Aggressive"],
-                index=1,
-                key=f"{key_prefix}_risk",
-                help="Conservative = tighter protection; Aggressive = wider bands / more premium sensitivity.",
-            )
-        with copt2:
-            budget_priority = st.selectbox(
-                "Premium budget",
-                ["Low", "Medium", "High"],
-                index=1,
-                key=f"{key_prefix}_budget",
-                help="High means you prefer lower/zero-cost structures (often includes selling a leg).",
-            )
-        with copt3:
-            allow_selling = st.checkbox(
-                "Allow selling legs",
-                value=False,
-                key=f"{key_prefix}_sell",
-                help="Enable strategies like spreads/collars that SELL an option leg (adds obligation risk).",
-            )
-        with copt4:
-            qty = st.number_input(
-                "Qty (units)",
-                min_value=0.0,
-                value=1.0,
-                step=1.0,
-                key=f"{key_prefix}_qty",
-                help="Used for premium totals (still guidance only).",
-            )
+        # Minimal UI (no month/qty selectors). Advanced is optional.
+        risk_profile = "Balanced"
+        budget_priority = "Medium"
+        allow_selling = False
+        qty = 1.0
+        with st.expander("Advanced settings (optional)", expanded=False):
+            copt1, copt2, copt3, copt4 = st.columns([1.2, 1.0, 1.0, 1.0])
+            with copt1:
+                risk_profile = st.selectbox(
+                    "Risk profile",
+                    ["Conservative", "Balanced", "Aggressive"],
+                    index=1,
+                    key=f"{key_prefix}_risk",
+                )
+            with copt2:
+                budget_priority = st.selectbox(
+                    "Premium budget",
+                    ["Low", "Medium", "High"],
+                    index=1,
+                    key=f"{key_prefix}_budget",
+                )
+            with copt3:
+                allow_selling = st.checkbox(
+                    "Allow selling legs",
+                    value=False,
+                    key=f"{key_prefix}_sell",
+                    help="Enables spreads/collars that SELL an option leg (adds obligation risk).",
+                )
+            with copt4:
+                qty = st.number_input(
+                    "Qty (units)",
+                    min_value=0.0,
+                    value=1.0,
+                    step=1.0,
+                    key=f"{key_prefix}_qty",
+                    help="Used only for premium totals; base recommendation is per-unit.",
+                )
 
         if not commodity_payloads:
             st.info("Advisor needs commodity data (run from Executive Summary).")
             return
 
-        options = []
-        payload_map: dict[str, dict] = {}
+        # Build candidate list (no dropdowns)
+        candidates: list[dict] = []
         for item in commodity_payloads:
             for side in ("int_payload", "local_payload"):
                 p = item.get(side)
                 if p and p.get("name"):
-                    label = f"{p['name']} ({'International' if side=='int_payload' else 'Local'})"
-                    options.append(label)
-                    payload_map[label] = p
+                    candidates.append(
+                        {
+                            "label": f"{p['name']} ({'International' if side=='int_payload' else 'Local'})",
+                            "payload": p,
+                        }
+                    )
 
-        if not options:
+        if not candidates:
             st.info("No commodities available for recommendation.")
             return
 
-        csel1, csel2 = st.columns([2, 1])
-        with csel1:
-            st.markdown("<div class='cp-kv-label' style='margin: 0.25rem 0 0.35rem 0;'>Asset</div>", unsafe_allow_html=True)
-            sel = st.selectbox("Asset", options, key=f"{key_prefix}_asset", label_visibility="collapsed")
-        payload = payload_map.get(sel)
-        if not payload:
+        recs: list[dict] = []
+        for c in candidates:
+            payload = c["payload"]
+
+            scale = float(payload.get("display_scale", 1.0) or 1.0)
+            unit = str(payload.get("display_currency") or payload.get("info", {}).get("currency", ""))
+            dec = 3 if "/lb" in unit.lower() else 2
+
+            s0_raw = float(payload.get("current_price") or 0.0)
+            s0 = s0_raw * scale
+
+            best_h, best_pred, months = _pick_best_horizon_for_payload(payload=payload, exposure=exposure)
+            t_years = float(months) / 12.0
+
+            s_mean_raw = s0_raw
+            f_lower = None
+            f_upper = None
+            if isinstance(best_pred, dict):
+                try:
+                    s_mean_raw = float(best_pred.get("price") or s0_raw)
+                except Exception:
+                    s_mean_raw = s0_raw
+                try:
+                    f_lower = float(best_pred.get("lower")) * scale if best_pred.get("lower") is not None else None
+                    f_upper = float(best_pred.get("upper")) * scale if best_pred.get("upper") is not None else None
+                except Exception:
+                    f_lower, f_upper = None, None
+
+            s_mean = float(s_mean_raw) * scale
+
+            hist_df = payload.get("history_df")
+            if hist_df is None:
+                hist_df = payload.get("info", {}).get("df")
+            if hist_df is None:
+                hist_df = payload.get("df")
+
+            sigma_ann = 0.25
+            mom3 = 0.0
+            mom6 = 0.0
+            if isinstance(hist_df, pd.DataFrame):
+                vcol = payload.get("info", {}).get("value_col") or payload.get("value_col") or "value"
+                if vcol in hist_df.columns:
+                    sigma_ann = _annualized_volatility_from_history(hist_df[vcol])
+                    mom3 = _momentum_pct(hist_df=hist_df, value_col=vcol, months=3)
+                    mom6 = _momentum_pct(hist_df=hist_df, value_col=vcol, months=6)
+                elif "value" in hist_df.columns:
+                    sigma_ann = _annualized_volatility_from_history(hist_df["value"])
+
+            sigma_ann = _blend_sigma_from_forecast_interval(sigma_ann=sigma_ann, lower=f_lower, upper=f_upper, t_years=t_years)
+
+            exp_ret = ((s_mean - s0) / s0 * 100.0) if s0 else 0.0
+            score = float(exp_ret) + 0.35 * float(mom3) + 0.15 * float(mom6)
+            if exposure.startswith("Procurement"):
+                score = max(0.0, score)
+            elif exposure.startswith("Sales"):
+                score = max(0.0, -score)
+            else:
+                score = abs(score)
+
+            when = _timing_label(score=score, sigma_ann=sigma_ann)
+
+            strat = _recommend_hedge_strategy(
+                exposure=exposure,
+                s0=s0,
+                s_mean=s_mean,
+                sigma_ann=sigma_ann,
+                t_years=t_years,
+                risk_profile=risk_profile,
+                budget_priority=budget_priority,
+                allow_selling=allow_selling,
+                qty=float(qty),
+                unit=unit,
+            )
+
+            recs.append(
+                {
+                    "when": when,
+                    "label": c["label"],
+                    "horizon": best_h,
+                    "months": months,
+                    "unit": unit,
+                    "dec": dec,
+                    "s0": s0,
+                    "s_mean": s_mean,
+                    "sigma_ann": sigma_ann,
+                    "mom3": mom3,
+                    "mom6": mom6,
+                    "score": float(score),
+                    "exp_ret": float(exp_ret),
+                    "strategy": strat,
+                }
+            )
+
+        # Rank: DO NOW first, then by score
+        when_rank = {"DO NOW": 0, "PLAN (2–4 WEEKS)": 1, "MONITOR": 2}
+        recs = sorted(recs, key=lambda r: (when_rank.get(str(r.get("when")), 9), -float(r.get("score", 0.0))))
+
+        top = recs[0] if recs else None
+        if not top:
+            st.info("No recommendations available.")
             return
 
-        horizons = get_prediction_horizons(payload.get("predictions", {}) or {})
-        if not horizons:
-            horizons = get_month_horizons(12)
+        # Top recommendation (actionable)
+        top_strat = top.get("strategy") or {}
+        top_title = str(top_strat.get("title", "HOLD / WAIT"))
+        top_unit = str(top.get("unit", ""))
+        top_dec = int(top.get("dec", 2))
+        months = int(top.get("months", 6))
+        horizon = str(top.get("horizon", ""))
+        s0 = float(top.get("s0", 0.0))
+        s_mean = float(top.get("s_mean", 0.0))
+        sigma_ann = float(top.get("sigma_ann", 0.25))
+        mom3 = float(top.get("mom3", 0.0))
+        exp_ret = float(top.get("exp_ret", 0.0))
+        score = float(top.get("score", 0.0))
 
-        default_h = "6M" if "6M" in horizons else ("3M" if "3M" in horizons else horizons[-1])
-        with csel2:
-            st.markdown("<div class='cp-kv-label' style='margin: 0.25rem 0 0.35rem 0;'>Horizon</div>", unsafe_allow_html=True)
-            horizon = st.selectbox("Horizon", horizons, index=horizons.index(default_h), key=f"{key_prefix}_h", label_visibility="collapsed")
+        pill_class = "cp-pill-hold"
+        if "CALL" in top_title:
+            pill_class = "cp-pill-call"
+        if "PUT" in top_title:
+            pill_class = "cp-pill-put"
+
+        st.markdown(
+            f"""
+<div class="cp-card" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+  <div>
+    <div class="cp-title" style="margin-bottom: 0.2rem;">What to do</div>
+    <div class="cp-subtitle"><b>{top.get('when')}</b> · {top.get('label')} · Horizon: {horizon} · Score {score:.1f}</div>
+  </div>
+  <div class="cp-pill {pill_class}">{top_title}</div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        kv1, kv2, kv3 = st.columns(3)
+        with kv1:
+            st.markdown(
+                f"""
+<div class="cp-kv">
+  <div class="cp-kv-label">Spot</div>
+  <div class="cp-kv-value">{s0:,.{top_dec}f}</div>
+  <div class="cp-kv-sub">{top_unit}</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with kv2:
+            delta_color = "#166534" if exp_ret > 0 else ("#991b1b" if exp_ret < 0 else "#334155")
+            delta_prefix = "+" if exp_ret > 0 else ""
+            st.markdown(
+                f"""
+<div class="cp-kv">
+  <div class="cp-kv-label">Forecast (auto)</div>
+  <div class="cp-kv-value">{s_mean:,.{top_dec}f}</div>
+  <div class="cp-kv-sub" style="color:{delta_color};">{delta_prefix}{exp_ret:.1f}% · Mom3 {mom3:+.1f}%</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with kv3:
+            vol_band = "HIGH" if sigma_ann >= 0.30 else ("MED" if sigma_ann >= 0.20 else "LOW")
+            st.markdown(
+                f"""
+<div class="cp-kv">
+  <div class="cp-kv-label">Volatility</div>
+  <div class="cp-kv-value">{sigma_ann*100:.0f}%</div>
+  <div class="cp-kv-sub">{vol_band} · {months}M</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        legs = top_strat.get("legs") or []
+        if legs:
+            legs_df = pd.DataFrame(
+                [
+                    {
+                        "Action": l.get("side"),
+                        "Type": l.get("type"),
+                        "Strike": f"{float(l.get('strike')):,.{top_dec}f}",
+                        "Prob ITM": f"{float(l.get('prob_itm', 0.0))*100:.0f}%",
+                        "Est Premium": f"{float(l.get('est_premium', 0.0)):.{top_dec}f}",
+                        "Note": l.get("note"),
+                    }
+                    for l in legs
+                ]
+            )
+            st.markdown(
+                "<div class='cp-note'><b>Ask the bank for these legs</b> (per unit). Multiply by your hedge size.</div>",
+                unsafe_allow_html=True,
+            )
+            st.dataframe(legs_df, use_container_width=True, height=200)
+
+        if top_strat.get("rationale"):
+            st.caption(str(top_strat.get("rationale")))
+
+        # Small table for other assets (so it still feels like a strategist across the portfolio)
+        table_rows = []
+        for r in recs[:8]:
+            stt = r.get("strategy") or {}
+            table_rows.append(
+                {
+                    "When": r.get("when"),
+                    "Asset": r.get("label"),
+                    "Strategy": stt.get("title"),
+                    "Horizon": r.get("horizon"),
+                    "Score": float(r.get("score", 0.0)),
+                }
+            )
+        st.markdown("#### Portfolio view")
+        st.caption("Auto-ranked recommendations across all commodities (top 8).")
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, height=260)
+
+        st.caption("Guidance tool: confirm with your bank and internal policy before executing options trades.")
+
+        return
 
         scale = float(payload.get("display_scale", 1.0) or 1.0)
         unit = str(payload.get("display_currency") or payload.get("info", {}).get("currency", ""))
