@@ -1664,7 +1664,7 @@ def render_call_put_hedge_advisor(
             scale = float(payload.get("display_scale", 1.0) or 1.0)
             unit = str(payload.get("display_currency") or payload.get("info", {}).get("currency", ""))
             nm = str(payload.get("name", "")).lower()
-            three_dec_assets = ("cotton", "polyester", "viscose", "crude")
+            three_dec_assets = ("cotton", "polyester", "viscose", "crude", "natural gas")
             dec = 3 if (any(k in nm for k in three_dec_assets) or "/lb" in unit.lower()) else 2
 
             s0_raw = float(payload.get("current_price") or 0.0)
@@ -3220,7 +3220,7 @@ def render_executive_summary():
         # - Cotton, Polyester, Viscose, Crude Oil: 3 decimals
         # - Others: keep existing behavior
         name_lower = str(payload.get("name", "")).lower()
-        three_dec_assets = ("cotton", "polyester", "viscose", "crude")
+        three_dec_assets = ("cotton", "polyester", "viscose", "crude", "natural gas")
         is_three_dec = any(k in name_lower for k in three_dec_assets)
         dec = 3 if is_three_dec else (3 if "/lb" in str(display_currency).lower() else 1)
 
@@ -3304,7 +3304,7 @@ def render_executive_summary():
         # - Cotton, Polyester, Viscose, Crude Oil: 3 decimals
         # - Others: keep existing behavior
         name_lower = str(payload.get("name", "")).lower()
-        three_dec_assets = ("cotton", "polyester", "viscose", "crude")
+        three_dec_assets = ("cotton", "polyester", "viscose", "crude", "natural gas")
         is_three_dec = any(k in name_lower for k in three_dec_assets)
         dec = 3 if is_three_dec else (3 if "/lb" in str(display_currency).lower() else 2)
 
