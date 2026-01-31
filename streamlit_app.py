@@ -1663,7 +1663,9 @@ def render_call_put_hedge_advisor(
 
             scale = float(payload.get("display_scale", 1.0) or 1.0)
             unit = str(payload.get("display_currency") or payload.get("info", {}).get("currency", ""))
-            dec = 3 if "/lb" in unit.lower() else 2
+            nm = str(payload.get("name", "")).lower()
+            three_dec_assets = ("cotton", "polyester", "viscose", "crude")
+            dec = 3 if (any(k in nm for k in three_dec_assets) or "/lb" in unit.lower()) else 2
 
             s0_raw = float(payload.get("current_price") or 0.0)
             s0 = s0_raw * scale
@@ -3215,10 +3217,12 @@ def render_executive_summary():
         scale = float(payload.get("display_scale", 1.0) or 1.0)
         display_currency = payload.get("display_currency") or payload["info"]["currency"]
         # Summary-only formatting rules:
-        # - Cotton: 3 decimals
+        # - Cotton, Polyester, Viscose, Crude Oil: 3 decimals
         # - Others: keep existing behavior
-        is_cotton = "cotton" in str(payload.get("name", "")).lower()
-        dec = 3 if is_cotton else (3 if "/lb" in str(display_currency).lower() else 1)
+        name_lower = str(payload.get("name", "")).lower()
+        three_dec_assets = ("cotton", "polyester", "viscose", "crude")
+        is_three_dec = any(k in name_lower for k in three_dec_assets)
+        dec = 3 if is_three_dec else (3 if "/lb" in str(display_currency).lower() else 1)
 
         horizons = get_prediction_horizons(payload.get("predictions", {}))
         prices = []
@@ -3297,10 +3301,12 @@ def render_executive_summary():
         scale = float(payload.get("display_scale", 1.0) or 1.0)
         display_currency = payload.get("display_currency") or payload["info"]["currency"]
         # Summary-only formatting rules:
-        # - Cotton: 3 decimals
+        # - Cotton, Polyester, Viscose, Crude Oil: 3 decimals
         # - Others: keep existing behavior
-        is_cotton = "cotton" in str(payload.get("name", "")).lower()
-        dec = 3 if is_cotton else (3 if "/lb" in str(display_currency).lower() else 2)
+        name_lower = str(payload.get("name", "")).lower()
+        three_dec_assets = ("cotton", "polyester", "viscose", "crude")
+        is_three_dec = any(k in name_lower for k in three_dec_assets)
+        dec = 3 if is_three_dec else (3 if "/lb" in str(display_currency).lower() else 2)
 
         table_rows = []
         if payload.get("predictions"):
