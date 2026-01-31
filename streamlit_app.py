@@ -319,23 +319,27 @@ def render_ai_predictions_page():
                 )
 
                 fig.update_layout(
-        height=420,
-        margin=dict(l=40, r=20, t=30, b=40),
-        plot_bgcolor="#0b1220",
-        paper_bgcolor="#0b1220",
-        font=dict(color="#e5e7eb"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(title="Date", gridcolor="rgba(148,163,184,0.15)", tickfont=dict(color="#cbd5e1")),
-        yaxis=dict(title=f"Price ({unit})" if unit else "Price", gridcolor="rgba(148,163,184,0.15)", tickfont=dict(color="#cbd5e1")),
-    )
-    fig.update_traces(cliponaxis=False)
+                    height=420,
+                    margin=dict(l=40, r=20, t=30, b=40),
+                    plot_bgcolor="#0b1220",
+                    paper_bgcolor="#0b1220",
+                    font=dict(color="#e5e7eb"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    xaxis=dict(title="Date", gridcolor="rgba(148,163,184,0.15)", tickfont=dict(color="#cbd5e1")),
+                    yaxis=dict(
+                        title=f"Price ({unit})" if unit else "Price",
+                        gridcolor="rgba(148,163,184,0.15)",
+                        tickfont=dict(color="#cbd5e1"),
+                    ),
+                )
+                fig.update_traces(cliponaxis=False)
 
-    st.plotly_chart(fig, use_container_width=True, key=f"ai_pred_{asset}_{horizon}")
+                st.plotly_chart(fig, use_container_width=True, key=f"ai_pred_{asset}_{horizon}")
 
-    out = df[["target_date", "actual_value", "predicted_value"]].copy()
-    out.columns = ["Date", "Actual", "Predicted"]
-    out["Date"] = pd.to_datetime(out["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    st.dataframe(out, use_container_width=True, height=260)
+                out = df[["target_date", "actual_value", "predicted_value"]].copy()
+                out.columns = ["Date", "Actual", "Predicted"]
+                out["Date"] = pd.to_datetime(out["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                st.dataframe(out, use_container_width=True, height=260)
 
 
 @st.cache_data(ttl=600)  # Cache for 10 minutes
@@ -2780,12 +2784,7 @@ def render_overview_tab(commodities_data: dict, title: str):
         hovermode='x unified'
     )
     
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Small table view
-                show_df = df[["target_date", "actual_value", "predicted_value"]].copy()
-                show_df.columns = ["Date", "Actual", f"Predicted ({horizon})"]
-                st.dataframe(show_df, use_container_width=True, hide_index=True)
+    st.plotly_chart(fig, use_container_width=True)
 
     # Hedge Advisor (Strategist) — moved here from Summary
     st.markdown("---")
