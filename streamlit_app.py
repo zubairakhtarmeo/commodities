@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime
+from contextlib import nullcontext
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -239,88 +240,85 @@ def render_ai_predictions_page():
     </div>
     """, unsafe_allow_html=True)
 
-    if not supabase_is_configured():
+    supa_ok = supabase_is_configured()
+    if not supa_ok:
         st.warning(
             "Supabase is not configured. Add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` "
             "(or `SUPABASE_ANON_KEY`) in Streamlit Secrets to enable long-term prediction storage."
         )
-        st.info(
-            "Once configured, this page will show a daily rolling chart like your BTC model screenshot."
-        )
-        return
+        st.info("Prediction validation charts are disabled until Supabase is configured.")
 
-    assets: list[str] = []
-    try:
-        rows = supabase_rest_select(table="prediction_records", select="asset", limit=5000)
-        assets = sorted({r.get("asset") for r in (rows or []) if r.get("asset")})
-    except Exception:
-        assets = []
+    if supa_ok:
+        assets: list[str] = []
+        try:
+            rows = supabase_rest_select(table="prediction_records", select="asset", limit=5000)
+            assets = sorted({r.get("asset") for r in (rows or []) if r.get("asset")})
+        except Exception:
+            assets = []
 
-    if not assets:
-        st.info("No prediction records found in Supabase yet.")
-        st.caption("Tip: push daily predictions from your pipeline into `prediction_records`.")
-        return
+        if not assets:
+            st.info("No prediction records found in Supabase yet.")
+            st.caption("Tip: push daily predictions from your pipeline into `prediction_records`.")
+        else:
+            colA, colB, colC = st.columns([2, 1, 1])
+            with colA:
+                asset = st.selectbox("Asset", assets, index=0)
+            with colB:
+                days = st.number_input("Days", min_value=7, max_value=365, value=30, step=1)
+            with colC:
+                horizon = st.selectbox("Horizon", ["1d", "24h", "7d", "30d"], index=0)
 
-    colA, colB, colC = st.columns([2, 1, 1])
-    with colA:
-        asset = st.selectbox("Asset", assets, index=0)
-    with colB:
-        days = st.number_input("Days", min_value=7, max_value=365, value=30, step=1)
-    with colC:
-        horizon = st.selectbox("Horizon", ["1d", "24h", "7d", "30d"], index=0)
+            df = supabase_fetch_prediction_history(asset=asset, days=int(days), horizon=str(horizon))
+            if df.empty:
+                st.info("No data for this asset/horizon yet.")
+            else:
+                unit = df["unit"].dropna().iloc[-1] if "unit" in df.columns and df["unit"].notna().any() else ""
 
-    df = supabase_fetch_prediction_history(asset=asset, days=int(days), horizon=str(horizon))
-    if df.empty:
-        st.info("No data for this asset/horizon yet.")
-        return
+                # Accuracy (simple): 100 * (1 - MAPE)
+                valid = df.dropna(subset=["predicted_value", "actual_value"]).copy()
+                acc_txt = ""
+                if not valid.empty:
+                    actual = pd.to_numeric(valid["actual_value"], errors="coerce")
+                    pred = pd.to_numeric(valid["predicted_value"], errors="coerce")
+                    mask = (actual.notna()) & (pred.notna()) & (actual != 0)
+                    if mask.any():
+                        mape = float((abs(pred[mask] - actual[mask]) / abs(actual[mask])).mean())
+                        accuracy = max(0.0, 100.0 * (1.0 - mape))
+                        acc_txt = f" · Accuracy: {accuracy:.1f}%"
 
-    unit = df["unit"].dropna().iloc[-1] if "unit" in df.columns and df["unit"].notna().any() else ""
+                title = f"Rolling Validation: Predicted vs Actual{acc_txt}"
+                st.markdown(f"### {title}")
+                st.caption("Bars = Actual · Line = Predicted")
 
-    # Accuracy (simple): 100 * (1 - MAPE)
-    valid = df.dropna(subset=["predicted_value", "actual_value"]).copy()
-    acc_txt = ""
-    if not valid.empty:
-        actual = pd.to_numeric(valid["actual_value"], errors="coerce")
-        pred = pd.to_numeric(valid["predicted_value"], errors="coerce")
-        mask = (actual.notna()) & (pred.notna()) & (actual != 0)
-        if mask.any():
-            mape = float((abs(pred[mask] - actual[mask]) / abs(actual[mask])).mean())
-            accuracy = max(0.0, 100.0 * (1.0 - mape))
-            acc_txt = f" · Accuracy: {accuracy:.1f}%"
+                fig = go.Figure()
 
-    title = f"Rolling Validation: Predicted vs Actual{acc_txt}"
-    st.markdown(f"### {title}")
-    st.caption("Bars = Actual · Line = Predicted")
+                fig.add_trace(
+                    go.Bar(
+                        x=df["target_date"],
+                        y=pd.to_numeric(df["actual_value"], errors="coerce"),
+                        name="Actual",
+                        marker_color="#10b981",
+                        text=pd.to_numeric(df["actual_value"], errors="coerce"),
+                        texttemplate="%{text:,.0f}",
+                        textposition="inside",
+                    )
+                )
 
-    fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(
+                        x=df["target_date"],
+                        y=pd.to_numeric(df["predicted_value"], errors="coerce"),
+                        name=f"Predicted ({horizon})",
+                        mode="lines+markers+text",
+                        line=dict(color="#818cf8", width=3),
+                        marker=dict(size=7),
+                        text=pd.to_numeric(df["predicted_value"], errors="coerce"),
+                        texttemplate="%{text:,.0f}",
+                        textposition="top center",
+                    )
+                )
 
-    fig.add_trace(
-        go.Bar(
-            x=df["target_date"],
-            y=pd.to_numeric(df["actual_value"], errors="coerce"),
-            name="Actual",
-            marker_color="#10b981",
-            text=pd.to_numeric(df["actual_value"], errors="coerce"),
-            texttemplate="%{text:,.0f}",
-            textposition="inside",
-        )
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=df["target_date"],
-            y=pd.to_numeric(df["predicted_value"], errors="coerce"),
-            name=f"Predicted ({horizon})",
-            mode="lines+markers+text",
-            line=dict(color="#818cf8", width=3),
-            marker=dict(size=7),
-            text=pd.to_numeric(df["predicted_value"], errors="coerce"),
-            texttemplate="%{text:,.0f}",
-            textposition="top center",
-        )
-    )
-
-    fig.update_layout(
+                fig.update_layout(
         height=420,
         margin=dict(l=40, r=20, t=30, b=40),
         plot_bgcolor="#0b1220",
@@ -1571,11 +1569,23 @@ def render_call_put_hedge_advisor(
     expanded: bool = False,
     key_prefix: str = "cp_advisor",
     commodity_payloads: list[dict] | None = None,
+    variant: str = "full",
+    use_expander: bool = True,
+    show_portfolio_view: bool = True,
 ) -> None:
     """Strategy advisor: recommends hedges (buy/sell call/put structures) using history + forecast."""
-    with st.expander(expander_title, expanded=expanded):
-        st.markdown(
-            """
+    variant = str(variant or "full").strip().lower()
+    container = st.expander(expander_title, expanded=expanded) if use_expander else nullcontext()
+    with container:
+        exposure = "Procurement (we will BUY later)"
+        risk_profile = "Balanced"
+        budget_priority = "Medium"
+        allow_selling = False
+        qty = 1.0
+
+        if variant != "portfolio":
+            st.markdown(
+                """
 <div class="cp-card">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
         <div>
@@ -1585,56 +1595,52 @@ def render_call_put_hedge_advisor(
         <div class="cp-pill cp-pill-hold">Mode: Strategist</div>
     </div>
 </div>
-            """,
-            unsafe_allow_html=True,
-        )
+                """,
+                unsafe_allow_html=True,
+            )
 
-        st.markdown("<div class='cp-kv-label' style='margin: 0.25rem 0 0.35rem 0;'>Exposure</div>", unsafe_allow_html=True)
-        exposure = st.radio(
-            "Exposure",
-            ["Procurement (we will BUY later)", "Inventory (we HOLD stock)", "Sales (we will SELL later)"],
-            horizontal=True,
-            key=f"{key_prefix}_exposure",
-            label_visibility="collapsed",
-        )
+            st.markdown("<div class='cp-kv-label' style='margin: 0.25rem 0 0.35rem 0;'>Exposure</div>", unsafe_allow_html=True)
+            exposure = st.radio(
+                "Exposure",
+                ["Procurement (we will BUY later)", "Inventory (we HOLD stock)", "Sales (we will SELL later)"],
+                horizontal=True,
+                key=f"{key_prefix}_exposure",
+                label_visibility="collapsed",
+            )
 
-        # Minimal UI (no month/qty selectors). Advanced is optional.
-        risk_profile = "Balanced"
-        budget_priority = "Medium"
-        allow_selling = False
-        qty = 1.0
-        with st.expander("Advanced settings (optional)", expanded=False):
-            copt1, copt2, copt3, copt4 = st.columns([1.2, 1.0, 1.0, 1.0])
-            with copt1:
-                risk_profile = st.selectbox(
-                    "Risk profile",
-                    ["Conservative", "Balanced", "Aggressive"],
-                    index=1,
-                    key=f"{key_prefix}_risk",
-                )
-            with copt2:
-                budget_priority = st.selectbox(
-                    "Premium budget",
-                    ["Low", "Medium", "High"],
-                    index=1,
-                    key=f"{key_prefix}_budget",
-                )
-            with copt3:
-                allow_selling = st.checkbox(
-                    "Allow selling legs",
-                    value=False,
-                    key=f"{key_prefix}_sell",
-                    help="Enables spreads/collars that SELL an option leg (adds obligation risk).",
-                )
-            with copt4:
-                qty = st.number_input(
-                    "Qty (units)",
-                    min_value=0.0,
-                    value=1.0,
-                    step=1.0,
-                    key=f"{key_prefix}_qty",
-                    help="Used only for premium totals; base recommendation is per-unit.",
-                )
+            # Minimal UI (no month/qty selectors). Advanced is optional.
+            with st.expander("Advanced settings (optional)", expanded=False):
+                copt1, copt2, copt3, copt4 = st.columns([1.2, 1.0, 1.0, 1.0])
+                with copt1:
+                    risk_profile = st.selectbox(
+                        "Risk profile",
+                        ["Conservative", "Balanced", "Aggressive"],
+                        index=1,
+                        key=f"{key_prefix}_risk",
+                    )
+                with copt2:
+                    budget_priority = st.selectbox(
+                        "Premium budget",
+                        ["Low", "Medium", "High"],
+                        index=1,
+                        key=f"{key_prefix}_budget",
+                    )
+                with copt3:
+                    allow_selling = st.checkbox(
+                        "Allow selling legs",
+                        value=False,
+                        key=f"{key_prefix}_sell",
+                        help="Enables spreads/collars that SELL an option leg (adds obligation risk).",
+                    )
+                with copt4:
+                    qty = st.number_input(
+                        "Qty (units)",
+                        min_value=0.0,
+                        value=1.0,
+                        step=1.0,
+                        key=f"{key_prefix}_qty",
+                        help="Used only for premium totals; base recommendation is per-unit.",
+                    )
 
         if not commodity_payloads:
             st.info("Advisor needs commodity data (run from Executive Summary).")
@@ -1756,6 +1762,24 @@ def render_call_put_hedge_advisor(
         when_rank = {"DO NOW": 0, "PLAN (2–4 WEEKS)": 1, "MONITOR": 2}
         recs = sorted(recs, key=lambda r: (when_rank.get(str(r.get("when")), 9), -float(r.get("score", 0.0))))
 
+        if variant == "portfolio":
+            st.markdown("#### Portfolio View")
+            st.caption("Auto-ranked recommendations across all commodities (top 8).")
+            table_rows = []
+            for r in recs[:8]:
+                stt = r.get("strategy") or {}
+                table_rows.append(
+                    {
+                        "When": r.get("when"),
+                        "Asset": r.get("label"),
+                        "Strategy": stt.get("title"),
+                        "Horizon": r.get("horizon"),
+                        "Score": round(float(r.get("score", 0.0)), 1),
+                    }
+                )
+            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, height=260)
+            return
+
         top = recs[0] if recs else None
         if not top:
             st.info("No recommendations available.")
@@ -1856,66 +1880,27 @@ def render_call_put_hedge_advisor(
         if top_strat.get("rationale"):
             st.caption(str(top_strat.get("rationale")))
 
-        # Small table for other assets (so it still feels like a strategist across the portfolio)
-        table_rows = []
-        for r in recs[:8]:
-            stt = r.get("strategy") or {}
-            table_rows.append(
-                {
-                    "When": r.get("when"),
-                    "Asset": r.get("label"),
-                    "Strategy": stt.get("title"),
-                    "Horizon": r.get("horizon"),
-                    "Score": float(r.get("score", 0.0)),
-                }
-            )
-        st.markdown("#### Portfolio view")
-        st.caption("Auto-ranked recommendations across all commodities (top 8).")
-        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, height=260)
+        if show_portfolio_view:
+            # Small table for other assets (so it still feels like a strategist across the portfolio)
+            table_rows = []
+            for r in recs[:8]:
+                stt = r.get("strategy") or {}
+                table_rows.append(
+                    {
+                        "When": r.get("when"),
+                        "Asset": r.get("label"),
+                        "Strategy": stt.get("title"),
+                        "Horizon": r.get("horizon"),
+                        "Score": round(float(r.get("score", 0.0)), 1),
+                    }
+                )
+            st.markdown("#### Portfolio View")
+            st.caption("Auto-ranked recommendations across all commodities (top 8).")
+            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, height=260)
 
         st.caption("Guidance tool: confirm with your bank and internal policy before executing options trades.")
 
         return
-
-        scale = float(payload.get("display_scale", 1.0) or 1.0)
-        unit = str(payload.get("display_currency") or payload.get("info", {}).get("currency", ""))
-        dec = 3 if "/lb" in unit.lower() else 2
-
-        s0_raw = float(payload.get("current_price") or 0.0)
-        s_mean_raw = s0_raw
-        if payload.get("predictions") and horizon in payload["predictions"]:
-            s_mean_raw = float(payload["predictions"][horizon].get("price") or s0_raw)
-
-        # Use display scale for all amounts shown/entered on Summary page
-        s0 = s0_raw * scale
-        s_mean = s_mean_raw * scale
-
-        months = int(horizon.replace("M", "")) if horizon.endswith("M") else 6
-        t_years = months / 12.0
-
-        # Avoid DataFrame truthiness checks (pandas raises: ambiguous truth value)
-        hist_df = payload.get("history_df")
-        if hist_df is None:
-            hist_df = payload.get("info", {}).get("df")
-        if hist_df is None:
-            hist_df = payload.get("df")
-        sigma_ann = 0.25
-        if isinstance(hist_df, pd.DataFrame):
-            vcol = payload.get("info", {}).get("value_col") or payload.get("value_col")
-            if vcol and vcol in hist_df.columns:
-                sigma_ann = _annualized_volatility_from_history(hist_df[vcol])
-            elif "value" in hist_df.columns:
-                sigma_ann = _annualized_volatility_from_history(hist_df["value"])
-
-        # Blend sigma with forecast interval if present (uses future distribution info)
-        f_lower = None
-        f_upper = None
-        if payload.get("predictions") and horizon in payload["predictions"]:
-            try:
-                f_lower = float(payload["predictions"][horizon].get("lower")) * float(scale)
-                f_upper = float(payload["predictions"][horizon].get("upper")) * float(scale)
-            except Exception:
-                f_lower, f_upper = None, None
         sigma_ann = _blend_sigma_from_forecast_interval(sigma_ann=sigma_ann, lower=f_lower, upper=f_upper, t_years=t_years)
 
         # Add momentum (uses past data)
@@ -2795,7 +2780,193 @@ def render_overview_tab(commodities_data: dict, title: str):
         hovermode='x unified'
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Small table view
+                show_df = df[["target_date", "actual_value", "predicted_value"]].copy()
+                show_df.columns = ["Date", "Actual", f"Predicted ({horizon})"]
+                st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+    # Hedge Advisor (Strategist) — moved here from Summary
+    st.markdown("---")
+    st.markdown("### 🧠 Hedge Advisor (Options Strategist)")
+    st.caption("Actionable option structures using history (volatility + momentum) and forecast distribution.")
+
+    usd_pkr_rate = None
+    try:
+        live = fetch_usd_pkr_rate()
+        if live and live.get("current_price"):
+            usd_pkr_rate = float(live["current_price"])
+    except Exception:
+        usd_pkr_rate = None
+
+    commodity_payloads, _all_summary = build_summary_commodity_payloads(
+        show_local_in_usd=True,
+        usd_pkr_rate=usd_pkr_rate,
+    )
+    render_call_put_hedge_advisor(
+        expander_title="Hedge Advisor",
+        expanded=True,
+        key_prefix="ai_cp",
+        commodity_payloads=commodity_payloads,
+        variant="full",
+        use_expander=False,
+        show_portfolio_view=False,
+    )
+
+    return
+
+
+SUMMARY_COMMODITY_PAIRS: list[tuple[str, str | None]] = [
+    ("Cotton", "Cotton (Local)"),
+    ("Polyester", "Polyester (Local)"),
+    ("Viscose", "Viscose (Local)"),
+    ("Natural Gas", "Natural Gas"),
+    ("Crude Oil", "Crude Oil"),
+]
+
+
+def build_commodity_payload(commodity_name: str | None, commodities_dict: dict) -> dict | None:
+    if not commodity_name or commodity_name not in commodities_dict:
+        return None
+
+    info = commodities_dict[commodity_name]
+    metadata = load_commodity_data(info["path"], info["currency"])
+    predictions = load_predictions(info["path"])
+
+    if metadata["df"] is None:
+        return None
+
+    current_price = metadata["df"][metadata["value_col"]].iloc[-1]
+    price_change = metadata["price_change"]
+    pred_1m = get_prediction_by_index(predictions, 1)
+    pred_3m = get_prediction_by_index(predictions, 3)
+
+    return {
+        "name": commodity_name,
+        "info": info,
+        "current_price": current_price,
+        "price_change": price_change,
+        "pred_1m": pred_1m,
+        "pred_3m": pred_3m,
+        "predictions": predictions,
+        "history_df": metadata.get("df"),
+        "value_col": metadata.get("value_col"),
+        # Display overrides (used by Summary page only)
+        "display_scale": 1.0,
+        "display_currency": info.get("currency"),
+    }
+
+
+def _summary_force_usd_per_kg(p: dict | None) -> None:
+    if not p:
+        return
+    nm = str(p.get("name", "")).lower()
+    if not ("polyester" in nm or "viscose" in nm):
+        return
+
+    cur = str(p.get("display_currency") or p.get("info", {}).get("currency", ""))
+    cur_lower = cur.lower()
+    scale0 = float(p.get("display_scale", 1.0) or 1.0)
+    uom_scale = 1.0
+
+    # If current unit is /lb, convert to /kg
+    if "/lb" in cur_lower:
+        uom_scale *= 2.20462262185  # USD/lb -> USD/kg
+        cur = cur.replace("/lb", "/kg").replace("/LB", "/kg").replace("/Lb", "/kg")
+
+    # If current unit is /ton, convert to /kg
+    if "/ton" in cur_lower:
+        uom_scale *= 1.0 / 1000.0
+        cur = cur.replace("/ton", "/kg").replace("/TON", "/kg").replace("/Ton", "/kg")
+
+    # Ensure USD prefix (for Summary consistency)
+    if "USD" not in cur:
+        cur = cur.replace("PKR", "USD", 1) if "PKR" in cur else f"USD ({cur})"
+
+    p["display_scale"] = scale0 * uom_scale
+    p["display_currency"] = cur
+
+
+def _summary_apply_local_usd_conversion(*, local_payload: dict | None, usd_pkr_rate: float | None) -> None:
+    if not local_payload:
+        return
+    if not usd_pkr_rate or usd_pkr_rate <= 0:
+        return
+
+    base_scale = 1.0 / float(usd_pkr_rate)
+    cur = str(local_payload["info"].get("currency", ""))
+
+    # Keep UOM consistent and market-practice.
+    # - Cotton: Local is PKR/maund, convert to USD/lb (1 maund = 40kg = 88.1849 lb).
+    # - If any legacy local series still uses /ton while CEO wants /kg, convert /ton -> /kg (÷1000).
+    uom_scale = 1.0
+    cur_uom = cur
+    cur_lower = cur.lower()
+
+    if "cotton" in str(local_payload.get("name", "")).lower() and "/maund" in cur_lower:
+        maund_lb = 40.0 * 2.20462262185
+        uom_scale = 1.0 / maund_lb
+        cur_uom = cur_uom.replace("/maund", "/lb").replace("/MAUND", "/lb").replace("/Maund", "/lb")
+    elif (
+        "polyester" in str(local_payload.get("name", "")).lower()
+        or "viscose" in str(local_payload.get("name", "")).lower()
+    ) and "/ton" in cur_lower:
+        uom_scale = 1.0 / 1000.0
+        cur_uom = cur_uom.replace("/ton", "/kg").replace("/TON", "/kg").replace("/Ton", "/kg")
+
+    cur_usd = cur_uom.replace("PKR", "USD", 1) if "PKR" in cur_uom else f"USD ({cur_uom})"
+    local_payload["display_scale"] = base_scale * uom_scale
+    local_payload["display_currency"] = cur_usd
+
+    # Apply Summary-only Polyester/Viscose USD/kg override after FX conversion too
+    _summary_force_usd_per_kg(local_payload)
+
+
+def build_summary_commodity_payloads(*, show_local_in_usd: bool, usd_pkr_rate: float | None) -> tuple[list[dict], list[dict]]:
+    all_summary: list[dict] = []
+    commodity_payloads: list[dict] = []
+
+    for int_name, local_name in SUMMARY_COMMODITY_PAIRS:
+        int_payload = build_commodity_payload(int_name, INTERNATIONAL_COMMODITIES)
+        local_payload = build_commodity_payload(local_name, LOCAL_COMMODITIES) if local_name else None
+
+        _summary_force_usd_per_kg(int_payload)
+        _summary_force_usd_per_kg(local_payload)
+
+        if show_local_in_usd:
+            _summary_apply_local_usd_conversion(local_payload=local_payload, usd_pkr_rate=usd_pkr_rate)
+
+        if int_payload:
+            all_summary.append(
+                {
+                    "name": int_payload["name"],
+                    "change_1m": int_payload["pred_1m"].get("change", 0) if int_payload["pred_1m"] else 0,
+                    "trend": int_payload["price_change"],
+                    "market": "International",
+                }
+            )
+
+        if local_payload:
+            all_summary.append(
+                {
+                    "name": local_payload["name"],
+                    "change_1m": local_payload["pred_1m"].get("change", 0) if local_payload["pred_1m"] else 0,
+                    "trend": local_payload["price_change"],
+                    "market": "Local",
+                }
+            )
+
+        commodity_payloads.append(
+            {
+                "int_name": int_name,
+                "local_name": local_name,
+                "int_payload": int_payload,
+                "local_payload": local_payload,
+            }
+        )
+
+    return commodity_payloads, all_summary
 
 
 def get_critical_alerts(events: dict) -> list:
@@ -3551,10 +3722,12 @@ def render_executive_summary():
     # Smart Call/Put advisor (replaces the older compounding simulator)
     st.markdown("---")
     render_call_put_hedge_advisor(
-        expander_title="🧠 Call/Put Hedge Advisor (Smart Suggestion)",
+        expander_title="🧠 Options Hedge — Portfolio View (Auto)",
         expanded=False,
         key_prefix="summary_cp",
         commodity_payloads=commodity_payloads,
+        variant="portfolio",
+        use_expander=True,
     )
     
     # === OVERALL SUMMARY - Key insights across all commodities ===
@@ -3779,7 +3952,7 @@ def render_intelligence_page(events: dict):
                 """, unsafe_allow_html=True)
 
     st.markdown("---")
-    st.info("Call/Put Hedge Advisor is available on 📊 Executive Summary.")
+    st.info("Options Hedge Advisor: Portfolio View is on 📊 Executive Summary; full Strategist view is on 🤖 AI Predictions.")
 
 
 if __name__ == "__main__":
