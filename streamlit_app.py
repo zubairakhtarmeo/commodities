@@ -1984,9 +1984,18 @@ def render_call_put_hedge_advisor(
                 put_title_short = put_strat.get('title', '—').replace('BUY ', '').replace('SELL ', '')[:20]
                 proc_short = str(r.get('proc_decision','—')).replace('procurement', 'proc').replace('Phased Procurement Allocation', 'Phased')[:30]
                 
+                # Urgency indicator
+                urgency_raw = r.get("when")
+                if "IMMEDIATE" in str(urgency_raw):
+                    urgency_icon = "🔴"
+                elif "NEAR" in str(urgency_raw):
+                    urgency_icon = "🟡"
+                else:
+                    urgency_icon = "🟢"
+                
                 rows.append(
                     {
-                        "⚡": r.get("when")[:4],  # First 4 chars: IMME, NEAR, MONI
+                        "⚡": urgency_icon,
                         "Commodity": r.get("label"),
                         "Horizon": r.get("horizon"),
                         "Spot": f"{s0:,.{dec}f}",
@@ -2003,26 +2012,37 @@ def render_call_put_hedge_advisor(
 
             dfp = pd.DataFrame(rows)
 
+            def _urgency_style(val) -> str:
+                if val == "🔴":
+                    return "background-color: #dc2626; color: white; font-weight: 900; text-align: center;"
+                if val == "🟡":
+                    return "background-color: #f59e0b; color: white; font-weight: 900; text-align: center;"
+                return "background-color: #10b981; color: white; font-weight: 900; text-align: center;"
+
             def _chg_style(val) -> str:
                 try:
                     v = float(val)
                 except Exception:
                     return ""
-                if v >= 0:
-                    return "background-color: #052e16; color: #dcfce7; font-weight: 800;"
-                return "background-color: #3f1d1d; color: #fee2e2; font-weight: 800;"
+                if v >= 3:
+                    return "background-color: #052e16; color: #dcfce7; font-weight: 900;"
+                elif v >= 0:
+                    return "background-color: #14532d; color: #dcfce7; font-weight: 800;"
+                elif v <= -3:
+                    return "background-color: #7f1d1d; color: #fee2e2; font-weight: 900;"
+                return "background-color: #991b1b; color: #fee2e2; font-weight: 800;"
 
             styled = (
                 dfp.style
-                .applymap(_timing_style, subset=["⚡"])
+                .applymap(_urgency_style, subset=["⚡"])
                 .applymap(_chg_style, subset=["Δ%"])
                 .set_properties(
                     **{
                         "text-align": "left",
-                        "font-size": "0.80rem",
-                        "font-weight": "600",
-                        "padding": "8px 10px",
-                        "border": "1px solid rgba(148,163,184,0.20)",
+                        "font-size": "0.8rem",
+                        "font-weight": "700",
+                        "padding": "10px 12px",
+                        "border": "1px solid rgba(148,163,184,0.15)",
                     }
                 )
                 .set_table_styles(
@@ -2030,25 +2050,36 @@ def render_call_put_hedge_advisor(
                         {
                             "selector": "thead th",
                             "props": [
-                                ("background-color", "#0b1220"),
-                                ("color", "#e5e7eb"),
-                                ("font-weight", "800"),
-                                ("padding", "10px"),
-                                ("font-size", "0.70rem"),
+                                ("background", "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)"),
+                                ("color", "#f1f5f9"),
+                                ("font-weight", "900"),
+                                ("padding", "12px"),
+                                ("font-size", "0.75rem"),
                                 ("text-transform", "uppercase"),
-                                ("border", "1px solid rgba(148,163,184,0.25)"),
+                                ("letter-spacing", "0.5px"),
+                                ("border", "1px solid rgba(148,163,184,0.3)"),
                             ],
                         },
                         {
                             "selector": "tbody tr:hover",
-                            "props": [("background-color", "rgba(59,130,246,0.10)")],
+                            "props": [
+                                ("background-color", "rgba(59,130,246,0.12)"),
+                                ("transform", "scale(1.01)"),
+                                ("box-shadow", "0 4px 6px rgba(0,0,0,0.1)"),
+                            ],
+                        },
+                        {
+                            "selector": "tbody td",
+                            "props": [
+                                ("background-color", "rgba(248,250,252,0.5)"),
+                            ],
                         },
                     ]
                 )
             )
 
-            st.caption("📞 CALL = Cap procurement cost | 📉 PUT = Protect selling price floor | ⚡ = Urgency: IMME=Immediate, NEAR=Near-term, MONI=Monitor")
-            st.dataframe(styled, use_container_width=True, height=360)
+            st.caption("📞 CALL = Cap procurement cost | 📉 PUT = Protect selling price floor | ⚡ = 🔴 Immediate 🟡 Near-term 🟢 Monitor")
+            st.dataframe(styled, use_container_width=True, height=400)
             return
 
         top = recs[0] if recs else None
@@ -2097,20 +2128,52 @@ def render_call_put_hedge_advisor(
         # Extract key numbers from proc_schedule for compact display
         import re
         phase_match = re.findall(r'(\d+)%', proc_schedule)
-        phases_summary = " → ".join([f"{p}%" for p in phase_match[:3]]) if phase_match else "Standard cadence"
         
-        st.markdown("<div class='cp-kv-label'>Structured Sourcing Schedule</div>", unsafe_allow_html=True)
+        st.markdown("<div class='cp-kv-label' style='margin-top: 0.5rem;'>Structured Sourcing Schedule</div>", unsafe_allow_html=True)
         
-        # Compact table instead of verbose text
-        sched_df = pd.DataFrame([
-            {"📋 Decision": proc_decision, "⏱️ Timing": proc_window, "📊 Rationale": proc_rationale, "🎯 Allocation": phases_summary}
-        ])
-        st.dataframe(sched_df, use_container_width=True, hide_index=True, height=85)
+        # Visual card layout with color-coded sections
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.markdown(f"""
+<div style='background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); 
+            padding: 1rem; border-radius: 8px; color: white; margin-bottom: 0.5rem;'>
+    <div style='font-size: 0.7rem; font-weight: 600; opacity: 0.9; margin-bottom: 0.3rem;'>📋 DECISION</div>
+    <div style='font-size: 1rem; font-weight: 900;'>{proc_decision}</div>
+</div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown(f"""
+<div style='background: linear-gradient(135deg, #10b981 0%, #059669 100%); 
+            padding: 1rem; border-radius: 8px; color: white;'>
+    <div style='font-size: 0.7rem; font-weight: 600; opacity: 0.9; margin-bottom: 0.3rem;'>⏱️ TIMING</div>
+    <div style='font-size: 0.95rem; font-weight: 800;'>{proc_window}</div>
+</div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+<div style='background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); 
+            padding: 1rem; border-radius: 8px; color: white; margin-bottom: 0.5rem;'>
+    <div style='font-size: 0.7rem; font-weight: 600; opacity: 0.9; margin-bottom: 0.3rem;'>📊 RATIONALE</div>
+    <div style='font-size: 0.95rem; font-weight: 800;'>{proc_rationale}</div>
+</div>
+            """, unsafe_allow_html=True)
+            
+            # Phase allocation visualization
+            if phase_match:
+                phases_html = " → ".join([f"<span style='background: rgba(255,255,255,0.3); padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 900;'>{p}%</span>" for p in phase_match[:3]])
+                st.markdown(f"""
+<div style='background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); 
+            padding: 1rem; border-radius: 8px; color: white;'>
+    <div style='font-size: 0.7rem; font-weight: 600; opacity: 0.9; margin-bottom: 0.3rem;'>🎯 ALLOCATION PHASES</div>
+    <div style='font-size: 0.9rem; font-weight: 800;'>{phases_html}</div>
+</div>
+                """, unsafe_allow_html=True)
         
         # Optional: Full details in expander
         if proc_schedule and proc_schedule != "—" and len(proc_schedule) > 50:
-            with st.expander("📄 Full Execution Details", expanded=False):
-                st.caption(proc_schedule)
+            with st.expander("📄 Full Execution Strategy", expanded=False):
+                st.markdown(f"<div style='background: #f8fafc; padding: 0.75rem; border-radius: 6px; font-size: 0.85rem; line-height: 1.6;'>{proc_schedule}</div>", unsafe_allow_html=True)
 
         kv1, kv2, kv3 = st.columns(3)
         with kv1:
@@ -2741,48 +2804,80 @@ def render_integrated_strategy_engine(
                 st.info(empty_msg)
                 return
             
-            # Convert verbose cards to compact table format
-            table_data = []
-            for r in rows:
+            # Professional card-based layout with visual hierarchy
+            for r in rows[:12]:  # Show top 12
                 priority = str(r.get("Priority", "Low"))
+                commodity = str(r.get("Commodity") or "—")
                 
-                # Shorten decision text to key action
+                # Extract key info
                 decision = str(r.get("Decision") or "—")
                 if "Structured Sourcing Schedule:" in decision:
-                    decision = decision.split("Structured Sourcing Schedule:")[1].split("|")[0].strip()[:40]
+                    decision = decision.split("Structured Sourcing Schedule:")[1].split("|")[0].strip()
                 
                 when_txt = str(r.get("When") or "—")
                 if "Procurement Timing Strategy:" in when_txt:
-                    when_txt = when_txt.split("Procurement Timing Strategy:")[1].split("·")[0].strip()[:30]
+                    when_txt = when_txt.split("Procurement Timing Strategy:")[1].split("·")[0].strip()
                 
-                table_data.append({
-                    "⚡": "🔴" if priority == "High" else ("🟡" if priority == "Medium" else "🟢"),
-                    "Commodity": str(r.get("Commodity") or "—"),
-                    "Action": decision,
-                    "Timing": when_txt,
-                    "Priority": priority,
-                })
+                why_txt = str(r.get("Why") or "—")
+                
+                # Priority styling
+                if priority == "High":
+                    badge_color = "#dc2626"
+                    badge_icon = "🔴"
+                    border_color = "#dc2626"
+                elif priority == "Medium":
+                    badge_color = "#f59e0b"
+                    badge_icon = "🟡"
+                    border_color = "#f59e0b"
+                else:
+                    badge_color = "#10b981"
+                    badge_icon = "🟢"
+                    border_color = "#10b981"
+                
+                # Compact visual card
+                st.markdown(f"""
+<div style='background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); 
+            border-left: 5px solid {border_color}; 
+            border-radius: 8px; 
+            padding: 1rem 1.25rem; 
+            margin-bottom: 0.75rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);'>
+    <div style='display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;'>
+        <div style='flex: 1;'>
+            <div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;'>
+                <span style='font-size: 1.1rem; font-weight: 900; color: #0f172a;'>{commodity}</span>
+                <span style='background: {badge_color}; color: white; padding: 0.15rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 800;'>{badge_icon} {priority}</span>
+            </div>
+            <div style='background: rgba(59,130,246,0.08); padding: 0.5rem 0.75rem; border-radius: 6px; margin-bottom: 0.4rem;'>
+                <div style='font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.15rem;'>Action</div>
+                <div style='font-size: 0.9rem; font-weight: 700; color: #1e293b;'>{decision}</div>
+            </div>
+            <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;'>
+                <div style='background: rgba(16,185,129,0.08); padding: 0.4rem 0.6rem; border-radius: 4px;'>
+                    <div style='font-size: 0.7rem; font-weight: 600; color: #64748b;'>⏰ Timing</div>
+                    <div style='font-size: 0.8rem; font-weight: 700; color: #0f172a;'>{when_txt[:35]}</div>
+                </div>
+                <div style='background: rgba(249,115,22,0.08); padding: 0.4rem 0.6rem; border-radius: 4px;'>
+                    <div style='font-size: 0.7rem; font-weight: 600; color: #64748b;'>📊 Rationale</div>
+                    <div style='font-size: 0.8rem; font-weight: 700; color: #0f172a;'>{why_txt[:35]}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+                """, unsafe_allow_html=True)
             
-            summary_df = pd.DataFrame(table_data)
-            st.dataframe(summary_df, use_container_width=True, hide_index=True, height=min(400, len(table_data) * 45 + 50))
-            
-            # Full details in expander instead of cluttering main view
-            with st.expander("📋 View Full Execution Details", expanded=False):
-                for r in rows[:8]:  # Limit to top 8 to avoid overload
-                    commodity = str(r.get("Commodity") or "—")
-                    priority = str(r.get("Priority", "Low"))
-                    
-                    priority_color = "#16a34a" if priority == "High" else ("#2563eb" if priority == "Medium" else "#64748b")
-                    
-                    st.markdown(f"**{commodity}** <span style='color:{priority_color};font-weight:800;'>[{priority}]</span>", unsafe_allow_html=True)
-                    
-                    detail_df = pd.DataFrame([{
-                        "Field": k,
-                        "Value": str(v)[:120] + ("..." if len(str(v)) > 120 else "")
-                    } for k, v in r.items() if k not in ["Commodity", "Priority"] and str(v) != "—"])
-                    
-                    st.dataframe(detail_df, use_container_width=True, hide_index=True, height=min(250, len(detail_df) * 40 + 50))
-                    st.markdown("---")
+            # Full details in expander
+            if len(rows) > 0:
+                with st.expander("📋 View Full Execution Details", expanded=False):
+                    for r in rows[:8]:
+                        st.markdown(f"#### {r.get('Commodity', '—')}")
+                        detail_df = pd.DataFrame([{
+                            "Field": k,
+                            "Value": str(v)
+                        } for k, v in r.items() if k != "Commodity" and str(v) != "—"])
+                        st.dataframe(detail_df, use_container_width=True, hide_index=True)
+                        st.markdown("---")
 
         # Build candidate list
         candidates: list[dict] = []
