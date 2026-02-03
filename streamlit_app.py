@@ -2516,10 +2516,10 @@ def render_integrated_strategy_engine(
 <div class="cp-card" style="padding: 1.0rem 1.0rem;">
   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
     <div>
-      <div class="cp-title">Institutional Strategy Recommendations</div>
-      <div class="cp-subtitle">Combines <b>forecast</b>, <b>cost‑of‑carry</b>, <b>options parity</b>, and <b>risk filters</b> into Hedge / Speculative / Arbitrage recommendations.</div>
+            <div class="cp-title">Independent Strategist — Auto Recommendations</div>
+            <div class="cp-subtitle">Uses <b>price forecasts</b> and <b>risk signals</b> to recommend <b>when to buy</b> and <b>how to hedge</b> (no user inputs required).</div>
     </div>
-    <div class="cp-pill cp-pill-hold">Hull‑Style</div>
+        <div class="cp-pill cp-pill-hold">AUTO</div>
   </div>
 </div>
             """,
@@ -2530,43 +2530,15 @@ def render_integrated_strategy_engine(
             st.info("No commodities available.")
             return
 
-        # Global knobs
-        g1, g2, g3, g4 = st.columns([1.0, 1.0, 1.0, 1.2])
-        with g1:
-            r = st.number_input("Risk‑free r (annual)", min_value=0.0, max_value=0.25, value=0.05, step=0.005, format="%.3f", key=f"{key_prefix}_r")
-        with g2:
-            storage_cost = st.number_input("Storage u (annual)", min_value=0.0, max_value=0.50, value=0.00, step=0.005, format="%.3f", key=f"{key_prefix}_u")
-        with g3:
-            convenience_yield = st.number_input("Convenience y (annual)", min_value=0.0, max_value=0.50, value=0.00, step=0.005, format="%.3f", key=f"{key_prefix}_y")
-        with g4:
-            forecast_sig = st.number_input("Forecast significance (%)", min_value=0.5, max_value=25.0, value=3.0, step=0.5, format="%.1f", key=f"{key_prefix}_f_sig")
+        # No user inputs: fully automatic engine.
+        # (Optional internal diagnostics can be enabled via Streamlit secrets/env without exposing UI controls.)
+        debug_flag = str(_get_streamlit_secret("STRATEGY_DEBUG") or "").strip().lower()
+        debug_mode = debug_flag in {"1", "true", "yes", "y"}
 
-        h1, h2, h3, h4 = st.columns([1.0, 1.0, 1.0, 1.2])
-        with h1:
-            mispricing_thr_pct = st.number_input("Arb threshold (% of Spot)", min_value=0.1, max_value=10.0, value=1.0, step=0.1, format="%.1f", key=f"{key_prefix}_arb_thr")
-        with h2:
-            costs_bps = st.number_input("Txn costs (bps)", min_value=0.0, max_value=200.0, value=25.0, step=5.0, format="%.0f", key=f"{key_prefix}_costs")
-        with h3:
-            allow_short_spot = st.checkbox("Short spot possible", value=False, key=f"{key_prefix}_short")
-        with h4:
-            storage_feasible = st.checkbox("Storage feasible", value=False, key=f"{key_prefix}_storage_ok")
+        # Internal defaults (kept conservative; do not expose as UI knobs)
+        forecast_sig = 3.0
 
-        # Executive vs detailed view (controls how much UI we show)
-        view_mode = st.radio(
-            "View",
-            ["Executive", "Detailed"],
-            index=0,
-            horizontal=True,
-            key=f"{key_prefix}_view",
-            help="Executive = simple decisions. Detailed = full Hull/carry/parity and optional broker quotes.",
-        )
-
-        st.caption(
-            "Executive view shows only simple recommendations. "
-            "Detailed view optionally accepts broker quotes to run true arbitrage/parity checks."
-        )
-
-        # Build candidate list and default quote sheet
+        # Build candidate list
         candidates: list[dict] = []
         for item in commodity_payloads:
             for side in ("int_payload", "local_payload"):
@@ -2578,65 +2550,8 @@ def render_integrated_strategy_engine(
             st.info("No commodities available.")
             return
 
-        base_rows: list[dict] = []
-        for c in candidates[:12]:
-            p = c["payload"]
-            scale = float(p.get("display_scale", 1.0) or 1.0)
-            unit = str(p.get("display_currency") or p.get("info", {}).get("currency", ""))
-            s0 = float(p.get("current_price") or 0.0) * scale
-            asset_type = _asset_type_from_label(c["label"])
-
-            curve = _extract_forecast_curve_from_payload(payload=p, max_months=24)
-            months_default = 6
-            if curve:
-                months_default = int(curve[min(len(curve) - 1, 5)].get("months", 6))
-
-            base_rows.append(
-                {
-                    "Asset": c["label"],
-                    "Asset Type": asset_type,
-                    "Spot": s0,
-                    "Maturity (months)": int(months_default),
-                    "Futures (Market)": np.nan,
-                    "Call (Market)": np.nan,
-                    "Put (Market)": np.nan,
-                    "Strike (K)": float(s0) if np.isfinite(s0) and s0 > 0 else np.nan,
-                    "Unit": unit,
-                }
-            )
-
-        quotes_key = f"{key_prefix}_quotes"
-        if quotes_key not in st.session_state or not isinstance(st.session_state.get(quotes_key), pd.DataFrame):
-            st.session_state[quotes_key] = pd.DataFrame(base_rows)
-
-        if str(view_mode) == "Detailed":
-            with st.expander("Broker quotes (optional) — enable Arbitrage Strategy", expanded=False):
-                st.caption("Only fill this if you have actual bank/broker futures & options quotes. Otherwise, ignore.")
-                edited = st.data_editor(
-                    st.session_state[quotes_key],
-                    use_container_width=True,
-                    hide_index=True,
-                    key=f"{key_prefix}_quotes_editor",
-                    column_config={
-                        "Asset Type": st.column_config.SelectboxColumn(options=["Commodity", "Currency", "Investment Asset"], help="Model used for theoretical forward/futures"),
-                        "Spot": st.column_config.NumberColumn(format="%.6f"),
-                        "Maturity (months)": st.column_config.NumberColumn(format="%.0f"),
-                        "Futures (Market)": st.column_config.NumberColumn(format="%.6f"),
-                        "Call (Market)": st.column_config.NumberColumn(format="%.6f"),
-                        "Put (Market)": st.column_config.NumberColumn(format="%.6f"),
-                        "Strike (K)": st.column_config.NumberColumn(format="%.6f"),
-                    },
-                    disabled=["Asset", "Spot", "Unit"],
-                )
-                st.session_state[quotes_key] = edited
-
-        # Build structured outputs
-        role_filter = st.multiselect(
-            "Show strategy roles",
-            ["Hedging Strategy", "Speculative Timing Strategy", "Arbitrage Strategy"],
-            default=["Hedging Strategy", "Speculative Timing Strategy", "Arbitrage Strategy"],
-            key=f"{key_prefix}_role_filter",
-        )
+        # Build structured outputs (no role selector; keep it simple)
+        role_filter = ["Hedging Strategy", "Speculative Timing Strategy"]
 
         outputs: list[dict] = []
         for c in candidates:
@@ -2780,214 +2695,105 @@ def render_integrated_strategy_engine(
                 except Exception:
                     pass
 
-            # Arbitrage strategy (Step 4/5) — requires quotes + risk filters
-            if "Arbitrage Strategy" in role_filter:
-                qdf = st.session_state.get(quotes_key)
-                qrow = None
-                try:
-                    if isinstance(qdf, pd.DataFrame) and "Asset" in qdf.columns:
-                        m = qdf["Asset"].astype(str) == str(label)
-                        if bool(m.any()):
-                            qrow = qdf[m].iloc[0].to_dict()
-                except Exception:
-                    qrow = None
-
-                if isinstance(qrow, dict):
-                    asset_type = str(qrow.get("Asset Type") or "Commodity")
-                    months = int(pd.to_numeric(qrow.get("Maturity (months)"), errors="coerce") or 6)
-                    t_years = float(max(1, months) / 12.0)
-                    f_mkt = pd.to_numeric(qrow.get("Futures (Market)"), errors="coerce")
-                    c_mkt = pd.to_numeric(qrow.get("Call (Market)"), errors="coerce")
-                    p_mkt = pd.to_numeric(qrow.get("Put (Market)"), errors="coerce")
-                    k = pd.to_numeric(qrow.get("Strike (K)"), errors="coerce")
-
-                    cost_per_unit = float(s0) * float(costs_bps) / 10000.0
-                    thr_abs = float(s0) * float(mispricing_thr_pct) / 100.0
-
-                    # (A) Futures vs model carry
-                    if pd.notna(f_mkt) and np.isfinite(float(f_mkt)):
-                        try:
-                            f_model = _theoretical_futures_price(
-                                asset_type=asset_type,
-                                s=s0,
-                                r=float(r),
-                                t_years=t_years,
-                                storage_cost=float(storage_cost),
-                                convenience_yield=float(convenience_yield),
-                            )
-                            mis = float(f_mkt) - float(f_model)
-                            edge = abs(mis)
-
-                            feasible = True
-                            risk_notes = "Liquidity, fees, margin, execution"
-                            if asset_type == "Commodity" and not storage_feasible:
-                                feasible = False
-                                risk_notes = "Rejected: storage not feasible for physical carry."
-                            if mis < 0 and not allow_short_spot:
-                                feasible = False
-                                risk_notes = "Rejected: requires short spot (cash-and-carry) which is not allowed."
-
-                            if edge <= (thr_abs + cost_per_unit):
-                                feasible = False
-                                risk_notes = "Rejected: edge too small after threshold + costs."
-
-                            if feasible:
-                                if mis < 0:
-                                    strat_name = "Cash-and-Carry Arbitrage"
-                                    steps = "Short spot; invest cash; LONG futures"
-                                else:
-                                    strat_name = "Reverse Cash-and-Carry"
-                                    steps = "LONG spot (financed); SHORT futures"
-
-                                decision = "Arbitrage (pricing mismatch)"
-                                when_txt = "Now"
-                                why_txt = f"Futures mispriced by {mis:+.{dec}f}"
-                                outputs.append(
-                                    {
-                                        "Asset Type": asset_type,
-                                        "Market Condition": "Arbitrage",
-                                        "Strategy Role": "Arbitrage Strategy",
-                                        "Strategy Name": strat_name,
-                                        "Decision": decision,
-                                        "When": when_txt,
-                                        "Why": why_txt,
-                                        "How": steps,
-                                        "Trade Construction Steps": steps,
-                                        "Financial Logic": f"F_market vs F_model mispricing = {mis:+.{dec}f} (edge {edge:.{dec}f}).",
-                                        "Expected Driver of Profit": "Convergence of futures toward theoretical fair value",
-                                        "Risk Notes": risk_notes,
-                                        "Confidence Level": "High" if edge >= 2 * (thr_abs + cost_per_unit) else "Medium",
-                                        "Commodity": label,
-                                        "Spot": f"{s0:,.{dec}f}",
-                                        "Unit": unit,
-                                    }
-                                )
-                        except Exception:
-                            pass
-
-                    # (B) Put-call parity / synthetic forward
-                    if all(pd.notna(x) for x in (c_mkt, p_mkt, k)) and np.isfinite(float(k)):
-                        try:
-                            c_f = float(c_mkt)
-                            p_f = float(p_mkt)
-                            k_f = float(k)
-                            gap = _put_call_parity_gap(c=c_f, p=p_f, s=s0, k=k_f, r=float(r), t_years=t_years)
-                            edge = abs(gap)
-
-                            feasible = True
-                            risk_notes = "Model/assumption risk, liquidity, execution"
-                            if edge <= (thr_abs + cost_per_unit):
-                                feasible = False
-                                risk_notes = "Rejected: parity gap too small after costs."
-
-                            if feasible:
-                                if gap < 0:
-                                    strat_name = "Synthetic Long Forward (Conversion)"
-                                    steps = "BUY Call, SELL Put (same K,T) + Buy Spot + Borrow PV(K)"
-                                else:
-                                    strat_name = "Synthetic Short Forward (Reversal)"
-                                    steps = "SELL Call, BUY Put (same K,T) + Short Spot + Lend PV(K)"
-
-                                implied_fwd = _implied_forward_from_put_call_parity(c=c_f, p=p_f, k=k_f, r=float(r), t_years=t_years)
-                                logic = f"Parity gap = {gap:+.{dec}f}. Implied forward ≈ {implied_fwd:,.{dec}f}."
-                                driver = "Parity convergence via replication/arbitrage"
-
-                                decision = "Arbitrage (parity mismatch)"
-                                when_txt = "Now"
-                                why_txt = f"Parity gap {gap:+.{dec}f}"
-
-                                outputs.append(
-                                    {
-                                        "Asset Type": asset_type,
-                                        "Market Condition": "Arbitrage",
-                                        "Strategy Role": "Arbitrage Strategy",
-                                        "Strategy Name": strat_name,
-                                        "Decision": decision,
-                                        "When": when_txt,
-                                        "Why": why_txt,
-                                        "How": steps,
-                                        "Trade Construction Steps": steps,
-                                        "Financial Logic": logic,
-                                        "Expected Driver of Profit": driver,
-                                        "Risk Notes": risk_notes,
-                                        "Confidence Level": "High" if edge >= 2 * (thr_abs + cost_per_unit) else "Medium",
-                                        "Commodity": label,
-                                        "Spot": f"{s0:,.{dec}f}",
-                                        "Unit": unit,
-                                    }
-                                )
-
-                                # Step 8: volatility distortion (informational)
-                                try:
-                                    hist_df = p.get("history_df")
-                                    vcol = p.get("info", {}).get("value_col") or p.get("value_col") or "value"
-                                    sigma_model = None
-                                    if isinstance(hist_df, pd.DataFrame) and vcol in hist_df.columns:
-                                        sigma_model = float(_annualized_volatility_from_history(hist_df[vcol]))
-                                    iv = _implied_volatility_bs(price=float(c_f), s=s0, k=k_f, t_years=t_years, opt_type="CALL")
-                                    if iv is not None and sigma_model is not None and np.isfinite(iv) and np.isfinite(sigma_model):
-                                        iv_gap = (iv - sigma_model) * 100.0
-                                        if abs(iv_gap) >= 10.0:
-                                            outputs.append(
-                                                {
-                                                    "Asset Type": asset_type,
-                                                    "Market Condition": "Forecast Opportunity",
-                                                    "Strategy Role": "Speculative Timing Strategy",
-                                                    "Strategy Name": "Volatility Distortion (Idea)",
-                                                    "Trade Construction Steps": "If IV is cheap: buy options; if IV is rich: consider spreads (policy permitting)",
-                                                    "Financial Logic": f"IV(call) {iv*100:.0f}% vs realized/model {sigma_model*100:.0f}% (gap {iv_gap:+.0f} vol pts).",
-                                                    "Expected Driver of Profit": "IV mean reversion / realized vs implied gap",
-                                                    "Risk Notes": "Vega risk, liquidity, model risk",
-                                                    "Confidence Level": "Low",
-                                                    "Commodity": label,
-                                                    "Spot": f"{s0:,.{dec}f}",
-                                                    "Unit": unit,
-                                                }
-                                            )
-                                except Exception:
-                                    pass
-
-                        except Exception:
-                            pass
-
         out_df = pd.DataFrame(outputs)
         if out_df.empty:
             st.info("No recommendations available (missing forecasts/inputs).")
             return
 
-        # Executive view: fewer, simpler columns
-        if str(view_mode) == "Executive":
-            st.markdown("<div class='cp-kv-label' style='margin-top: 0.5rem;'>Top Recommendations</div>", unsafe_allow_html=True)
-            st.caption("Simple decision summary. Open 'Detailed' view for full Hull/carry/parity math.")
+        # Executive output (always): fewer, simpler columns
+        st.markdown("<div class='cp-kv-label' style='margin-top: 0.5rem;'>Recommended Actions</div>", unsafe_allow_html=True)
+        st.caption("Generated automatically from forecasts and recent volatility.")
 
-            # Keep only the executive fields (if present)
-            exec_cols = ["Commodity", "Decision", "When", "Why", "How", "Confidence Level", "Strategy Role"]
-            exec_df = out_df.copy()
-            for col in exec_cols:
-                if col not in exec_df.columns:
-                    exec_df[col] = "—"
-            exec_df = exec_df[exec_cols]
+        # Keep only the executive fields (if present)
+        exec_cols = ["Commodity", "Decision", "When", "Why", "How", "Confidence Level", "Strategy Role"]
+        exec_df = out_df.copy()
+        for col in exec_cols:
+            if col not in exec_df.columns:
+                exec_df[col] = "—"
+        exec_df = exec_df[exec_cols]
 
-            # Split by role into tabs
-            t_spec, t_hedge, t_arb = st.tabs(["📈 Timing (Forecast)", "🛡️ Hedge", "⚖️ Arbitrage"])
+        # Split into two simple tabs
+        t_spec, t_hedge = st.tabs(["📈 Timing (Forecast)", "🛡️ Hedge"])
 
-            def _render_exec(df_in: pd.DataFrame, top_n: int = 10):
-                if df_in is None or df_in.empty:
-                    st.info("No items in this category right now.")
-                    return
-                df_show = df_in.head(int(top_n)).copy()
+        def _render_exec(df_in: pd.DataFrame, top_n: int = 10):
+            if df_in is None or df_in.empty:
+                st.info("No items in this category right now.")
+                return
+            df_show = df_in.head(int(top_n)).copy()
 
-                def _conf_style(v: str) -> str:
+            def _conf_style(v: str) -> str:
+                vv = str(v)
+                if "High" in vv:
+                    return "background-color:#052e16; color:#dcfce7; font-weight:900;"
+                if "Medium" in vv:
+                    return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
+                return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
+
+            styled_exec = (
+                df_show.style
+                .applymap(_conf_style, subset=["Confidence Level"])
+                .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
+                .set_table_styles(
+                    [
+                        {
+                            "selector": "thead th",
+                            "props": [
+                                ("background-color", "#0b1220"),
+                                ("color", "#e5e7eb"),
+                                ("font-weight", "900"),
+                                ("padding", "12px 12px"),
+                                ("font-size", "0.75rem"),
+                                ("text-transform", "uppercase"),
+                            ],
+                        }
+                    ]
+                )
+            )
+            st.dataframe(styled_exec, use_container_width=True, height=440)
+
+        with t_spec:
+            df = exec_df[exec_df["Strategy Role"] == "Speculative Timing Strategy"].drop(columns=["Strategy Role"], errors="ignore")
+            _render_exec(df)
+
+        with t_hedge:
+            df = exec_df[exec_df["Strategy Role"] == "Hedging Strategy"].drop(columns=["Strategy Role"], errors="ignore")
+            _render_exec(df)
+
+        # Optional internal diagnostics (no inputs)
+        if debug_mode:
+            with st.expander("Diagnostics (internal)", expanded=False):
+                st.caption("Enable by setting STRATEGY_DEBUG=1 in Streamlit secrets/env.")
+
+                ordered_cols = [
+                    "Asset Type",
+                    "Market Condition",
+                    "Strategy Role",
+                    "Strategy Name",
+                    "Decision",
+                    "When",
+                    "Why",
+                    "How",
+                    "Trade Construction Steps",
+                    "Financial Logic",
+                    "Expected Driver of Profit",
+                    "Risk Notes",
+                    "Confidence Level",
+                    "Commodity",
+                    "Spot",
+                    "Unit",
+                ]
+                cols = [c for c in ordered_cols if c in out_df.columns] + [c for c in out_df.columns if c not in ordered_cols]
+                diag_df = out_df[cols].copy()
+
+                def _role_style(v: str) -> str:
                     vv = str(v)
-                    if "High" in vv:
-                        return "background-color:#052e16; color:#dcfce7; font-weight:900;"
-                    if "Medium" in vv:
-                        return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
-                    return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
+                    if "Hedging" in vv:
+                        return "background-color:#064e3b; color:#dcfce7; font-weight:900;"
+                    return "background-color:#0b1220; color:#e5e7eb; font-weight:900;"
 
-                styled_exec = (
-                    df_show.style
-                    .applymap(_conf_style, subset=["Confidence Level"])
+                styled = (
+                    diag_df.style
+                    .applymap(_role_style, subset=["Strategy Role"])
                     .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
                     .set_table_styles(
                         [
@@ -3005,84 +2811,8 @@ def render_integrated_strategy_engine(
                         ]
                     )
                 )
-                st.dataframe(styled_exec, use_container_width=True, height=440)
+                st.dataframe(styled, use_container_width=True, height=520)
 
-            with t_spec:
-                df = exec_df[exec_df["Strategy Role"] == "Speculative Timing Strategy"].drop(columns=["Strategy Role"], errors="ignore")
-                _render_exec(df)
-
-            with t_hedge:
-                df = exec_df[exec_df["Strategy Role"] == "Hedging Strategy"].drop(columns=["Strategy Role"], errors="ignore")
-                _render_exec(df)
-
-            with t_arb:
-                df = exec_df[exec_df["Strategy Role"] == "Arbitrage Strategy"].drop(columns=["Strategy Role"], errors="ignore")
-                _render_exec(df)
-
-            st.caption("Arbitrage requires quotes + feasibility (storage/shorting/costs).")
-            return
-
-        # Keep the requested structured output first; extra columns at end.
-        ordered_cols = [
-            "Asset Type",
-            "Market Condition",
-            "Strategy Role",
-            "Strategy Name",
-            "Decision",
-            "When",
-            "Why",
-            "How",
-            "Trade Construction Steps",
-            "Financial Logic",
-            "Expected Driver of Profit",
-            "Risk Notes",
-            "Confidence Level",
-            "Commodity",
-            "Spot",
-            "Unit",
-        ]
-        cols = [c for c in ordered_cols if c in out_df.columns] + [c for c in out_df.columns if c not in ordered_cols]
-        out_df = out_df[cols]
-
-        def _conf_style(v: str) -> str:
-            vv = str(v)
-            if "High" in vv:
-                return "background-color:#052e16; color:#dcfce7; font-weight:900;"
-            if "Medium" in vv:
-                return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
-            return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
-
-        def _role_style(v: str) -> str:
-            vv = str(v)
-            if "Arbitrage" in vv:
-                return "background-color:#7c2d12; color:#fff7ed; font-weight:900;"
-            if "Hedging" in vv:
-                return "background-color:#064e3b; color:#dcfce7; font-weight:900;"
-            return "background-color:#0b1220; color:#e5e7eb; font-weight:900;"
-
-        styled = (
-            out_df.style
-            .applymap(_conf_style, subset=["Confidence Level"])
-            .applymap(_role_style, subset=["Strategy Role"])
-            .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
-            .set_table_styles(
-                [
-                    {
-                        "selector": "thead th",
-                        "props": [
-                            ("background-color", "#0b1220"),
-                            ("color", "#e5e7eb"),
-                            ("font-weight", "900"),
-                            ("padding", "12px 12px"),
-                            ("font-size", "0.75rem"),
-                            ("text-transform", "uppercase"),
-                        ],
-                    }
-                ]
-            )
-        )
-        st.dataframe(styled, use_container_width=True, height=520)
-        st.caption("Arbitrage rows require quotes and feasibility (storage/shorting/costs). Hedge + Speculative rows come from model forecasts and historical volatility.")
         return
 
 
@@ -5188,7 +4918,7 @@ def render_executive_summary():
     # Integrated strategist (Forecast + Carry/Parity + Risk filter)
     st.markdown("---")
     render_integrated_strategy_engine(
-        expander_title="🏛️ Institutional Strategy Engine (Forecast + Arbitrage + Hedge)",
+        expander_title="📌 Independent Strategist (Auto)",
         expanded=True,
         key_prefix="summary_institutional",
         commodity_payloads=commodity_payloads,
