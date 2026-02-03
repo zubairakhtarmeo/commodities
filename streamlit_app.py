@@ -2540,47 +2540,53 @@ def render_integrated_strategy_engine(
         # Internal defaults (kept conservative; do not expose as UI knobs)
         forecast_sig = 3.0
 
-                def _priority_badge(v: str) -> tuple[str, str]:
-                        vv = str(v)
-                        if "High" in vv:
-                                return ("HIGH", "#16a34a")
-                        if "Medium" in vv:
-                                return ("MEDIUM", "#2563eb")
-                        return ("LOW", "#0f172a")
+        def _priority_badge(v: str) -> tuple[str, str]:
+            vv = str(v)
+            if "High" in vv:
+                return ("HIGH", "#16a34a")
+            if "Medium" in vv:
+                return ("MEDIUM", "#2563eb")
+            return ("LOW", "#0f172a")
 
-                def _render_cards(rows: list[dict], *, empty_msg: str) -> None:
-                        if not rows:
-                                st.info(empty_msg)
-                                return
-                        cols = st.columns(2)
-                        for i, r in enumerate(rows):
-                                badge_txt, badge_color = _priority_badge(r.get("Priority", "Low"))
-                                decision = str(r.get("Decision") or "—")
-                                commodity = str(r.get("Commodity") or "—")
-                                when_txt = str(r.get("When") or "—")
-                                why_txt = str(r.get("Why") or "—")
-                                how_txt = str(r.get("How") or "—")
-                                extra_txt = str(r.get("Triggers") or "").strip()
+        def _render_cards(rows: list[dict], *, empty_msg: str) -> None:
+            if not rows:
+                st.info(empty_msg)
+                return
+            cols = st.columns(2)
+            for i, r in enumerate(rows):
+                badge_txt, badge_color = _priority_badge(r.get("Priority", "Low"))
+                decision = str(r.get("Decision") or "—")
+                commodity = str(r.get("Commodity") or "—")
+                when_txt = str(r.get("When") or "—")
+                why_txt = str(r.get("Why") or "—")
+                how_txt = str(r.get("How") or "—")
+                extra_txt = str(r.get("Triggers") or "").strip()
 
-                                card = f"""
+                triggers_html = (
+                    f"<div style='color:#475569; font-size: 0.82rem; margin-top: 0.35rem; line-height: 1.35;'><b>Triggers:</b> {extra_txt}</div>"
+                    if extra_txt
+                    else ""
+                )
+
+                card = f"""
 <div class='cp-card' style='padding: 0.95rem 1.0rem; border-left: 6px solid {badge_color};'>
-    <div style='display:flex; justify-content:space-between; align-items:flex-start; gap:12px;'>
-        <div style='flex:1;'>
-            <div style='font-weight: 900; font-size: 0.98rem; color:#0f172a; margin-bottom: 0.2rem;'>{commodity}</div>
-            <div style='font-weight: 900; font-size: 0.92rem; color:#111827; margin-bottom: 0.25rem;'>{decision}</div>
-            <div style='color:#334155; font-size: 0.85rem; margin-bottom: 0.25rem;'><b>When:</b> {when_txt}</div>
-            <div style='color:#334155; font-size: 0.85rem; margin-bottom: 0.25rem;'><b>Why:</b> {why_txt}</div>
-            <div style='color:#0f172a; font-size: 0.85rem; font-weight: 700; line-height: 1.35;'><b>Plan:</b> {how_txt}</div>
-            {f"<div style='color:#475569; font-size: 0.82rem; margin-top: 0.35rem; line-height: 1.35;'><b>Triggers:</b> {extra_txt}</div>" if extra_txt else ""}
-        </div>
-        <div style='white-space:nowrap; font-weight: 900; font-size: 0.72rem; padding: 0.28rem 0.5rem; border-radius: 999px; background: {badge_color}; color: white;'>
-            {badge_txt}
-        </div>
+  <div style='display:flex; justify-content:space-between; align-items:flex-start; gap:12px;'>
+    <div style='flex:1;'>
+      <div style='font-weight: 900; font-size: 0.98rem; color:#0f172a; margin-bottom: 0.2rem;'>{commodity}</div>
+      <div style='font-weight: 900; font-size: 0.92rem; color:#111827; margin-bottom: 0.25rem;'>{decision}</div>
+      <div style='color:#334155; font-size: 0.85rem; margin-bottom: 0.25rem;'><b>When:</b> {when_txt}</div>
+      <div style='color:#334155; font-size: 0.85rem; margin-bottom: 0.25rem;'><b>Why:</b> {why_txt}</div>
+      <div style='color:#0f172a; font-size: 0.85rem; font-weight: 700; line-height: 1.35;'><b>Plan:</b> {how_txt}</div>
+      {triggers_html}
     </div>
+    <div style='white-space:nowrap; font-weight: 900; font-size: 0.72rem; padding: 0.28rem 0.5rem; border-radius: 999px; background: {badge_color}; color: white;'>
+      {badge_txt}
+    </div>
+  </div>
 </div>
-                                """
-                                with cols[i % 2]:
-                                        st.markdown(card, unsafe_allow_html=True)
+                """
+                with cols[i % 2]:
+                    st.markdown(card, unsafe_allow_html=True)
 
         # Build candidate list
         candidates: list[dict] = []
