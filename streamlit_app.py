@@ -2818,7 +2818,7 @@ def render_integrated_strategy_engine(
                 df_show = out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"].copy()
                 cols_keep = ["Commodity", "Decision", "When", "Why", "How", "Triggers", "Priority"]
                 df_show = df_show[[c for c in cols_keep if c in df_show.columns]]
-                st.dataframe(df_show, use_container_width=True, hide_index=True)
+                st.dataframe(df_show, use_container_width=True)
 
         with t_hedge:
             _render_cards(hedge_rows[:12], empty_msg="No hedge playbooks available.")
@@ -2826,7 +2826,7 @@ def render_integrated_strategy_engine(
                 df_show = out_df[out_df["Strategy Role"] == "Hedging Strategy"].copy()
                 cols_keep = ["Commodity", "Decision", "When", "Why", "How", "Priority"]
                 df_show = df_show[[c for c in cols_keep if c in df_show.columns]]
-                st.dataframe(df_show, use_container_width=True, hide_index=True)
+                st.dataframe(df_show, use_container_width=True)
 
         # Optional internal diagnostics (no inputs)
         if debug_mode:
@@ -3358,7 +3358,7 @@ def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictio
             {'selector': 'tbody tr:nth-child(odd)', 'props': [('background-color', '#ffffff')]},
         ])
 
-        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=440)
+        st.dataframe(styled_df, use_container_width=True, height=440)
 
 
 @st.cache_data
@@ -3936,7 +3936,7 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
             ]}
         ])
         
-        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=440)
+        st.dataframe(styled_df, use_container_width=True, height=440)
     
     # Export to Excel button
     st.markdown("---")
@@ -4416,7 +4416,7 @@ def main():
                     ]}
                 ])
                 
-                st.dataframe(styled_df, use_container_width=True, hide_index=True, height=440)
+                st.dataframe(styled_df, use_container_width=True, height=440)
         
         # Electricity Forecast Section
         if 'Electricity' in live_data_values:
@@ -4480,7 +4480,7 @@ def main():
                     ]}
                 ])
                 
-                st.dataframe(styled_df, use_container_width=True, hide_index=True, height=440)
+                st.dataframe(styled_df, use_container_width=True, height=440)
         
         st.markdown("---")
         
