@@ -3272,19 +3272,6 @@ def render_integrated_strategy_engine(
         merged_rows.sort(key=lambda r: prio_rank.get(str(r.get("Priority")), 9))
         _render_cards(merged_rows[:12], empty_msg="No recommendations available.")
 
-        with st.expander("Trading Strategy Framework (details)", expanded=False):
-            st.markdown("#### Structured Sourcing Schedule")
-            df_show = out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"].copy()
-            cols_keep = ["Commodity", "Decision", "When", "Why", "How", "Triggers", "Priority"]
-            df_show = df_show[[c for c in cols_keep if c in df_show.columns]]
-            st.dataframe(df_show, use_container_width=True)
-
-            st.markdown("#### Establish Hedge Position (CALL/PUT)")
-            df_show2 = out_df[out_df["Strategy Role"] == "Hedging Strategy"].copy()
-            cols_keep2 = ["Commodity", "Strategy Name", "Decision", "When", "Why", "How", "Priority"]
-            df_show2 = df_show2[[c for c in cols_keep2 if c in df_show2.columns]]
-            st.dataframe(df_show2, use_container_width=True)
-
         # Optional internal diagnostics (no inputs)
         if debug_mode:
             with st.expander("Diagnostics (internal)", expanded=False):
