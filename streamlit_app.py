@@ -2551,7 +2551,20 @@ def render_integrated_strategy_engine(
         with h4:
             storage_feasible = st.checkbox("Storage feasible", value=False, key=f"{key_prefix}_storage_ok")
 
-        st.caption("Optional: paste market futures/options quotes to activate true no‑arbitrage (Arbitrage Strategy). Without quotes, we still produce Hedge + Speculative recommendations from forecasts.")
+        # Executive vs detailed view (controls how much UI we show)
+        view_mode = st.radio(
+            "View",
+            ["Executive", "Detailed"],
+            index=0,
+            horizontal=True,
+            key=f"{key_prefix}_view",
+            help="Executive = simple decisions. Detailed = full Hull/carry/parity and optional broker quotes.",
+        )
+
+        st.caption(
+            "Executive view shows only simple recommendations. "
+            "Detailed view optionally accepts broker quotes to run true arbitrage/parity checks."
+        )
 
         # Build candidate list and default quote sheet
         candidates: list[dict] = []
@@ -2596,34 +2609,26 @@ def render_integrated_strategy_engine(
         if quotes_key not in st.session_state or not isinstance(st.session_state.get(quotes_key), pd.DataFrame):
             st.session_state[quotes_key] = pd.DataFrame(base_rows)
 
-        with st.expander("Market quotes (optional) — for Arbitrage Strategy", expanded=False):
-            edited = st.data_editor(
-                st.session_state[quotes_key],
-                use_container_width=True,
-                hide_index=True,
-                key=f"{key_prefix}_quotes_editor",
-                column_config={
-                    "Asset Type": st.column_config.SelectboxColumn(options=["Commodity", "Currency", "Investment Asset"], help="Model type for futures fair value"),
-                    "Spot": st.column_config.NumberColumn(format="%.6f"),
-                    "Maturity (months)": st.column_config.NumberColumn(format="%.0f"),
-                    "Futures (Market)": st.column_config.NumberColumn(format="%.6f"),
-                    "Call (Market)": st.column_config.NumberColumn(format="%.6f"),
-                    "Put (Market)": st.column_config.NumberColumn(format="%.6f"),
-                    "Strike (K)": st.column_config.NumberColumn(format="%.6f"),
-                },
-                disabled=["Asset", "Spot", "Unit"],
-            )
-            st.session_state[quotes_key] = edited
-
-        # View + role filter
-        view_mode = st.radio(
-            "View",
-            ["Executive", "Detailed"],
-            index=0,
-            horizontal=True,
-            key=f"{key_prefix}_view",
-            help="Executive = simple decisions. Detailed = full Hull/carry/parity table.",
-        )
+        if str(view_mode) == "Detailed":
+            with st.expander("Broker quotes (optional) — enable Arbitrage Strategy", expanded=False):
+                st.caption("Only fill this if you have actual bank/broker futures & options quotes. Otherwise, ignore.")
+                edited = st.data_editor(
+                    st.session_state[quotes_key],
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"{key_prefix}_quotes_editor",
+                    column_config={
+                        "Asset Type": st.column_config.SelectboxColumn(options=["Commodity", "Currency", "Investment Asset"], help="Model used for theoretical forward/futures"),
+                        "Spot": st.column_config.NumberColumn(format="%.6f"),
+                        "Maturity (months)": st.column_config.NumberColumn(format="%.0f"),
+                        "Futures (Market)": st.column_config.NumberColumn(format="%.6f"),
+                        "Call (Market)": st.column_config.NumberColumn(format="%.6f"),
+                        "Put (Market)": st.column_config.NumberColumn(format="%.6f"),
+                        "Strike (K)": st.column_config.NumberColumn(format="%.6f"),
+                    },
+                    disabled=["Asset", "Spot", "Unit"],
+                )
+                st.session_state[quotes_key] = edited
 
         # Build structured outputs
         role_filter = st.multiselect(
