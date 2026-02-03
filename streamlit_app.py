@@ -2183,28 +2183,71 @@ def render_no_arbitrage_strategist(
             st.info("No commodities available.")
             return
 
-        # Optional quotes editor (bank/broker)
-        st.markdown("<div class='cp-kv-label' style='margin-top: 0.25rem;'>Market quotes (optional)</div>", unsafe_allow_html=True)
-        st.caption("Enter futures and/or option quotes (same unit as Spot). If left blank, we show 'inputs needed'.")
+        # Market quotes editor (bank/broker) + model fair values to avoid "empty" look.
+        st.markdown(
+            "<div class='cp-kv-label' style='margin-top: 0.25rem;'>Market Quotes (Optional)</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Paste/enter broker quotes in the editable columns (same unit as Spot). "
+            "We also compute fair values (carry + Black‑Scholes using historical vol) to benchmark mispricing."
+        )
 
-        base_rows = []
+        base_rows: list[dict] = []
         for c in candidates[:10]:
             p = c["payload"]
             scale = float(p.get("display_scale", 1.0) or 1.0)
             unit = str(p.get("display_currency") or p.get("info", {}).get("currency", ""))
             s0 = float(p.get("current_price") or 0.0) * scale
+
             best_h, _best_pred, months = _pick_best_horizon_for_payload(payload=p, exposure="Procurement (we will BUY later)")
             t_years = float(months) / 12.0
+            t_years = float(max(t_years, 1e-6))
+
+            k_atm = float(s0) if np.isfinite(s0) and s0 > 0 else np.nan
+            f_fair = (
+                _theoretical_futures_price_commodity(
+                    s=s0,
+                    r=float(r),
+                    storage_cost=float(storage_cost),
+                    convenience_yield=float(convenience_yield),
+                    t_years=t_years,
+                )
+                if np.isfinite(s0) and s0 > 0
+                else np.nan
+            )
+
+            sigma_model = np.nan
+            try:
+                hist_df = p.get("history_df")
+                vcol = p.get("info", {}).get("value_col") or p.get("value_col") or "value"
+                if isinstance(hist_df, pd.DataFrame) and vcol in hist_df.columns:
+                    sigma_model = float(_annualized_volatility_from_history(hist_df[vcol]))
+            except Exception:
+                sigma_model = np.nan
+
+            c_fair = np.nan
+            p_fair = np.nan
+            try:
+                if np.isfinite(s0) and s0 > 0 and np.isfinite(k_atm) and k_atm > 0 and np.isfinite(t_years) and t_years > 0 and np.isfinite(sigma_model) and sigma_model > 0:
+                    c_fair = float(_bs_price(s=s0, k=k_atm, t=t_years, sigma=float(sigma_model), opt_type="CALL"))
+                    p_fair = float(_bs_price(s=s0, k=k_atm, t=t_years, sigma=float(sigma_model), opt_type="PUT"))
+            except Exception:
+                c_fair, p_fair = np.nan, np.nan
+
             base_rows.append(
                 {
                     "Commodity": c["label"],
-                    "Target Month": str(best_h),
+                    "Target": str(best_h),
                     "T (yrs)": round(t_years, 3),
                     "Spot": s0,
-                    "Futures (Market)": np.nan,
-                    "Call (Market)": np.nan,
-                    "Put (Market)": np.nan,
-                    "Strike (K)": np.nan,
+                    "Futures Fair": f_fair,
+                    "Futures Quote": np.nan,
+                    "Strike (K)": k_atm,
+                    "Call Fair": c_fair,
+                    "Call Quote": np.nan,
+                    "Put Fair": p_fair,
+                    "Put Quote": np.nan,
                     "Unit": unit,
                 }
             )
@@ -2222,24 +2265,48 @@ def render_no_arbitrage_strategist(
         except Exception:
             st.session_state[ss_key] = default_quotes
 
-        edited = st.data_editor(
-            st.session_state[ss_key],
-            use_container_width=True,
-            hide_index=True,
-            key=f"{key_prefix}_editor",
-            column_config={
-                "Spot": st.column_config.NumberColumn(format="%.4f"),
-                "Futures (Market)": st.column_config.NumberColumn(format="%.4f"),
-                "Call (Market)": st.column_config.NumberColumn(format="%.4f"),
-                "Put (Market)": st.column_config.NumberColumn(format="%.4f"),
-                "Strike (K)": st.column_config.NumberColumn(format="%.4f"),
-                "T (yrs)": st.column_config.NumberColumn(format="%.3f"),
-            },
-            disabled=["Commodity", "Target Month", "T (yrs)", "Spot", "Unit"],
-        )
+        with st.expander("Enter / paste market quotes", expanded=False):
+            edited = st.data_editor(
+                st.session_state[ss_key],
+                use_container_width=True,
+                hide_index=True,
+                key=f"{key_prefix}_editor",
+                column_config={
+                    "Target": st.column_config.TextColumn(help="Model-selected horizon"),
+                    "T (yrs)": st.column_config.NumberColumn(format="%.3f"),
+                    "Spot": st.column_config.NumberColumn(format="%.4f"),
+                    "Futures Fair": st.column_config.NumberColumn(format="%.4f", help="Carry fair value (S·e^{(r+storage−cy)T})"),
+                    "Futures Quote": st.column_config.NumberColumn(format="%.4f", help="Broker/market futures quote"),
+                    "Strike (K)": st.column_config.NumberColumn(format="%.4f", help="Default = ATM (Spot). Adjust if quoting a different strike."),
+                    "Call Fair": st.column_config.NumberColumn(format="%.4f", help="Black‑Scholes fair premium using historical vol"),
+                    "Call Quote": st.column_config.NumberColumn(format="%.4f", help="Broker/market call premium"),
+                    "Put Fair": st.column_config.NumberColumn(format="%.4f", help="Black‑Scholes fair premium using historical vol"),
+                    "Put Quote": st.column_config.NumberColumn(format="%.4f", help="Broker/market put premium"),
+                },
+                disabled=["Commodity", "Target", "T (yrs)", "Spot", "Futures Fair", "Call Fair", "Put Fair", "Unit"],
+            )
         st.session_state[ss_key] = edited
 
-        # Build strategy outputs
+        # Build strategy outputs (only when at least one quote exists)
+        any_quotes = False
+        try:
+            any_quotes = bool(
+                (
+                    edited[["Futures Quote", "Call Quote", "Put Quote"]]
+                    .apply(pd.to_numeric, errors="coerce")
+                    .notna()
+                    .any()
+                    .any()
+                )
+            )
+        except Exception:
+            any_quotes = False
+
+        if not any_quotes:
+            st.info("Enter at least one Futures/Call/Put quote above to generate arbitrage & parity strategies.")
+            st.caption("Tip: Strike (K) is prefilled ATM to avoid blanks; adjust if you have a quoted strike.")
+            return
+
         outputs: list[dict] = []
         for _, row in edited.iterrows():
             try:
@@ -2250,18 +2317,22 @@ def render_no_arbitrage_strategist(
             except Exception:
                 continue
 
-            f_mkt = row.get("Futures (Market)")
-            c_mkt = row.get("Call (Market)")
-            p_mkt = row.get("Put (Market)")
+            f_mkt = row.get("Futures Quote")
+            c_mkt = row.get("Call Quote")
+            p_mkt = row.get("Put Quote")
             k = row.get("Strike (K)")
 
-            cond = "Inputs needed"
+            # Skip rows with no quotes to keep output clean
+            if not any(pd.notna(x) for x in (f_mkt, c_mkt, p_mkt)):
+                continue
+
+            opportunity = "—"
             strategy = "—"
-            trade = "Provide Futures and/or options quotes"
-            logic = "No-arbitrage engine needs market quotes to detect mispricing."
-            driver = "—"
-            risk = "Liquidity, fees, margin, execution, model assumptions"
-            confidence = "Low"
+            trade = "—"
+            signal = "—"
+            logic = "—"
+            risk = "Costs, funding/margin, execution, liquidity"
+            confidence = "Medium"
 
             # Step 1–3: Cost-of-carry futures mispricing
             if pd.notna(f_mkt) and np.isfinite(float(f_mkt)) and s0 > 0:
@@ -2276,25 +2347,25 @@ def render_no_arbitrage_strategist(
                 mis = f_mkt_f - f_th
                 mis_pct = (mis / f_th) * 100.0 if f_th else 0.0
                 if abs(mis_pct) < float(threshold_pct):
-                    cond = "Efficient (within threshold)"
+                    opportunity = "Efficient"
                     strategy = "No action"
                     trade = "—"
-                    logic = f"Market futures aligns with carry fair value. Mispricing {mis_pct:+.2f}%"
-                    driver = "—"
+                    signal = f"F_quote vs F_fair: {mis_pct:+.2f}%"
+                    logic = "Futures aligns with carry fair value within threshold."
                     confidence = "Medium"
                 elif mis_pct < 0:
-                    cond = "Forward Underpriced"
+                    opportunity = "Carry Mispricing"
                     strategy = "Cash‑and‑Carry Arbitrage"
                     trade = "Short spot, invest cash, long futures"
-                    logic = f"F_market below theoretical carry price by {mis_pct:+.2f}%."
-                    driver = "Convergence of futures toward carry fair value"
+                    signal = f"F_quote vs F_fair: {mis_pct:+.2f}%"
+                    logic = "Forward underpriced vs carry fair value."
                     confidence = "High" if abs(mis_pct) >= 2 * float(threshold_pct) else "Medium"
                 else:
-                    cond = "Forward Overpriced"
+                    opportunity = "Carry Mispricing"
                     strategy = "Reverse Cash‑and‑Carry"
                     trade = "Long spot (financed), short futures"
-                    logic = f"F_market above theoretical carry price by {mis_pct:+.2f}%."
-                    driver = "Convergence of futures toward carry fair value"
+                    signal = f"F_quote vs F_fair: {mis_pct:+.2f}%"
+                    logic = "Forward overpriced vs carry fair value."
                     confidence = "High" if abs(mis_pct) >= 2 * float(threshold_pct) else "Medium"
 
             # Step 4: Put-call parity / synthetic forward
@@ -2317,12 +2388,12 @@ def render_no_arbitrage_strategist(
                             parity_strat = "Conversion (Buy Synthetic Forward)"
                             parity_trade = "Buy Call, Sell Put (same K,T) + Short PV(K) + Buy Spot"
 
-                        # Attach as an 'options leg' suggestion (more actionable)
-                        cond = f"{cond} · {parity_cond}" if cond != "Inputs needed" else parity_cond
-                        strategy = f"{strategy} + {parity_strat}" if strategy not in ("—", "No action") else parity_strat
-                        trade = f"{trade} | Options: {parity_trade}" if trade not in ("—", "Provide Futures and/or options quotes") else parity_trade
-                        logic = f"Put‑call parity gap {gap_pct:+.2f}% of spot (should be ~0)."
-                        driver = "Parity convergence via replication / arbitrage"
+                        if opportunity == "—" or opportunity == "Efficient":
+                            opportunity = "Parity Distortion"
+                        strategy = parity_strat if strategy in ("—", "No action") else f"{strategy} + {parity_strat}"
+                        trade = parity_trade if trade == "—" else f"{trade} | Options: {parity_trade}"
+                        signal = f"Parity gap: {gap_pct:+.2f}% of spot"
+                        logic = "Put‑call parity violation (should be ~0 after carry + funding)."
                         confidence = "High" if abs(gap_pct) >= 2 * parity_thr else "Medium"
 
                     # Volatility mispricing (market IV vs model sigma)
@@ -2343,21 +2414,23 @@ def render_no_arbitrage_strategist(
                     if iv_call is not None and sigma_model is not None and np.isfinite(iv_call) and np.isfinite(sigma_model):
                         iv_gap = (iv_call - sigma_model) * 100.0
                         if abs(iv_gap) >= 10.0:
-                            cond = f"{cond} · Vol distorted" if cond != "Inputs needed" else "Vol distorted"
-                            strategy = f"{strategy} + Vol Relative‑Value" if strategy not in ("—", "No action") else "Vol Relative‑Value"
-                            logic = f"Implied vol {iv_call*100:.0f}% vs model vol {sigma_model*100:.0f}% (gap {iv_gap:+.0f} vol pts)."
-                            risk = "Model risk (IV vs realized), vega exposure, liquidity"
+                            if opportunity == "—" or opportunity == "Efficient":
+                                opportunity = "Vol Relative‑Value"
+                            strategy = "Vol Relative‑Value" if strategy in ("—", "No action") else f"{strategy} + Vol RV"
+                            signal = f"IV(call) − σ_model: {iv_gap:+.0f} vol pts"
+                            logic = f"Implied vol {iv_call*100:.0f}% vs model vol {sigma_model*100:.0f}%."
+                            risk = "Model risk, vega exposure, liquidity"
                 except Exception:
                     pass
 
             outputs.append(
                 {
-                    "Market Condition": cond,
                     "Commodity": commodity,
+                    "Opportunity": opportunity,
                     "Strategy": strategy,
-                    "Trade Construction": trade,
-                    "Financial Logic": logic,
-                    "Convergence Driver": driver,
+                    "Trade Steps": trade,
+                    "Key Signal": signal,
+                    "Rationale": logic,
                     "Risk Notes": risk,
                     "Confidence": confidence,
                 }
@@ -2365,6 +2438,15 @@ def render_no_arbitrage_strategist(
 
         st.markdown("<div class='cp-kv-label' style='margin-top: 0.75rem;'>Strategy Output</div>", unsafe_allow_html=True)
         out_df = pd.DataFrame(outputs)
+        if out_df.empty:
+            st.info("No actionable rows yet. Add a Futures/Call/Put quote for at least one commodity.")
+            return
+
+        try:
+            out_df["__conf_rank"] = out_df["Confidence"].map({"High": 2, "Medium": 1, "Low": 0}).fillna(1)
+            out_df = out_df.sort_values(["__conf_rank", "Commodity"], ascending=[False, True]).drop(columns=["__conf_rank"])
+        except Exception:
+            pass
 
         def _conf_style(v: str) -> str:
             vv = str(v)
