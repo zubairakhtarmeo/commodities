@@ -1979,19 +1979,24 @@ def render_call_put_hedge_advisor(
                     unit=unit,
                 )
 
+                # Compact display - extract only key info
+                call_title_short = call_strat.get('title', '—').replace('BUY ', '').replace('SELL ', '')[:20]
+                put_title_short = put_strat.get('title', '—').replace('BUY ', '').replace('SELL ', '')[:20]
+                proc_short = str(r.get('proc_decision','—')).replace('procurement', 'proc').replace('Phased Procurement Allocation', 'Phased')[:30]
+                
                 rows.append(
                     {
-                        "Urgency": r.get("when"),
+                        "⚡": r.get("when")[:4],  # First 4 chars: IMME, NEAR, MONI
                         "Commodity": r.get("label"),
-                        "Forward Maturity Target": r.get("horizon"),
-                        "Current Spot Market Price": f"{s0:,.{dec}f}",
-                        "Forecast": f"{s_mean:,.{dec}f}",
-                        "Move %": round(exp_ret, 1),
-                        "Vol %": round(sigma_ann * 100.0, 0),
-                        "Priority": round(float(r.get("score", 0.0)), 1),
-                        "Structured Sourcing Schedule": f"{r.get('proc_decision','—')} · {r.get('proc_window','—')}",
-                        "Establish Hedge Position (CALL — Cap Cost)": f"{call_strat.get('title', '—')} · {_legs_one_liner(call_strat.get('legs') or [], dec)}",
-                        "Establish Hedge Position (PUT — Protect Floor)": f"{put_strat.get('title', '—')} · {_legs_one_liner(put_strat.get('legs') or [], dec)}",
+                        "Horizon": r.get("horizon"),
+                        "Spot": f"{s0:,.{dec}f}",
+                        "Fcst": f"{s_mean:,.{dec}f}",
+                        "Δ%": round(exp_ret, 1),
+                        "Vol%": round(sigma_ann * 100.0, 0),
+                        "Score": round(float(r.get("score", 0.0)), 1),
+                        "🛒 Procurement": proc_short,
+                        "📞 CALL Hedge": call_title_short,
+                        "📉 PUT Hedge": put_title_short,
                         "Unit": unit,
                     }
                 )
@@ -2009,14 +2014,14 @@ def render_call_put_hedge_advisor(
 
             styled = (
                 dfp.style
-                .applymap(_timing_style, subset=["Urgency"])
-                .applymap(_chg_style, subset=["Move %"])
+                .applymap(_timing_style, subset=["⚡"])
+                .applymap(_chg_style, subset=["Δ%"])
                 .set_properties(
                     **{
                         "text-align": "left",
-                        "font-size": "0.85rem",
-                        "font-weight": "700",
-                        "padding": "10px 12px",
+                        "font-size": "0.80rem",
+                        "font-weight": "600",
+                        "padding": "8px 10px",
                         "border": "1px solid rgba(148,163,184,0.20)",
                     }
                 )
@@ -2027,9 +2032,9 @@ def render_call_put_hedge_advisor(
                             "props": [
                                 ("background-color", "#0b1220"),
                                 ("color", "#e5e7eb"),
-                                ("font-weight", "900"),
-                                ("padding", "12px 12px"),
-                                ("font-size", "0.75rem"),
+                                ("font-weight", "800"),
+                                ("padding", "10px"),
+                                ("font-size", "0.70rem"),
                                 ("text-transform", "uppercase"),
                                 ("border", "1px solid rgba(148,163,184,0.25)"),
                             ],
@@ -2042,7 +2047,7 @@ def render_call_put_hedge_advisor(
                 )
             )
 
-            st.caption("CALL hedge caps future procurement cost. PUT hedge protects selling price / downside. Premiums shown are rough estimates per unit.")
+            st.caption("📞 CALL = Cap procurement cost | 📉 PUT = Protect selling price floor | ⚡ = Urgency: IMME=Immediate, NEAR=Near-term, MONI=Monitor")
             st.dataframe(styled, use_container_width=True, height=360)
             return
 
@@ -2088,18 +2093,24 @@ def render_call_put_hedge_advisor(
         proc_window = str(top.get("proc_window") or "—")
         proc_rationale = str(top.get("proc_rationale") or "—")
         proc_schedule = str(top.get("proc_schedule") or "—")
-        st.markdown(
-            f"""
-<div class='cp-card' style='padding: 0.95rem 1.0rem;'>
-    <div class='cp-kv-label'>Structured Sourcing Schedule</div>
-    <div style='font-weight: 900; color:#0f172a; font-size: 0.95rem; margin-top: 0.15rem;'>{proc_decision}</div>
-    <div style='color:#334155; font-size: 0.85rem; margin-top: 0.2rem;'><b>Procurement Timing Strategy:</b> {proc_window}</div>
-    <div style='color:#334155; font-size: 0.85rem; margin-top: 0.2rem;'><b>Market Indicators:</b> {proc_rationale}</div>
-    <div style='color:#0f172a; font-size: 0.85rem; font-weight: 700; margin-top: 0.2rem; line-height: 1.35;'><b>Execution Strategy:</b> {proc_schedule}</div>
-</div>
-            """,
-            unsafe_allow_html=True,
-        )
+        
+        # Extract key numbers from proc_schedule for compact display
+        import re
+        phase_match = re.findall(r'(\d+)%', proc_schedule)
+        phases_summary = " → ".join([f"{p}%" for p in phase_match[:3]]) if phase_match else "Standard cadence"
+        
+        st.markdown("<div class='cp-kv-label'>Structured Sourcing Schedule</div>", unsafe_allow_html=True)
+        
+        # Compact table instead of verbose text
+        sched_df = pd.DataFrame([
+            {"📋 Decision": proc_decision, "⏱️ Timing": proc_window, "📊 Rationale": proc_rationale, "🎯 Allocation": phases_summary}
+        ])
+        st.dataframe(sched_df, use_container_width=True, hide_index=True, height=85)
+        
+        # Optional: Full details in expander
+        if proc_schedule and proc_schedule != "—" and len(proc_schedule) > 50:
+            with st.expander("📄 Full Execution Details", expanded=False):
+                st.caption(proc_schedule)
 
         kv1, kv2, kv3 = st.columns(3)
         with kv1:
@@ -2409,9 +2420,9 @@ def render_forecast_strategy_engine(
 
                         conf_raw = _confidence_from_interval(s0=s0, target_price=float(target["price"]), lower=target.get("lower"), upper=target.get("upper"))
                         conf = {
-                            "High": "Elevated Market Risk Classification",
-                            "Medium": "Moderate Risk Classification",
-                            "Low": "Lower Risk Classification",
+                            "High": "Elevated",
+                            "Medium": "Moderate",
+                            "Low": "Lower",
                         }.get(str(conf_raw), str(conf_raw))
                         exp_move = (float(target["price"]) / s0 - 1.0) * 100.0
 
@@ -2438,9 +2449,9 @@ def render_forecast_strategy_engine(
 
                         conf_raw = _confidence_from_interval(s0=s0, target_price=float(target["price"]), lower=target.get("lower"), upper=target.get("upper"))
                         conf = {
-                            "High": "Elevated Market Risk Classification",
-                            "Medium": "Moderate Risk Classification",
-                            "Low": "Lower Risk Classification",
+                            "High": "Elevated",
+                            "Medium": "Moderate",
+                            "Low": "Lower",
                         }.get(str(conf_raw), str(conf_raw))
                         exp_move = (float(target["price"]) / s0 - 1.0) * 100.0
 
@@ -2480,15 +2491,15 @@ def render_forecast_strategy_engine(
 
                     rows.append(
                         {
-                            "Strategic Positioning Directive": action,
+                            "🎯 Action": action[:40],  # Truncate long text
                             "Commodity": label,
-                            "Current Spot Market Price": round(s0, dec),
-                            "Forecast Path": path_str,
-                            "Execution Strategy": timing,
-                            "Expected Price Move (%)": round(exp_move, 1),
-                            "Structured Sourcing Schedule": primary,
-                            "Derivatives Hedge Structures": hedge,
-                            "Market Risk Classification": conf,
+                            "💰 Spot": round(s0, dec),
+                            "📈 Forecast": path_str[:30],  # Shorten path description
+                            "⏰ Timing": timing[:25],
+                            "Δ%": round(exp_move, 1),
+                            "🛒 Sourcing": primary[:40],
+                            "🛡️ Hedge": hedge[:50],  # Truncate hedge details
+                            "⚠️ Risk": conf.replace(" Market Risk Classification", ""),  # Shorten labels
                             "Unit": unit,
                         }
                     )
@@ -2499,13 +2510,13 @@ def render_forecast_strategy_engine(
 
             # Rank: strongest expected move first
             try:
-                df["__abs_move"] = df["Expected Price Move (%)"].abs()
+                df["__abs_move"] = df["Δ%"].abs()
                 conf_rank = {
-                    "Elevated Market Risk Classification": 2,
-                    "Moderate Risk Classification": 1,
-                    "Lower Risk Classification": 0,
+                    "Elevated": 2,
+                    "Moderate": 1,
+                    "Lower": 0,
                 }
-                df["__conf"] = df["Market Risk Classification"].map(conf_rank).fillna(1)
+                df["__conf"] = df["⚠️ Risk"].map(conf_rank).fillna(1)
                 df = df.sort_values(["__conf", "__abs_move"], ascending=[False, False]).drop(columns=["__abs_move", "__conf"])
             except Exception:
                 pass
@@ -2720,51 +2731,58 @@ def render_integrated_strategy_engine(
         def _priority_badge(v: str) -> tuple[str, str]:
             vv = str(v)
             if "High" in vv:
-                return ("Elevated Market Risk Classification", "#16a34a")
+                return ("Elevated", "#16a34a")
             if "Medium" in vv:
-                return ("Moderate Risk Classification", "#2563eb")
-            return ("Lower Risk Classification", "#0f172a")
+                return ("Moderate", "#2563eb")
+            return ("Lower", "#0f172a")
 
         def _render_cards(rows: list[dict], *, empty_msg: str) -> None:
             if not rows:
                 st.info(empty_msg)
                 return
-            cols = st.columns(2)
-            for i, r in enumerate(rows):
-                badge_txt, badge_color = _priority_badge(r.get("Priority", "Low"))
+            
+            # Convert verbose cards to compact table format
+            table_data = []
+            for r in rows:
+                priority = str(r.get("Priority", "Low"))
+                
+                # Shorten decision text to key action
                 decision = str(r.get("Decision") or "—")
-                commodity = str(r.get("Commodity") or "—")
+                if "Structured Sourcing Schedule:" in decision:
+                    decision = decision.split("Structured Sourcing Schedule:")[1].split("|")[0].strip()[:40]
+                
                 when_txt = str(r.get("When") or "—")
-                why_txt = str(r.get("Why") or "—")
-                how_txt = str(r.get("How") or "—")
-                extra_txt = str(r.get("Triggers") or "").strip()
-
-                triggers_html = (
-                    f"<div style='color:#475569; font-size: 0.82rem; margin-top: 0.35rem; line-height: 1.35;'><b>Risk Activation Thresholds:</b> {extra_txt}</div>"
-                    if extra_txt
-                    else ""
-                )
-
-                card = f"""
-<div class='cp-card' style='padding: 0.95rem 1.0rem; border-left: 6px solid {badge_color};'>
-  <div style='display:flex; justify-content:space-between; align-items:flex-start; gap:12px;'>
-    <div style='flex:1;'>
-      <div style='font-weight: 900; font-size: 0.98rem; color:#0f172a; margin-bottom: 0.2rem;'>{commodity}</div>
-      <div style='font-weight: 900; font-size: 0.92rem; color:#111827; margin-bottom: 0.25rem;'>{decision}</div>
-      <div style='color:#334155; font-size: 0.85rem; margin-bottom: 0.25rem;'><b>When:</b> {when_txt}</div>
-      <div style='color:#334155; font-size: 0.85rem; margin-bottom: 0.25rem;'><b>Why:</b> {why_txt}</div>
-            <div style='color:#0f172a; font-size: 0.85rem; font-weight: 700; line-height: 1.35;'><b>Execution Strategy:</b> {how_txt}</div>
-      {triggers_html}
-    </div>
-        <div style='max-width: 190px; text-align:center; white-space:normal; font-weight: 900; font-size: 0.72rem; padding: 0.28rem 0.5rem; border-radius: 999px; background: {badge_color}; color: white; line-height: 1.2;'>
-      {badge_txt}
-    </div>
-  </div>
-</div>
-                """
-
-                with cols[i % 2]:
-                    st.markdown(card, unsafe_allow_html=True)
+                if "Procurement Timing Strategy:" in when_txt:
+                    when_txt = when_txt.split("Procurement Timing Strategy:")[1].split("·")[0].strip()[:30]
+                
+                table_data.append({
+                    "⚡": "🔴" if priority == "High" else ("🟡" if priority == "Medium" else "🟢"),
+                    "Commodity": str(r.get("Commodity") or "—"),
+                    "Action": decision,
+                    "Timing": when_txt,
+                    "Priority": priority,
+                })
+            
+            summary_df = pd.DataFrame(table_data)
+            st.dataframe(summary_df, use_container_width=True, hide_index=True, height=min(400, len(table_data) * 45 + 50))
+            
+            # Full details in expander instead of cluttering main view
+            with st.expander("📋 View Full Execution Details", expanded=False):
+                for r in rows[:8]:  # Limit to top 8 to avoid overload
+                    commodity = str(r.get("Commodity") or "—")
+                    priority = str(r.get("Priority", "Low"))
+                    
+                    priority_color = "#16a34a" if priority == "High" else ("#2563eb" if priority == "Medium" else "#64748b")
+                    
+                    st.markdown(f"**{commodity}** <span style='color:{priority_color};font-weight:800;'>[{priority}]</span>", unsafe_allow_html=True)
+                    
+                    detail_df = pd.DataFrame([{
+                        "Field": k,
+                        "Value": str(v)[:120] + ("..." if len(str(v)) > 120 else "")
+                    } for k, v in r.items() if k not in ["Commodity", "Priority"] and str(v) != "—"])
+                    
+                    st.dataframe(detail_df, use_container_width=True, hide_index=True, height=min(250, len(detail_df) * 40 + 50))
+                    st.markdown("---")
 
         # Build candidate list
         candidates: list[dict] = []
