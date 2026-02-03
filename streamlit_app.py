@@ -2030,6 +2030,373 @@ def render_call_put_hedge_advisor(
         return
 
 
+def _extract_forecast_curve_from_payload(*, payload: dict, max_months: int = 24) -> list[dict]:
+    """Return sorted forecast curve entries: [{horizon, months, price, lower, upper, change}]"""
+    preds = payload.get("predictions") or {}
+    curve: list[dict] = []
+    if not isinstance(preds, dict) or not preds:
+        return curve
+
+    for h, p in preds.items():
+        if not isinstance(p, dict):
+            continue
+        m = _parse_horizon_months(str(h))
+        if m < 1 or m > int(max_months):
+            continue
+        try:
+            px = float(p.get("price"))
+        except Exception:
+            continue
+        if not np.isfinite(px):
+            continue
+        lo = p.get("lower")
+        hi = p.get("upper")
+        try:
+            lo_f = float(lo) if lo is not None and np.isfinite(float(lo)) else None
+        except Exception:
+            lo_f = None
+        try:
+            hi_f = float(hi) if hi is not None and np.isfinite(float(hi)) else None
+        except Exception:
+            hi_f = None
+        ch = p.get("change")
+        try:
+            ch_f = float(ch) if ch is not None and np.isfinite(float(ch)) else None
+        except Exception:
+            ch_f = None
+
+        curve.append({"horizon": str(h), "months": int(m), "price": float(px), "lower": lo_f, "upper": hi_f, "change": ch_f})
+
+    curve.sort(key=lambda e: (int(e.get("months", 999)), str(e.get("horizon", ""))))
+    # If multiple horizons map to same month, keep the first
+    dedup: dict[int, dict] = {}
+    for e in curve:
+        mm = int(e["months"])
+        if mm not in dedup:
+            dedup[mm] = e
+    return [dedup[m] for m in sorted(dedup.keys())]
+
+
+def _closest_curve_entry(curve: list[dict], target_months: int) -> dict | None:
+    if not curve:
+        return None
+    try:
+        target_months = int(target_months)
+    except Exception:
+        target_months = 6
+    return min(curve, key=lambda e: abs(int(e.get("months", 999)) - target_months))
+
+
+def _confidence_from_interval(*, s0: float, target_price: float, lower: float | None, upper: float | None) -> str:
+    """Heuristic confidence from move size and interval width."""
+    try:
+        s0 = float(s0)
+        target_price = float(target_price)
+    except Exception:
+        return "Medium"
+    if s0 <= 0 or not (np.isfinite(s0) and np.isfinite(target_price)):
+        return "Medium"
+
+    move_pct = abs((target_price / s0 - 1.0) * 100.0)
+    width_pct = None
+    if lower is not None and upper is not None:
+        try:
+            lower = float(lower)
+            upper = float(upper)
+            if np.isfinite(lower) and np.isfinite(upper) and target_price > 0:
+                width_pct = abs(upper - lower) / target_price * 100.0
+        except Exception:
+            width_pct = None
+
+    if width_pct is None:
+        if move_pct >= 8:
+            return "High"
+        if move_pct >= 3:
+            return "Medium"
+        return "Low"
+
+    if move_pct >= 6 and width_pct <= 10:
+        return "High"
+    if move_pct >= 3 and width_pct <= 18:
+        return "Medium"
+    return "Low"
+
+
+def render_forecast_strategy_engine(
+    *,
+    expander_title: str,
+    key_prefix: str,
+    commodity_payloads: list[dict] | None,
+    expanded: bool = False,
+) -> None:
+    """Portfolio strategist driven by the full forecast curve (multi-horizon)."""
+    with st.expander(expander_title, expanded=expanded):
+        st.markdown(
+            """
+<div class="cp-card" style="padding: 1.0rem 1.0rem;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+    <div>
+      <div class="cp-title">Forecast Strategy Engine</div>
+      <div class="cp-subtitle">Uses <b>current price</b> + <b>full forecast curve</b> (3M/6M/12M/18M/24M) to suggest <b>when to buy/sell</b> and <b>how to hedge</b>.</div>
+    </div>
+    <div class="cp-pill cp-pill-hold">Auto</div>
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if not commodity_payloads:
+            st.info("No commodities available.")
+            return
+
+        t1, t2, t3 = st.tabs(["🛒 Buying (Procurement)", "💼 Selling (Sales)", "📦 Inventory (Hold)"])
+
+        def _build_rows(exposure: str) -> pd.DataFrame:
+            rows: list[dict] = []
+            for item in commodity_payloads:
+                for side in ("int_payload", "local_payload"):
+                    p = item.get(side)
+                    if not isinstance(p, dict) or not p.get("name"):
+                        continue
+
+                    label = f"{p['name']} ({'International' if side=='int_payload' else 'Local'})"
+                    scale = float(p.get("display_scale", 1.0) or 1.0)
+                    unit = str(p.get("display_currency") or p.get("info", {}).get("currency", ""))
+                    s0 = float(p.get("current_price") or 0.0) * scale
+
+                    curve = _extract_forecast_curve_from_payload(payload=p, max_months=24)
+                    if not curve or s0 <= 0:
+                        continue
+
+                    # Scale curve values to match Summary display
+                    curve_s = []
+                    for e in curve:
+                        e2 = dict(e)
+                        e2["price"] = float(e2["price"]) * scale
+                        if e2.get("lower") is not None:
+                            e2["lower"] = float(e2["lower"]) * scale
+                        if e2.get("upper") is not None:
+                            e2["upper"] = float(e2["upper"]) * scale
+                        curve_s.append(e2)
+
+                    min_e = min(curve_s, key=lambda e: float(e.get("price", 1e18)))
+                    max_e = max(curve_s, key=lambda e: float(e.get("price", -1e18)))
+
+                    # Key snapshots
+                    snap_months = [3, 6, 12, 18, 24]
+                    snaps: list[str] = []
+                    name_lower = str(p.get("name", "")).lower()
+                    three_dec_assets = ("cotton", "polyester", "viscose", "crude", "natural gas")
+                    dec = 3 if (any(k in name_lower for k in three_dec_assets) or "/lb" in unit.lower()) else 2
+                    for m in snap_months:
+                        ce = _closest_curve_entry(curve_s, m)
+                        if ce:
+                            snaps.append(f"{m}M: {float(ce['price']):,.{dec}f}")
+                    path_str = " | ".join(snaps[:5])
+
+                    # Strategy logic by exposure
+                    action = "MONITOR"
+                    timing = "—"
+                    primary = "—"
+                    hedge = "—"
+
+                    if exposure.startswith("Procurement"):
+                        target = min_e
+                        target_px = float(target["price"])
+                        move_pct = (target_px / s0 - 1.0) * 100.0
+                        if move_pct <= -2.0:
+                            action = "WAIT / STAGGER BUYS"
+                            timing = f"Target {target['horizon']} (~{target['months']}M)"
+                            primary = f"Delay majority buys; ladder purchases toward {target['horizon']} (forecast low)."
+                            hedge = "Optional: buy small CALL (ATM) to cap upside risk while waiting."
+                        elif move_pct >= 2.0:
+                            action = "BUY / HEDGE NOW"
+                            timing = f"Now → {target['horizon']} (~{target['months']}M)"
+                            primary = "Lock a portion with forward/futures; keep remainder flexible."
+                            hedge = "Use CALL or CALL SPREAD (cap cost) for remaining exposure."
+                        else:
+                            action = "STAGED BUY"
+                            timing = f"Next 1–3 months"
+                            primary = "Split purchases (e.g., 30/30/40) over coming months; re-check monthly."
+                            hedge = "If budget-sensitive: CALL spread ceiling; otherwise monitor."
+
+                        conf = _confidence_from_interval(s0=s0, target_price=float(target["price"]), lower=target.get("lower"), upper=target.get("upper"))
+                        exp_move = (float(target["price"]) / s0 - 1.0) * 100.0
+
+                    elif exposure.startswith("Sales"):
+                        target = max_e
+                        target_px = float(target["price"])
+                        move_pct = (target_px / s0 - 1.0) * 100.0
+                        if move_pct >= 2.0:
+                            action = "WAIT / SELL LATER"
+                            timing = f"Target {target['horizon']} (~{target['months']}M)"
+                            primary = f"Hold sales for {target['horizon']} (forecast high) if inventory allows."
+                            hedge = "Protect downside with PUT (floor) or a COLLAR."
+                        elif move_pct <= -2.0:
+                            action = "SELL / HEDGE NOW"
+                            timing = f"Now → {target['horizon']} (~{target['months']}M)"
+                            primary = "Sell forward/futures to lock price; reduce downside exposure."
+                            hedge = "Use PUT or PUT SPREAD if you prefer limited premium."
+                        else:
+                            action = "STAGED SELL"
+                            timing = "Next 1–3 months"
+                            primary = "Sell in tranches; re-check curve monthly."
+                            hedge = "Consider collar if you need minimum price assurance."
+
+                        conf = _confidence_from_interval(s0=s0, target_price=float(target["price"]), lower=target.get("lower"), upper=target.get("upper"))
+                        exp_move = (float(target["price"]) / s0 - 1.0) * 100.0
+
+                    else:
+                        # Inventory hold: focus on protecting downside when vol/move is meaningful
+                        target = _closest_curve_entry(curve_s, 6) or min_e
+                        target_px = float(target["price"])
+                        move_pct = (target_px / s0 - 1.0) * 100.0
+                        if move_pct <= -2.0:
+                            action = "PROTECT DOWNSIDE"
+                            timing = f"Now → {target['horizon']} (~{target['months']}M)"
+                            primary = "Keep inventory plan; add protection while forecast points down."
+                            hedge = "BUY PUT (floor) or PUT SPREAD; consider collar to reduce premium."
+                        elif move_pct >= 2.0:
+                            action = "HOLD / UPSIDE"
+                            timing = f"Through {target['horizon']} (~{target['months']}M)"
+                            primary = "Hold inventory for upside; avoid over-hedging." 
+                            hedge = "Optional: collar (sell call / buy put) if you need a floor." 
+                        else:
+                            action = "MONITOR"
+                            timing = "Re-check monthly"
+                            primary = "No strong edge in curve; focus on execution and cashflow." 
+                            hedge = "Use simple protection only if policy requires." 
+
+                        conf = _confidence_from_interval(s0=s0, target_price=float(target["price"]), lower=target.get("lower"), upper=target.get("upper"))
+                        exp_move = (float(target["price"]) / s0 - 1.0) * 100.0
+
+                    # Add a concrete option-structure suggestion using the existing engine
+                    try:
+                        # Pull a rough vol from history for option structure sizing
+                        hist_df = p.get("history_df")
+                        vcol = p.get("info", {}).get("value_col") or p.get("value_col") or "value"
+                        sigma_ann = 0.25
+                        if isinstance(hist_df, pd.DataFrame) and vcol in hist_df.columns:
+                            sigma_ann = float(_annualized_volatility_from_history(hist_df[vcol]))
+                        t_years = float(max(1, int(target.get("months", 6))) / 12.0)
+                        strat = _recommend_hedge_strategy(
+                            exposure=exposure,
+                            s0=s0,
+                            s_mean=float(target.get("price", s0)),
+                            sigma_ann=sigma_ann,
+                            t_years=t_years,
+                            risk_profile="Balanced",
+                            budget_priority="Medium",
+                            allow_selling=False,
+                            qty=1.0,
+                            unit=unit,
+                        )
+                        legs = strat.get("legs") or []
+                        if legs:
+                            legs_txt = []
+                            for l in legs[:2]:
+                                try:
+                                    legs_txt.append(f"{str(l.get('side')).upper()} {str(l.get('type')).upper()} @ {float(l.get('strike')):,.{dec}f}")
+                                except Exception:
+                                    continue
+                            if legs_txt:
+                                hedge = f"{hedge}  Suggested legs: " + " · ".join(legs_txt)
+                    except Exception:
+                        pass
+
+                    rows.append(
+                        {
+                            "Action": action,
+                            "Commodity": label,
+                            "Spot": round(s0, dec),
+                            "Forecast Path": path_str,
+                            "Timing": timing,
+                            "Expected Move %": round(exp_move, 1),
+                            "Primary Plan": primary,
+                            "Hedge / How": hedge,
+                            "Confidence": conf,
+                            "Unit": unit,
+                        }
+                    )
+
+            df = pd.DataFrame(rows)
+            if df.empty:
+                return df
+
+            # Rank: strongest expected move first
+            try:
+                df["__abs_move"] = df["Expected Move %"].abs()
+                conf_rank = {"High": 2, "Medium": 1, "Low": 0}
+                df["__conf"] = df["Confidence"].map(conf_rank).fillna(1)
+                df = df.sort_values(["__conf", "__abs_move"], ascending=[False, False]).drop(columns=["__abs_move", "__conf"])
+            except Exception:
+                pass
+
+            return df
+
+        def _render_table(df: pd.DataFrame):
+            if df is None or df.empty:
+                st.info("No forecast curve available yet for these commodities.")
+                return
+
+            def _conf_style(v: str) -> str:
+                vv = str(v)
+                if "High" in vv:
+                    return "background-color:#052e16; color:#dcfce7; font-weight:900;"
+                if "Medium" in vv:
+                    return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
+                return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
+
+            def _act_style(v: str) -> str:
+                vv = str(v)
+                if "NOW" in vv:
+                    return "background-color:#7f1d1d; color:#ffffff; font-weight:900;"
+                if "WAIT" in vv:
+                    return "background-color:#064e3b; color:#dcfce7; font-weight:900;"
+                if "STAGED" in vv:
+                    return "background-color:#92400e; color:#ffffff; font-weight:900;"
+                return "background-color:#0b1220; color:#e5e7eb; font-weight:900;"
+
+            styled = (
+                df.style
+                .applymap(_act_style, subset=["Action"])
+                .applymap(_conf_style, subset=["Confidence"])
+                .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
+                .set_table_styles(
+                    [
+                        {
+                            "selector": "thead th",
+                            "props": [
+                                ("background-color", "#0b1220"),
+                                ("color", "#e5e7eb"),
+                                ("font-weight", "900"),
+                                ("padding", "12px 12px"),
+                                ("font-size", "0.75rem"),
+                                ("text-transform", "uppercase"),
+                            ],
+                        }
+                    ]
+                )
+            )
+            st.dataframe(styled, use_container_width=True, height=420)
+
+        with t1:
+            df = _build_rows("Procurement (we will BUY later)")
+            _render_table(df)
+
+        with t2:
+            df = _build_rows("Sales (we will SELL later)")
+            _render_table(df)
+
+        with t3:
+            df = _build_rows("Inventory (we HOLD stock)")
+            _render_table(df)
+
+        st.caption("This is forecast-driven decision support. Use your actual procurement/sales calendar, liquidity, and bank quotes before executing options/forwards.")
+        return
+
+
 def _theoretical_futures_price_commodity(*, s: float, r: float, storage_cost: float, convenience_yield: float, t_years: float) -> float:
     """Cost-of-carry theoretical futures/forward price for commodities."""
     import math
@@ -4155,12 +4522,12 @@ def render_executive_summary():
     else:
         st.info("Electricity tariff data unavailable right now.")
 
-    # No‑arbitrage strategist (futures mispricing + put‑call parity)
+    # Forecast-driven strategist (buy/sell timing + hedge playbook)
     st.markdown("---")
-    render_no_arbitrage_strategist(
-        expander_title="🧮 No‑Arbitrage Strategist (Futures + Call/Put Parity)",
-        expanded=False,
-        key_prefix="summary_arb",
+    render_forecast_strategy_engine(
+        expander_title="🧭 Strategy Engine (Buy/Sell Timing + Hedge Plan)",
+        expanded=True,
+        key_prefix="summary_forecast_strat",
         commodity_payloads=commodity_payloads,
     )
     
