@@ -27,7 +27,34 @@ data/raw/
 └── viscose/
    ├── viscose_daily.csv               (Real daily data from SunSirs)
     └── viscose_monthly.csv             (Generated: Aggregated to month-end)
+
+data/raw/purchases/
+└── oracle/                              (Internal Oracle purchase exports, messy .xlsx)
+
+data/processed/purchases_clean/           (Generated clean purchase datasets; gitignored)
+├── purchases_master.csv
+├── purchases_monthly_agg.csv
+└── purchases_<commodity>.csv
 ```
+
+---
+
+## Internal Purchasing History (Oracle Excel exports)
+
+This project can ingest Oracle-export Excel files (often containing title rows, filters, blank rows, and `Unnamed` columns) and produce a clean, analysis-ready purchases dataset.
+
+**Place files here:**
+- `data/raw/purchases/oracle/*.xlsx`
+
+**Run ingestion:**
+- `python scripts/ingest_oracle_purchases.py --input data/raw/purchases/oracle --pattern "*.xlsx"`
+
+**Output schema (minimum):**
+- `grn_date`, `description`, `uom`, `receipt_qty`, `rate`, `amount`, `supplier`, `operating_unit`, `po_number`, `commodity`, `unit_price`, `source_file`, `source_sheet`
+
+**Notes:**
+- Header row is auto-detected by scanning for known column keywords (e.g., GRN/Receipt date, Description, Qty, UOM, Rate, Amount).
+- Commodity mapping is keyword/regex-based and is expected to be refined using real descriptions.
 
 ---
 
