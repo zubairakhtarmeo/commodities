@@ -2028,6 +2028,377 @@ def render_call_put_hedge_advisor(
         st.caption("Guidance tool: confirm with your bank and internal policy before executing options trades.")
 
         return
+
+
+def _theoretical_futures_price_commodity(*, s: float, r: float, storage_cost: float, convenience_yield: float, t_years: float) -> float:
+    """Cost-of-carry theoretical futures/forward price for commodities."""
+    import math
+
+    s = float(s)
+    r = float(r)
+    storage_cost = float(storage_cost)
+    convenience_yield = float(convenience_yield)
+    t_years = float(max(t_years, 1e-9))
+    return float(s * math.exp((r + storage_cost - convenience_yield) * t_years))
+
+
+def _pv_strike(*, k: float, r: float, t_years: float) -> float:
+    import math
+
+    k = float(k)
+    r = float(r)
+    t_years = float(max(t_years, 1e-9))
+    return float(k * math.exp(-r * t_years))
+
+
+def _put_call_parity_gap(*, c: float, p: float, s: float, k: float, r: float, t_years: float) -> float:
+    """Parity gap: (C - P) - (S - PV(K)). 0 means no-arbitrage parity holds."""
+    return float(c - p) - float(s - _pv_strike(k=k, r=r, t_years=t_years))
+
+
+def _implied_volatility_bs(*, price: float, s: float, k: float, t_years: float, opt_type: str) -> float | None:
+    """Solve for implied vol using bisection. Returns sigma_ann or None if not solvable."""
+    try:
+        price = float(price)
+        s = float(s)
+        k = float(k)
+        t_years = float(t_years)
+        if not (np.isfinite(price) and np.isfinite(s) and np.isfinite(k) and np.isfinite(t_years)):
+            return None
+        if price <= 0 or s <= 0 or k <= 0 or t_years <= 0:
+            return None
+    except Exception:
+        return None
+
+    opt_type = str(opt_type).upper().strip()
+    lo, hi = 0.01, 2.50
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        try:
+            px = float(_bs_price(s=s, k=k, t=t_years, sigma=mid, opt_type=opt_type))
+        except Exception:
+            return None
+        if not np.isfinite(px):
+            return None
+        if px > price:
+            hi = mid
+        else:
+            lo = mid
+    sigma = 0.5 * (lo + hi)
+    return float(sigma) if np.isfinite(sigma) else None
+
+
+def render_no_arbitrage_strategist(
+    *,
+    expander_title: str,
+    key_prefix: str,
+    commodity_payloads: list[dict] | None,
+    expanded: bool = False,
+) -> None:
+    """No-arbitrage strategist (cost-of-carry + put-call parity) for Summary page.
+
+    Note: This requires market quotes (futures price and/or option quotes) to detect true arbitrage.
+    We provide a clean editor to paste bank/broker quotes; the engine then flags mispricing.
+    """
+    with st.expander(expander_title, expanded=expanded):
+        st.markdown(
+            """
+<div class="cp-card" style="padding: 1.0rem 1.0rem;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+    <div>
+      <div class="cp-title">No‑Arbitrage Strategist</div>
+      <div class="cp-subtitle">Detects futures & options mispricing using <b>cost‑of‑carry</b> and <b>put‑call parity</b>. Paste market quotes to activate.</div>
+    </div>
+    <div class="cp-pill cp-pill-hold">Institutional</div>
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if not commodity_payloads:
+            st.info("No commodities available.")
+            return
+
+        # Global assumptions (kept light; editable)
+        c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 1.2])
+        with c1:
+            r = st.number_input(
+                "Risk‑free rate (annual)",
+                min_value=0.0,
+                max_value=0.25,
+                value=0.05,
+                step=0.005,
+                format="%.3f",
+                key=f"{key_prefix}_r",
+                help="Use USD risk-free rate for USD series. Example: 0.050 = 5%.",
+            )
+        with c2:
+            storage_cost = st.number_input(
+                "Storage cost (annual)",
+                min_value=0.0,
+                max_value=0.50,
+                value=0.00,
+                step=0.005,
+                format="%.3f",
+                key=f"{key_prefix}_storage",
+            )
+        with c3:
+            convenience_yield = st.number_input(
+                "Convenience yield (annual)",
+                min_value=0.0,
+                max_value=0.50,
+                value=0.00,
+                step=0.005,
+                format="%.3f",
+                key=f"{key_prefix}_cy",
+            )
+        with c4:
+            threshold_pct = st.number_input(
+                "Mispricing threshold (%)",
+                min_value=0.1,
+                max_value=10.0,
+                value=1.0,
+                step=0.1,
+                format="%.1f",
+                key=f"{key_prefix}_thr",
+                help="Below this, treat as efficient after costs/slippage.",
+            )
+
+        # Build candidate list
+        candidates: list[dict] = []
+        for item in commodity_payloads:
+            for side in ("int_payload", "local_payload"):
+                p = item.get(side)
+                if p and p.get("name"):
+                    candidates.append(
+                        {
+                            "key": f"{p['name']}::{side}",
+                            "label": f"{p['name']} ({'International' if side=='int_payload' else 'Local'})",
+                            "payload": p,
+                        }
+                    )
+
+        if not candidates:
+            st.info("No commodities available.")
+            return
+
+        # Optional quotes editor (bank/broker)
+        st.markdown("<div class='cp-kv-label' style='margin-top: 0.25rem;'>Market quotes (optional)</div>", unsafe_allow_html=True)
+        st.caption("Enter futures and/or option quotes (same unit as Spot). If left blank, we show 'inputs needed'.")
+
+        base_rows = []
+        for c in candidates[:10]:
+            p = c["payload"]
+            scale = float(p.get("display_scale", 1.0) or 1.0)
+            unit = str(p.get("display_currency") or p.get("info", {}).get("currency", ""))
+            s0 = float(p.get("current_price") or 0.0) * scale
+            best_h, _best_pred, months = _pick_best_horizon_for_payload(payload=p, exposure="Procurement (we will BUY later)")
+            t_years = float(months) / 12.0
+            base_rows.append(
+                {
+                    "Commodity": c["label"],
+                    "Target Month": str(best_h),
+                    "T (yrs)": round(t_years, 3),
+                    "Spot": s0,
+                    "Futures (Market)": np.nan,
+                    "Call (Market)": np.nan,
+                    "Put (Market)": np.nan,
+                    "Strike (K)": np.nan,
+                    "Unit": unit,
+                }
+            )
+
+        default_quotes = pd.DataFrame(base_rows)
+        ss_key = f"{key_prefix}_quotes_df"
+        if ss_key not in st.session_state or not isinstance(st.session_state.get(ss_key), pd.DataFrame):
+            st.session_state[ss_key] = default_quotes
+
+        # Keep rows in sync if assets list changes
+        try:
+            cur_df: pd.DataFrame = st.session_state[ss_key]
+            if set(cur_df.get("Commodity", [])) != set(default_quotes["Commodity"]):
+                st.session_state[ss_key] = default_quotes
+        except Exception:
+            st.session_state[ss_key] = default_quotes
+
+        edited = st.data_editor(
+            st.session_state[ss_key],
+            use_container_width=True,
+            hide_index=True,
+            key=f"{key_prefix}_editor",
+            column_config={
+                "Spot": st.column_config.NumberColumn(format="%.4f"),
+                "Futures (Market)": st.column_config.NumberColumn(format="%.4f"),
+                "Call (Market)": st.column_config.NumberColumn(format="%.4f"),
+                "Put (Market)": st.column_config.NumberColumn(format="%.4f"),
+                "Strike (K)": st.column_config.NumberColumn(format="%.4f"),
+                "T (yrs)": st.column_config.NumberColumn(format="%.3f"),
+            },
+            disabled=["Commodity", "Target Month", "T (yrs)", "Spot", "Unit"],
+        )
+        st.session_state[ss_key] = edited
+
+        # Build strategy outputs
+        outputs: list[dict] = []
+        for _, row in edited.iterrows():
+            try:
+                commodity = str(row["Commodity"])
+                unit = str(row.get("Unit", ""))
+                t_years = float(row.get("T (yrs)", 0.5))
+                s0 = float(row.get("Spot", 0.0))
+            except Exception:
+                continue
+
+            f_mkt = row.get("Futures (Market)")
+            c_mkt = row.get("Call (Market)")
+            p_mkt = row.get("Put (Market)")
+            k = row.get("Strike (K)")
+
+            cond = "Inputs needed"
+            strategy = "—"
+            trade = "Provide Futures and/or options quotes"
+            logic = "No-arbitrage engine needs market quotes to detect mispricing."
+            driver = "—"
+            risk = "Liquidity, fees, margin, execution, model assumptions"
+            confidence = "Low"
+
+            # Step 1–3: Cost-of-carry futures mispricing
+            if pd.notna(f_mkt) and np.isfinite(float(f_mkt)) and s0 > 0:
+                f_mkt_f = float(f_mkt)
+                f_th = _theoretical_futures_price_commodity(
+                    s=s0,
+                    r=float(r),
+                    storage_cost=float(storage_cost),
+                    convenience_yield=float(convenience_yield),
+                    t_years=t_years,
+                )
+                mis = f_mkt_f - f_th
+                mis_pct = (mis / f_th) * 100.0 if f_th else 0.0
+                if abs(mis_pct) < float(threshold_pct):
+                    cond = "Efficient (within threshold)"
+                    strategy = "No action"
+                    trade = "—"
+                    logic = f"Market futures aligns with carry fair value. Mispricing {mis_pct:+.2f}%"
+                    driver = "—"
+                    confidence = "Medium"
+                elif mis_pct < 0:
+                    cond = "Forward Underpriced"
+                    strategy = "Cash‑and‑Carry Arbitrage"
+                    trade = "Short spot, invest cash, long futures"
+                    logic = f"F_market below theoretical carry price by {mis_pct:+.2f}%."
+                    driver = "Convergence of futures toward carry fair value"
+                    confidence = "High" if abs(mis_pct) >= 2 * float(threshold_pct) else "Medium"
+                else:
+                    cond = "Forward Overpriced"
+                    strategy = "Reverse Cash‑and‑Carry"
+                    trade = "Long spot (financed), short futures"
+                    logic = f"F_market above theoretical carry price by {mis_pct:+.2f}%."
+                    driver = "Convergence of futures toward carry fair value"
+                    confidence = "High" if abs(mis_pct) >= 2 * float(threshold_pct) else "Medium"
+
+            # Step 4: Put-call parity / synthetic forward
+            if all(pd.notna(x) for x in (c_mkt, p_mkt, k)) and s0 > 0:
+                try:
+                    c_f = float(c_mkt)
+                    p_f = float(p_mkt)
+                    k_f = float(k)
+                    gap = _put_call_parity_gap(c=c_f, p=p_f, s=s0, k=k_f, r=float(r), t_years=t_years)
+                    gap_pct = (gap / s0) * 100.0 if s0 else 0.0
+                    parity_thr = float(threshold_pct) / 2.0
+                    if abs(gap_pct) >= parity_thr:
+                        # Classic parity conversion / reversal framing
+                        if gap > 0:
+                            parity_cond = "Parity distorted (C−P too high)"
+                            parity_strat = "Reversal (Sell Synthetic Forward)"
+                            parity_trade = "Sell Call, Buy Put (same K,T) + Buy PV(K) + Short Spot"
+                        else:
+                            parity_cond = "Parity distorted (C−P too low)"
+                            parity_strat = "Conversion (Buy Synthetic Forward)"
+                            parity_trade = "Buy Call, Sell Put (same K,T) + Short PV(K) + Buy Spot"
+
+                        # Attach as an 'options leg' suggestion (more actionable)
+                        cond = f"{cond} · {parity_cond}" if cond != "Inputs needed" else parity_cond
+                        strategy = f"{strategy} + {parity_strat}" if strategy not in ("—", "No action") else parity_strat
+                        trade = f"{trade} | Options: {parity_trade}" if trade not in ("—", "Provide Futures and/or options quotes") else parity_trade
+                        logic = f"Put‑call parity gap {gap_pct:+.2f}% of spot (should be ~0)."
+                        driver = "Parity convergence via replication / arbitrage"
+                        confidence = "High" if abs(gap_pct) >= 2 * parity_thr else "Medium"
+
+                    # Volatility mispricing (market IV vs model sigma)
+                    # Compare implied vol from call with our historical sigma (if available)
+                    sigma_model = None
+                    try:
+                        # Find matching payload to pull sigma
+                        pld = next((c["payload"] for c in candidates if c["label"] == commodity), None)
+                        if isinstance(pld, dict):
+                            hist_df = pld.get("history_df")
+                            vcol = pld.get("info", {}).get("value_col") or pld.get("value_col") or "value"
+                            if isinstance(hist_df, pd.DataFrame) and vcol in hist_df.columns:
+                                sigma_model = float(_annualized_volatility_from_history(hist_df[vcol]))
+                    except Exception:
+                        sigma_model = None
+
+                    iv_call = _implied_volatility_bs(price=c_f, s=s0, k=k_f, t_years=t_years, opt_type="CALL")
+                    if iv_call is not None and sigma_model is not None and np.isfinite(iv_call) and np.isfinite(sigma_model):
+                        iv_gap = (iv_call - sigma_model) * 100.0
+                        if abs(iv_gap) >= 10.0:
+                            cond = f"{cond} · Vol distorted" if cond != "Inputs needed" else "Vol distorted"
+                            strategy = f"{strategy} + Vol Relative‑Value" if strategy not in ("—", "No action") else "Vol Relative‑Value"
+                            logic = f"Implied vol {iv_call*100:.0f}% vs model vol {sigma_model*100:.0f}% (gap {iv_gap:+.0f} vol pts)."
+                            risk = "Model risk (IV vs realized), vega exposure, liquidity"
+                except Exception:
+                    pass
+
+            outputs.append(
+                {
+                    "Market Condition": cond,
+                    "Commodity": commodity,
+                    "Strategy": strategy,
+                    "Trade Construction": trade,
+                    "Financial Logic": logic,
+                    "Convergence Driver": driver,
+                    "Risk Notes": risk,
+                    "Confidence": confidence,
+                }
+            )
+
+        st.markdown("<div class='cp-kv-label' style='margin-top: 0.75rem;'>Strategy Output</div>", unsafe_allow_html=True)
+        out_df = pd.DataFrame(outputs)
+
+        def _conf_style(v: str) -> str:
+            vv = str(v)
+            if "High" in vv:
+                return "background-color:#052e16; color:#dcfce7; font-weight:900;"
+            if "Medium" in vv:
+                return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
+            return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
+
+        styled = (
+            out_df.style
+            .applymap(_conf_style, subset=["Confidence"])
+            .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
+            .set_table_styles(
+                [
+                    {
+                        "selector": "thead th",
+                        "props": [
+                            ("background-color", "#0b1220"),
+                            ("color", "#e5e7eb"),
+                            ("font-weight", "900"),
+                            ("padding", "12px 12px"),
+                            ("font-size", "0.75rem"),
+                            ("text-transform", "uppercase"),
+                        ],
+                    }
+                ]
+            )
+        )
+        st.dataframe(styled, use_container_width=True, height=360)
+
+        st.caption(
+            "For real arbitrage, include transaction costs, funding/margin, and whether physical storage is feasible. This is a decision-support tool, not a guarantee."
+        )
         sigma_ann = _blend_sigma_from_forecast_interval(sigma_ann=sigma_ann, lower=f_lower, upper=f_upper, t_years=t_years)
 
         # Add momentum (uses past data)
@@ -3841,15 +4212,13 @@ def render_executive_summary():
     else:
         st.info("Electricity tariff data unavailable right now.")
 
-    # Smart Call/Put advisor (replaces the older compounding simulator)
+    # No‑arbitrage strategist (futures mispricing + put‑call parity)
     st.markdown("---")
-    render_call_put_hedge_advisor(
-        expander_title="🧠 Options Hedge — Portfolio View (Auto)",
+    render_no_arbitrage_strategist(
+        expander_title="🧮 No‑Arbitrage Strategist (Futures + Call/Put Parity)",
         expanded=False,
-        key_prefix="summary_cp",
+        key_prefix="summary_arb",
         commodity_payloads=commodity_payloads,
-        variant="portfolio",
-        use_expander=True,
     )
     
     # === OVERALL SUMMARY - Key insights across all commodities ===
