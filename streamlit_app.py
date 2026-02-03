@@ -2109,15 +2109,17 @@ def _confidence_from_interval(*, s0: float, target_price: float, lower: float | 
             width_pct = None
 
     if width_pct is None:
-        if move_pct >= 8:
+        # If we don't have an interval, require a bigger move for "High"
+        if move_pct >= 10:
             return "High"
-        if move_pct >= 3:
+        if move_pct >= 5:
             return "Medium"
         return "Low"
 
-    if move_pct >= 6 and width_pct <= 10:
+    # Be more forgiving on interval width: forecast bands are often wide on commodities.
+    if move_pct >= 8 and width_pct <= 30:
         return "High"
-    if move_pct >= 3 and width_pct <= 18:
+    if move_pct >= 4 and width_pct <= 50:
         return "Medium"
     return "Low"
 
@@ -2538,6 +2540,48 @@ def render_integrated_strategy_engine(
         # Internal defaults (kept conservative; do not expose as UI knobs)
         forecast_sig = 3.0
 
+                def _priority_badge(v: str) -> tuple[str, str]:
+                        vv = str(v)
+                        if "High" in vv:
+                                return ("HIGH", "#16a34a")
+                        if "Medium" in vv:
+                                return ("MEDIUM", "#2563eb")
+                        return ("LOW", "#0f172a")
+
+                def _render_cards(rows: list[dict], *, empty_msg: str) -> None:
+                        if not rows:
+                                st.info(empty_msg)
+                                return
+                        cols = st.columns(2)
+                        for i, r in enumerate(rows):
+                                badge_txt, badge_color = _priority_badge(r.get("Priority", "Low"))
+                                decision = str(r.get("Decision") or "—")
+                                commodity = str(r.get("Commodity") or "—")
+                                when_txt = str(r.get("When") or "—")
+                                why_txt = str(r.get("Why") or "—")
+                                how_txt = str(r.get("How") or "—")
+                                extra_txt = str(r.get("Triggers") or "").strip()
+
+                                card = f"""
+<div class='cp-card' style='padding: 0.95rem 1.0rem; border-left: 6px solid {badge_color};'>
+    <div style='display:flex; justify-content:space-between; align-items:flex-start; gap:12px;'>
+        <div style='flex:1;'>
+            <div style='font-weight: 900; font-size: 0.98rem; color:#0f172a; margin-bottom: 0.2rem;'>{commodity}</div>
+            <div style='font-weight: 900; font-size: 0.92rem; color:#111827; margin-bottom: 0.25rem;'>{decision}</div>
+            <div style='color:#334155; font-size: 0.85rem; margin-bottom: 0.25rem;'><b>When:</b> {when_txt}</div>
+            <div style='color:#334155; font-size: 0.85rem; margin-bottom: 0.25rem;'><b>Why:</b> {why_txt}</div>
+            <div style='color:#0f172a; font-size: 0.85rem; font-weight: 700; line-height: 1.35;'><b>Plan:</b> {how_txt}</div>
+            {f"<div style='color:#475569; font-size: 0.82rem; margin-top: 0.35rem; line-height: 1.35;'><b>Triggers:</b> {extra_txt}</div>" if extra_txt else ""}
+        </div>
+        <div style='white-space:nowrap; font-weight: 900; font-size: 0.72rem; padding: 0.28rem 0.5rem; border-radius: 999px; background: {badge_color}; color: white;'>
+            {badge_txt}
+        </div>
+    </div>
+</div>
+                                """
+                                with cols[i % 2]:
+                                        st.markdown(card, unsafe_allow_html=True)
+
         # Build candidate list
         candidates: list[dict] = []
         for item in commodity_payloads:
@@ -2602,25 +2646,70 @@ def render_integrated_strategy_engine(
                 if move_to_min <= -float(forecast_sig):
                     market_condition = "Forecast Opportunity"
                     strat_name = "Delay Buying / Stagger Procurement"
-                    steps = f"Delay majority buys; ladder purchases toward {min_e['horizon']} (~{min_e['months']}M)"
+                    half_months = max(1, int(round(float(min_e.get("months", 6)) / 2.0)))
+                    half_e = _closest_curve_entry(curve_s, half_months) or mid_e
+                    steps = (
+                        f"Buy 10% now (safety); 30% around {half_e.get('horizon','mid‑window')}; "
+                        f"60% around {min_e['horizon']}. Overlay: small CALL (or CALL SPREAD) to cap upside while waiting."
+                    )
                     logic = f"Model curve shows lower prices ahead (min at {min_e['horizon']})."
                     decision = "Buy later (prices forecast lower)"
                     when_txt = f"Target {min_e['horizon']} (~{min_e['months']}M)"
                     why_txt = f"Forecast low ahead ({move_to_min:.1f}% vs today)"
+                    conf = _confidence_from_interval(
+                        s0=s0,
+                        target_price=float(min_e["price"]),
+                        lower=min_e.get("lower"),
+                        upper=min_e.get("upper"),
+                    )
                 elif move_to_max >= float(forecast_sig):
                     market_condition = "Forecast Opportunity"
                     strat_name = "Early Procurement / Stock Build"
-                    steps = f"Buy a portion now; secure remaining via forward/options into {max_e['horizon']} (~{max_e['months']}M)"
+                    early_e = _closest_curve_entry(curve_s, 3) or mid_e
+                    steps = (
+                        f"Buy 40% now; 30% around {early_e.get('horizon','next window')}; "
+                        f"30% lock via FORWARD or CALL SPREAD into {max_e['horizon']}."
+                    )
                     logic = f"Model curve shows higher prices ahead (max at {max_e['horizon']})."
                     decision = "Buy earlier (prices forecast higher)"
                     when_txt = "Start now"
                     why_txt = f"Forecast rise ahead (+{move_to_max:.1f}% vs today)"
+                    conf = _confidence_from_interval(
+                        s0=s0,
+                        target_price=float(max_e["price"]),
+                        lower=max_e.get("lower"),
+                        upper=max_e.get("upper"),
+                    )
                 else:
                     decision = "Monitor / staged execution"
                     when_txt = "Re-check monthly"
                     why_txt = "No strong forecast edge"
+                    conf = _confidence_from_interval(
+                        s0=s0,
+                        target_price=float(mid_e.get("price", s0)),
+                        lower=mid_e.get("lower"),
+                        upper=mid_e.get("upper"),
+                    )
 
-                conf = _confidence_from_interval(s0=s0, target_price=float(mid_e["price"]), lower=mid_e.get("lower"), upper=mid_e.get("upper"))
+                # Simple triggers using volatility (if available)
+                triggers = ""
+                try:
+                    hist_df = p.get("history_df")
+                    vcol = p.get("info", {}).get("value_col") or p.get("value_col") or "value"
+                    sigma_ann = None
+                    if isinstance(hist_df, pd.DataFrame) and vcol in hist_df.columns:
+                        sigma_ann = float(_annualized_volatility_from_history(hist_df[vcol]))
+                    if sigma_ann is not None and np.isfinite(sigma_ann) and sigma_ann > 0:
+                        # 1-sigma monthly move as a practical trigger
+                        import math
+
+                        sig_m = float(sigma_ann) / math.sqrt(12.0)
+                        up = sig_m * 100.0
+                        dn = sig_m * 100.0
+                        triggers = f"If spot rises > +{up:.0f}% in a month: increase hedge/forward coverage. If spot falls > -{dn:.0f}%: accelerate next tranche."
+                except Exception:
+                    triggers = ""
+
                 outputs.append(
                     {
                         "Asset Type": "Commodity",
@@ -2631,11 +2720,12 @@ def render_integrated_strategy_engine(
                         "When": when_txt,
                         "Why": why_txt,
                         "How": steps,
+                        "Triggers": triggers,
                         "Trade Construction Steps": steps,
                         "Financial Logic": logic,
                         "Expected Driver of Profit": driver,
                         "Risk Notes": risk_notes,
-                        "Confidence Level": conf,
+                        "Priority": conf,
                         "Commodity": label,
                         "Spot": f"{s0:,.{dec}f}",
                         "Unit": unit,
@@ -2686,7 +2776,7 @@ def render_integrated_strategy_engine(
                             "Financial Logic": "Reduce procurement price risk (cap upside / manage volatility).",
                             "Expected Driver of Profit": "Risk reduction / budget certainty",
                             "Risk Notes": "Premium cost, basis risk, liquidity",
-                            "Confidence Level": "Medium",
+                            "Priority": "Medium",
                             "Commodity": label,
                             "Spot": f"{s0:,.{dec}f}",
                             "Unit": unit,
@@ -2700,64 +2790,43 @@ def render_integrated_strategy_engine(
             st.info("No recommendations available (missing forecasts/inputs).")
             return
 
-        # Executive output (always): fewer, simpler columns
+        # New executive layout (cards)
         st.markdown("<div class='cp-kv-label' style='margin-top: 0.5rem;'>Recommended Actions</div>", unsafe_allow_html=True)
-        st.caption("Generated automatically from forecasts and recent volatility.")
+        st.caption("Designed for decision-makers: clear actions, advanced playbook, no inputs.")
 
-        # Keep only the executive fields (if present)
-        exec_cols = ["Commodity", "Decision", "When", "Why", "How", "Confidence Level", "Strategy Role"]
-        exec_df = out_df.copy()
-        for col in exec_cols:
-            if col not in exec_df.columns:
-                exec_df[col] = "—"
-        exec_df = exec_df[exec_cols]
+        t_spec, t_hedge = st.tabs(["📈 Timing & Procurement Plan", "🛡️ Hedge Playbook"])
 
-        # Split into two simple tabs
-        t_spec, t_hedge = st.tabs(["📈 Timing (Forecast)", "🛡️ Hedge"])
+        spec_rows = (
+            out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"]
+            .sort_values(by=["Priority"], ascending=True, kind="mergesort")
+            .to_dict(orient="records")
+        )
+        hedge_rows = (
+            out_df[out_df["Strategy Role"] == "Hedging Strategy"]
+            .sort_values(by=["Priority"], ascending=True, kind="mergesort")
+            .to_dict(orient="records")
+        )
 
-        def _render_exec(df_in: pd.DataFrame, top_n: int = 10):
-            if df_in is None or df_in.empty:
-                st.info("No items in this category right now.")
-                return
-            df_show = df_in.head(int(top_n)).copy()
-
-            def _conf_style(v: str) -> str:
-                vv = str(v)
-                if "High" in vv:
-                    return "background-color:#052e16; color:#dcfce7; font-weight:900;"
-                if "Medium" in vv:
-                    return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
-                return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
-
-            styled_exec = (
-                df_show.style
-                .applymap(_conf_style, subset=["Confidence Level"])
-                .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
-                .set_table_styles(
-                    [
-                        {
-                            "selector": "thead th",
-                            "props": [
-                                ("background-color", "#0b1220"),
-                                ("color", "#e5e7eb"),
-                                ("font-weight", "900"),
-                                ("padding", "12px 12px"),
-                                ("font-size", "0.75rem"),
-                                ("text-transform", "uppercase"),
-                            ],
-                        }
-                    ]
-                )
-            )
-            st.dataframe(styled_exec, use_container_width=True, height=440)
+        # Re-rank priority order for display
+        prio_rank = {"High": 0, "Medium": 1, "Low": 2}
+        spec_rows.sort(key=lambda r: prio_rank.get(str(r.get("Priority")), 9))
+        hedge_rows.sort(key=lambda r: prio_rank.get(str(r.get("Priority")), 9))
 
         with t_spec:
-            df = exec_df[exec_df["Strategy Role"] == "Speculative Timing Strategy"].drop(columns=["Strategy Role"], errors="ignore")
-            _render_exec(df)
+            _render_cards(spec_rows[:12], empty_msg="No timing recommendations available.")
+            with st.expander("Show as table", expanded=False):
+                df_show = out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"].copy()
+                cols_keep = ["Commodity", "Decision", "When", "Why", "How", "Triggers", "Priority"]
+                df_show = df_show[[c for c in cols_keep if c in df_show.columns]]
+                st.dataframe(df_show, use_container_width=True, hide_index=True)
 
         with t_hedge:
-            df = exec_df[exec_df["Strategy Role"] == "Hedging Strategy"].drop(columns=["Strategy Role"], errors="ignore")
-            _render_exec(df)
+            _render_cards(hedge_rows[:12], empty_msg="No hedge playbooks available.")
+            with st.expander("Show as table", expanded=False):
+                df_show = out_df[out_df["Strategy Role"] == "Hedging Strategy"].copy()
+                cols_keep = ["Commodity", "Decision", "When", "Why", "How", "Priority"]
+                df_show = df_show[[c for c in cols_keep if c in df_show.columns]]
+                st.dataframe(df_show, use_container_width=True, hide_index=True)
 
         # Optional internal diagnostics (no inputs)
         if debug_mode:
