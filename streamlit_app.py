@@ -2615,6 +2615,16 @@ def render_integrated_strategy_engine(
             )
             st.session_state[quotes_key] = edited
 
+        # View + role filter
+        view_mode = st.radio(
+            "View",
+            ["Executive", "Detailed"],
+            index=0,
+            horizontal=True,
+            key=f"{key_prefix}_view",
+            help="Executive = simple decisions. Detailed = full Hull/carry/parity table.",
+        )
+
         # Build structured outputs
         role_filter = st.multiselect(
             "Show strategy roles",
@@ -2674,11 +2684,21 @@ def render_integrated_strategy_engine(
                     strat_name = "Delay Buying / Stagger Procurement"
                     steps = f"Delay majority buys; ladder purchases toward {min_e['horizon']} (~{min_e['months']}M)"
                     logic = f"Model curve shows lower prices ahead (min at {min_e['horizon']})."
+                    decision = "Buy later (prices forecast lower)"
+                    when_txt = f"Target {min_e['horizon']} (~{min_e['months']}M)"
+                    why_txt = f"Forecast low ahead ({move_to_min:.1f}% vs today)"
                 elif move_to_max >= float(forecast_sig):
                     market_condition = "Forecast Opportunity"
                     strat_name = "Early Procurement / Stock Build"
                     steps = f"Buy a portion now; secure remaining via forward/options into {max_e['horizon']} (~{max_e['months']}M)"
                     logic = f"Model curve shows higher prices ahead (max at {max_e['horizon']})."
+                    decision = "Buy earlier (prices forecast higher)"
+                    when_txt = "Start now"
+                    why_txt = f"Forecast rise ahead (+{move_to_max:.1f}% vs today)"
+                else:
+                    decision = "Monitor / staged execution"
+                    when_txt = "Re-check monthly"
+                    why_txt = "No strong forecast edge"
 
                 conf = _confidence_from_interval(s0=s0, target_price=float(mid_e["price"]), lower=mid_e.get("lower"), upper=mid_e.get("upper"))
                 outputs.append(
@@ -2687,6 +2707,10 @@ def render_integrated_strategy_engine(
                         "Market Condition": market_condition,
                         "Strategy Role": "Speculative Timing Strategy",
                         "Strategy Name": strat_name,
+                        "Decision": decision,
+                        "When": when_txt,
+                        "Why": why_txt,
+                        "How": steps,
                         "Trade Construction Steps": steps,
                         "Financial Logic": logic,
                         "Expected Driver of Profit": driver,
@@ -2724,12 +2748,20 @@ def render_integrated_strategy_engine(
                     legs_txt = _format_legs_brief(strat=hedge_strat, dec=dec)
 
                     market_condition = "Efficient" if str(hedge_strat.get("title", "")).upper().startswith("HOLD") else "Forecast Opportunity"
+                    decision = "Hedge now (cap cost risk)"
+                    when_txt = f"Before {max_e.get('horizon', 'next buy window')}"
+                    why_txt = "Reduce upside price risk"
+                    how_txt = f"Ask bank: {legs_txt}"
                     outputs.append(
                         {
                             "Asset Type": "Commodity",
                             "Market Condition": market_condition,
                             "Strategy Role": "Hedging Strategy",
                             "Strategy Name": str(hedge_strat.get("title", "Hedge")),
+                            "Decision": decision,
+                            "When": when_txt,
+                            "Why": why_txt,
+                            "How": how_txt,
                             "Trade Construction Steps": f"Ask bank for: {legs_txt}",
                             "Financial Logic": "Reduce procurement price risk (cap upside / manage volatility).",
                             "Expected Driver of Profit": "Risk reduction / budget certainty",
@@ -2801,12 +2833,20 @@ def render_integrated_strategy_engine(
                                 else:
                                     strat_name = "Reverse Cash-and-Carry"
                                     steps = "LONG spot (financed); SHORT futures"
+
+                                decision = "Arbitrage (pricing mismatch)"
+                                when_txt = "Now"
+                                why_txt = f"Futures mispriced by {mis:+.{dec}f}"
                                 outputs.append(
                                     {
                                         "Asset Type": asset_type,
                                         "Market Condition": "Arbitrage",
                                         "Strategy Role": "Arbitrage Strategy",
                                         "Strategy Name": strat_name,
+                                        "Decision": decision,
+                                        "When": when_txt,
+                                        "Why": why_txt,
+                                        "How": steps,
                                         "Trade Construction Steps": steps,
                                         "Financial Logic": f"F_market vs F_model mispricing = {mis:+.{dec}f} (edge {edge:.{dec}f}).",
                                         "Expected Driver of Profit": "Convergence of futures toward theoretical fair value",
@@ -2847,12 +2887,20 @@ def render_integrated_strategy_engine(
                                 logic = f"Parity gap = {gap:+.{dec}f}. Implied forward ≈ {implied_fwd:,.{dec}f}."
                                 driver = "Parity convergence via replication/arbitrage"
 
+                                decision = "Arbitrage (parity mismatch)"
+                                when_txt = "Now"
+                                why_txt = f"Parity gap {gap:+.{dec}f}"
+
                                 outputs.append(
                                     {
                                         "Asset Type": asset_type,
                                         "Market Condition": "Arbitrage",
                                         "Strategy Role": "Arbitrage Strategy",
                                         "Strategy Name": strat_name,
+                                        "Decision": decision,
+                                        "When": when_txt,
+                                        "Why": why_txt,
+                                        "How": steps,
                                         "Trade Construction Steps": steps,
                                         "Financial Logic": logic,
                                         "Expected Driver of Profit": driver,
@@ -2902,12 +2950,83 @@ def render_integrated_strategy_engine(
             st.info("No recommendations available (missing forecasts/inputs).")
             return
 
+        # Executive view: fewer, simpler columns
+        if str(view_mode) == "Executive":
+            st.markdown("<div class='cp-kv-label' style='margin-top: 0.5rem;'>Top Recommendations</div>", unsafe_allow_html=True)
+            st.caption("Simple decision summary. Open 'Detailed' view for full Hull/carry/parity math.")
+
+            # Keep only the executive fields (if present)
+            exec_cols = ["Commodity", "Decision", "When", "Why", "How", "Confidence Level", "Strategy Role"]
+            exec_df = out_df.copy()
+            for col in exec_cols:
+                if col not in exec_df.columns:
+                    exec_df[col] = "—"
+            exec_df = exec_df[exec_cols]
+
+            # Split by role into tabs
+            t_spec, t_hedge, t_arb = st.tabs(["📈 Timing (Forecast)", "🛡️ Hedge", "⚖️ Arbitrage"])
+
+            def _render_exec(df_in: pd.DataFrame, top_n: int = 10):
+                if df_in is None or df_in.empty:
+                    st.info("No items in this category right now.")
+                    return
+                df_show = df_in.head(int(top_n)).copy()
+
+                def _conf_style(v: str) -> str:
+                    vv = str(v)
+                    if "High" in vv:
+                        return "background-color:#052e16; color:#dcfce7; font-weight:900;"
+                    if "Medium" in vv:
+                        return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
+                    return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
+
+                styled_exec = (
+                    df_show.style
+                    .applymap(_conf_style, subset=["Confidence Level"])
+                    .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
+                    .set_table_styles(
+                        [
+                            {
+                                "selector": "thead th",
+                                "props": [
+                                    ("background-color", "#0b1220"),
+                                    ("color", "#e5e7eb"),
+                                    ("font-weight", "900"),
+                                    ("padding", "12px 12px"),
+                                    ("font-size", "0.75rem"),
+                                    ("text-transform", "uppercase"),
+                                ],
+                            }
+                        ]
+                    )
+                )
+                st.dataframe(styled_exec, use_container_width=True, height=440)
+
+            with t_spec:
+                df = exec_df[exec_df["Strategy Role"] == "Speculative Timing Strategy"].drop(columns=["Strategy Role"], errors="ignore")
+                _render_exec(df)
+
+            with t_hedge:
+                df = exec_df[exec_df["Strategy Role"] == "Hedging Strategy"].drop(columns=["Strategy Role"], errors="ignore")
+                _render_exec(df)
+
+            with t_arb:
+                df = exec_df[exec_df["Strategy Role"] == "Arbitrage Strategy"].drop(columns=["Strategy Role"], errors="ignore")
+                _render_exec(df)
+
+            st.caption("Arbitrage requires quotes + feasibility (storage/shorting/costs).")
+            return
+
         # Keep the requested structured output first; extra columns at end.
         ordered_cols = [
             "Asset Type",
             "Market Condition",
             "Strategy Role",
             "Strategy Name",
+            "Decision",
+            "When",
+            "Why",
+            "How",
             "Trade Construction Steps",
             "Financial Logic",
             "Expected Driver of Profit",
