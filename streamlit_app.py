@@ -2423,6 +2423,545 @@ def _put_call_parity_gap(*, c: float, p: float, s: float, k: float, r: float, t_
     return float(c - p) - float(s - _pv_strike(k=k, r=r, t_years=t_years))
 
 
+def _asset_type_from_label(label: str) -> str:
+    """Heuristic asset type classifier. Defaults to Commodity for this app."""
+    s = str(label or "").lower()
+    if any(k in s for k in ("eurusd", "usdpkr", "usd/pkr", "fx", "exchange")):
+        return "Currency"
+    if any(k in s for k in ("index", "equity", "stock", "bond")):
+        return "Investment Asset"
+    return "Commodity"
+
+
+def _theoretical_futures_price(
+    *,
+    asset_type: str,
+    s: float,
+    r: float,
+    t_years: float,
+    storage_cost: float = 0.0,
+    convenience_yield: float = 0.0,
+    r_domestic: float | None = None,
+    r_foreign: float | None = None,
+    dividend_yield: float = 0.0,
+    pv_income: float = 0.0,
+) -> float:
+    """Hull Ch. 5-style forward/futures fair value models."""
+    import math
+
+    asset_type = str(asset_type or "Commodity").strip()
+    s = float(s)
+    r = float(r)
+    t_years = float(max(t_years, 1e-9))
+
+    if asset_type == "Commodity":
+        return float(_theoretical_futures_price_commodity(s=s, r=r, storage_cost=float(storage_cost), convenience_yield=float(convenience_yield), t_years=t_years))
+
+    if asset_type == "Currency":
+        rd = float(r_domestic if r_domestic is not None else r)
+        rf = float(r_foreign if r_foreign is not None else 0.0)
+        return float(s * math.exp((rd - rf) * t_years))
+
+    # Investment Asset
+    q = float(dividend_yield)
+    pv_income = float(max(0.0, pv_income))
+    # If known income PV provided, use (S - PV(income))e^{rT}; else use yield form S e^{(r-q)T}
+    if pv_income > 0.0:
+        return float((s - pv_income) * math.exp(r * t_years))
+    return float(s * math.exp((r - q) * t_years))
+
+
+def _implied_forward_from_put_call_parity(*, c: float, p: float, k: float, r: float, t_years: float) -> float:
+    """Implied forward from parity: C - P = e^{-rT}(F - K) => F = K + (C - P)e^{rT}."""
+    import math
+
+    c = float(c)
+    p = float(p)
+    k = float(k)
+    r = float(r)
+    t_years = float(max(t_years, 1e-9))
+    return float(k + (c - p) * math.exp(r * t_years))
+
+
+def _format_legs_brief(*, strat: dict, dec: int) -> str:
+    legs = (strat or {}).get("legs") or []
+    if not legs:
+        return "—"
+    out: list[str] = []
+    for l in legs[:3]:
+        try:
+            out.append(f"{str(l.get('side')).upper()} {str(l.get('type')).upper()} @ {float(l.get('strike')):,.{dec}f}")
+        except Exception:
+            continue
+    return " · ".join(out) if out else "—"
+
+
+def render_integrated_strategy_engine(
+    *,
+    expander_title: str,
+    key_prefix: str,
+    commodity_payloads: list[dict] | None,
+    expanded: bool = False,
+) -> None:
+    """Integrated strategist: Forecast + No-arbitrage (carry/parity) + risk filter.
+
+    Produces rows classified into:
+      - Hedging Strategy
+      - Speculative Timing Strategy
+      - Arbitrage Strategy
+    """
+    with st.expander(expander_title, expanded=expanded):
+        st.markdown(
+            """
+<div class="cp-card" style="padding: 1.0rem 1.0rem;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+    <div>
+      <div class="cp-title">Institutional Strategy Recommendations</div>
+      <div class="cp-subtitle">Combines <b>forecast</b>, <b>cost‑of‑carry</b>, <b>options parity</b>, and <b>risk filters</b> into Hedge / Speculative / Arbitrage recommendations.</div>
+    </div>
+    <div class="cp-pill cp-pill-hold">Hull‑Style</div>
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if not commodity_payloads:
+            st.info("No commodities available.")
+            return
+
+        # Global knobs
+        g1, g2, g3, g4 = st.columns([1.0, 1.0, 1.0, 1.2])
+        with g1:
+            r = st.number_input("Risk‑free r (annual)", min_value=0.0, max_value=0.25, value=0.05, step=0.005, format="%.3f", key=f"{key_prefix}_r")
+        with g2:
+            storage_cost = st.number_input("Storage u (annual)", min_value=0.0, max_value=0.50, value=0.00, step=0.005, format="%.3f", key=f"{key_prefix}_u")
+        with g3:
+            convenience_yield = st.number_input("Convenience y (annual)", min_value=0.0, max_value=0.50, value=0.00, step=0.005, format="%.3f", key=f"{key_prefix}_y")
+        with g4:
+            forecast_sig = st.number_input("Forecast significance (%)", min_value=0.5, max_value=25.0, value=3.0, step=0.5, format="%.1f", key=f"{key_prefix}_f_sig")
+
+        h1, h2, h3, h4 = st.columns([1.0, 1.0, 1.0, 1.2])
+        with h1:
+            mispricing_thr_pct = st.number_input("Arb threshold (% of Spot)", min_value=0.1, max_value=10.0, value=1.0, step=0.1, format="%.1f", key=f"{key_prefix}_arb_thr")
+        with h2:
+            costs_bps = st.number_input("Txn costs (bps)", min_value=0.0, max_value=200.0, value=25.0, step=5.0, format="%.0f", key=f"{key_prefix}_costs")
+        with h3:
+            allow_short_spot = st.checkbox("Short spot possible", value=False, key=f"{key_prefix}_short")
+        with h4:
+            storage_feasible = st.checkbox("Storage feasible", value=False, key=f"{key_prefix}_storage_ok")
+
+        st.caption("Optional: paste market futures/options quotes to activate true no‑arbitrage (Arbitrage Strategy). Without quotes, we still produce Hedge + Speculative recommendations from forecasts.")
+
+        # Build candidate list and default quote sheet
+        candidates: list[dict] = []
+        for item in commodity_payloads:
+            for side in ("int_payload", "local_payload"):
+                p = item.get(side)
+                if p and p.get("name"):
+                    candidates.append({"label": f"{p['name']} ({'International' if side=='int_payload' else 'Local'})", "payload": p})
+
+        if not candidates:
+            st.info("No commodities available.")
+            return
+
+        base_rows: list[dict] = []
+        for c in candidates[:12]:
+            p = c["payload"]
+            scale = float(p.get("display_scale", 1.0) or 1.0)
+            unit = str(p.get("display_currency") or p.get("info", {}).get("currency", ""))
+            s0 = float(p.get("current_price") or 0.0) * scale
+            asset_type = _asset_type_from_label(c["label"])
+
+            curve = _extract_forecast_curve_from_payload(payload=p, max_months=24)
+            months_default = 6
+            if curve:
+                months_default = int(curve[min(len(curve) - 1, 5)].get("months", 6))
+
+            base_rows.append(
+                {
+                    "Asset": c["label"],
+                    "Asset Type": asset_type,
+                    "Spot": s0,
+                    "Maturity (months)": int(months_default),
+                    "Futures (Market)": np.nan,
+                    "Call (Market)": np.nan,
+                    "Put (Market)": np.nan,
+                    "Strike (K)": float(s0) if np.isfinite(s0) and s0 > 0 else np.nan,
+                    "Unit": unit,
+                }
+            )
+
+        quotes_key = f"{key_prefix}_quotes"
+        if quotes_key not in st.session_state or not isinstance(st.session_state.get(quotes_key), pd.DataFrame):
+            st.session_state[quotes_key] = pd.DataFrame(base_rows)
+
+        with st.expander("Market quotes (optional) — for Arbitrage Strategy", expanded=False):
+            edited = st.data_editor(
+                st.session_state[quotes_key],
+                use_container_width=True,
+                hide_index=True,
+                key=f"{key_prefix}_quotes_editor",
+                column_config={
+                    "Asset Type": st.column_config.SelectboxColumn(options=["Commodity", "Currency", "Investment Asset"], help="Model type for futures fair value"),
+                    "Spot": st.column_config.NumberColumn(format="%.6f"),
+                    "Maturity (months)": st.column_config.NumberColumn(format="%.0f"),
+                    "Futures (Market)": st.column_config.NumberColumn(format="%.6f"),
+                    "Call (Market)": st.column_config.NumberColumn(format="%.6f"),
+                    "Put (Market)": st.column_config.NumberColumn(format="%.6f"),
+                    "Strike (K)": st.column_config.NumberColumn(format="%.6f"),
+                },
+                disabled=["Asset", "Spot", "Unit"],
+            )
+            st.session_state[quotes_key] = edited
+
+        # Build structured outputs
+        role_filter = st.multiselect(
+            "Show strategy roles",
+            ["Hedging Strategy", "Speculative Timing Strategy", "Arbitrage Strategy"],
+            default=["Hedging Strategy", "Speculative Timing Strategy", "Arbitrage Strategy"],
+            key=f"{key_prefix}_role_filter",
+        )
+
+        outputs: list[dict] = []
+        for c in candidates:
+            p = c["payload"]
+            label = c["label"]
+            scale = float(p.get("display_scale", 1.0) or 1.0)
+            unit = str(p.get("display_currency") or p.get("info", {}).get("currency", ""))
+            s0 = float(p.get("current_price") or 0.0) * scale
+            if not (np.isfinite(s0) and s0 > 0):
+                continue
+
+            name_lower = str(p.get("name", "")).lower()
+            three_dec_assets = ("cotton", "polyester", "viscose", "crude", "natural gas")
+            dec = 3 if (any(k in name_lower for k in three_dec_assets) or "/lb" in unit.lower()) else 2
+
+            curve = _extract_forecast_curve_from_payload(payload=p, max_months=24)
+            if not curve:
+                continue
+
+            # scale curve
+            curve_s: list[dict] = []
+            for e in curve:
+                e2 = dict(e)
+                e2["price"] = float(e2["price"]) * scale
+                if e2.get("lower") is not None:
+                    e2["lower"] = float(e2["lower"]) * scale
+                if e2.get("upper") is not None:
+                    e2["upper"] = float(e2["upper"]) * scale
+                curve_s.append(e2)
+
+            min_e = min(curve_s, key=lambda e: float(e.get("price", 1e18)))
+            max_e = max(curve_s, key=lambda e: float(e.get("price", -1e18)))
+            mid_e = _closest_curve_entry(curve_s, 6) or min_e
+
+            # Speculative timing strategy (Step 3)
+            if "Speculative Timing Strategy" in role_filter:
+                move_to_min = (float(min_e["price"]) / s0 - 1.0) * 100.0
+                move_to_max = (float(max_e["price"]) / s0 - 1.0) * 100.0
+
+                market_condition = "Efficient"
+                strat_name = "Monitor"
+                steps = "Re-check monthly as new data arrives"
+                logic = "Forecast does not show a strong edge vs current spot."
+                driver = "Forecast realization"
+                risk_notes = "Forecast uncertainty; execution constraints"
+
+                # For procurement: falling forecast suggests delaying; rising suggests early procurement
+                if move_to_min <= -float(forecast_sig):
+                    market_condition = "Forecast Opportunity"
+                    strat_name = "Delay Buying / Stagger Procurement"
+                    steps = f"Delay majority buys; ladder purchases toward {min_e['horizon']} (~{min_e['months']}M)"
+                    logic = f"Model curve shows lower prices ahead (min at {min_e['horizon']})."
+                elif move_to_max >= float(forecast_sig):
+                    market_condition = "Forecast Opportunity"
+                    strat_name = "Early Procurement / Stock Build"
+                    steps = f"Buy a portion now; secure remaining via forward/options into {max_e['horizon']} (~{max_e['months']}M)"
+                    logic = f"Model curve shows higher prices ahead (max at {max_e['horizon']})."
+
+                conf = _confidence_from_interval(s0=s0, target_price=float(mid_e["price"]), lower=mid_e.get("lower"), upper=mid_e.get("upper"))
+                outputs.append(
+                    {
+                        "Asset Type": "Commodity",
+                        "Market Condition": market_condition,
+                        "Strategy Role": "Speculative Timing Strategy",
+                        "Strategy Name": strat_name,
+                        "Trade Construction Steps": steps,
+                        "Financial Logic": logic,
+                        "Expected Driver of Profit": driver,
+                        "Risk Notes": risk_notes,
+                        "Confidence Level": conf,
+                        "Commodity": label,
+                        "Spot": f"{s0:,.{dec}f}",
+                        "Unit": unit,
+                    }
+                )
+
+            # Hedging strategy (risk reduction) — uses existing options engine (Step 6)
+            if "Hedging Strategy" in role_filter:
+                try:
+                    hist_df = p.get("history_df")
+                    vcol = p.get("info", {}).get("value_col") or p.get("value_col") or "value"
+                    sigma_ann = 0.25
+                    if isinstance(hist_df, pd.DataFrame) and vcol in hist_df.columns:
+                        sigma_ann = float(_annualized_volatility_from_history(hist_df[vcol]))
+
+                    # Procurement hedge against upside risk -> use max forecast
+                    t_years = float(max(1, int(max_e.get("months", 6))) / 12.0)
+                    hedge_strat = _recommend_hedge_strategy(
+                        exposure="Procurement (we will BUY later)",
+                        s0=s0,
+                        s_mean=float(max_e.get("price", s0)),
+                        sigma_ann=float(sigma_ann),
+                        t_years=t_years,
+                        risk_profile="Balanced",
+                        budget_priority="Medium",
+                        allow_selling=False,
+                        qty=1.0,
+                        unit=unit,
+                    )
+                    legs_txt = _format_legs_brief(strat=hedge_strat, dec=dec)
+
+                    market_condition = "Efficient" if str(hedge_strat.get("title", "")).upper().startswith("HOLD") else "Forecast Opportunity"
+                    outputs.append(
+                        {
+                            "Asset Type": "Commodity",
+                            "Market Condition": market_condition,
+                            "Strategy Role": "Hedging Strategy",
+                            "Strategy Name": str(hedge_strat.get("title", "Hedge")),
+                            "Trade Construction Steps": f"Ask bank for: {legs_txt}",
+                            "Financial Logic": "Reduce procurement price risk (cap upside / manage volatility).",
+                            "Expected Driver of Profit": "Risk reduction / budget certainty",
+                            "Risk Notes": "Premium cost, basis risk, liquidity",
+                            "Confidence Level": "Medium",
+                            "Commodity": label,
+                            "Spot": f"{s0:,.{dec}f}",
+                            "Unit": unit,
+                        }
+                    )
+                except Exception:
+                    pass
+
+            # Arbitrage strategy (Step 4/5) — requires quotes + risk filters
+            if "Arbitrage Strategy" in role_filter:
+                qdf = st.session_state.get(quotes_key)
+                qrow = None
+                try:
+                    if isinstance(qdf, pd.DataFrame) and "Asset" in qdf.columns:
+                        m = qdf["Asset"].astype(str) == str(label)
+                        if bool(m.any()):
+                            qrow = qdf[m].iloc[0].to_dict()
+                except Exception:
+                    qrow = None
+
+                if isinstance(qrow, dict):
+                    asset_type = str(qrow.get("Asset Type") or "Commodity")
+                    months = int(pd.to_numeric(qrow.get("Maturity (months)"), errors="coerce") or 6)
+                    t_years = float(max(1, months) / 12.0)
+                    f_mkt = pd.to_numeric(qrow.get("Futures (Market)"), errors="coerce")
+                    c_mkt = pd.to_numeric(qrow.get("Call (Market)"), errors="coerce")
+                    p_mkt = pd.to_numeric(qrow.get("Put (Market)"), errors="coerce")
+                    k = pd.to_numeric(qrow.get("Strike (K)"), errors="coerce")
+
+                    cost_per_unit = float(s0) * float(costs_bps) / 10000.0
+                    thr_abs = float(s0) * float(mispricing_thr_pct) / 100.0
+
+                    # (A) Futures vs model carry
+                    if pd.notna(f_mkt) and np.isfinite(float(f_mkt)):
+                        try:
+                            f_model = _theoretical_futures_price(
+                                asset_type=asset_type,
+                                s=s0,
+                                r=float(r),
+                                t_years=t_years,
+                                storage_cost=float(storage_cost),
+                                convenience_yield=float(convenience_yield),
+                            )
+                            mis = float(f_mkt) - float(f_model)
+                            edge = abs(mis)
+
+                            feasible = True
+                            risk_notes = "Liquidity, fees, margin, execution"
+                            if asset_type == "Commodity" and not storage_feasible:
+                                feasible = False
+                                risk_notes = "Rejected: storage not feasible for physical carry."
+                            if mis < 0 and not allow_short_spot:
+                                feasible = False
+                                risk_notes = "Rejected: requires short spot (cash-and-carry) which is not allowed."
+
+                            if edge <= (thr_abs + cost_per_unit):
+                                feasible = False
+                                risk_notes = "Rejected: edge too small after threshold + costs."
+
+                            if feasible:
+                                if mis < 0:
+                                    strat_name = "Cash-and-Carry Arbitrage"
+                                    steps = "Short spot; invest cash; LONG futures"
+                                else:
+                                    strat_name = "Reverse Cash-and-Carry"
+                                    steps = "LONG spot (financed); SHORT futures"
+                                outputs.append(
+                                    {
+                                        "Asset Type": asset_type,
+                                        "Market Condition": "Arbitrage",
+                                        "Strategy Role": "Arbitrage Strategy",
+                                        "Strategy Name": strat_name,
+                                        "Trade Construction Steps": steps,
+                                        "Financial Logic": f"F_market vs F_model mispricing = {mis:+.{dec}f} (edge {edge:.{dec}f}).",
+                                        "Expected Driver of Profit": "Convergence of futures toward theoretical fair value",
+                                        "Risk Notes": risk_notes,
+                                        "Confidence Level": "High" if edge >= 2 * (thr_abs + cost_per_unit) else "Medium",
+                                        "Commodity": label,
+                                        "Spot": f"{s0:,.{dec}f}",
+                                        "Unit": unit,
+                                    }
+                                )
+                        except Exception:
+                            pass
+
+                    # (B) Put-call parity / synthetic forward
+                    if all(pd.notna(x) for x in (c_mkt, p_mkt, k)) and np.isfinite(float(k)):
+                        try:
+                            c_f = float(c_mkt)
+                            p_f = float(p_mkt)
+                            k_f = float(k)
+                            gap = _put_call_parity_gap(c=c_f, p=p_f, s=s0, k=k_f, r=float(r), t_years=t_years)
+                            edge = abs(gap)
+
+                            feasible = True
+                            risk_notes = "Model/assumption risk, liquidity, execution"
+                            if edge <= (thr_abs + cost_per_unit):
+                                feasible = False
+                                risk_notes = "Rejected: parity gap too small after costs."
+
+                            if feasible:
+                                if gap < 0:
+                                    strat_name = "Synthetic Long Forward (Conversion)"
+                                    steps = "BUY Call, SELL Put (same K,T) + Buy Spot + Borrow PV(K)"
+                                else:
+                                    strat_name = "Synthetic Short Forward (Reversal)"
+                                    steps = "SELL Call, BUY Put (same K,T) + Short Spot + Lend PV(K)"
+
+                                implied_fwd = _implied_forward_from_put_call_parity(c=c_f, p=p_f, k=k_f, r=float(r), t_years=t_years)
+                                logic = f"Parity gap = {gap:+.{dec}f}. Implied forward ≈ {implied_fwd:,.{dec}f}."
+                                driver = "Parity convergence via replication/arbitrage"
+
+                                outputs.append(
+                                    {
+                                        "Asset Type": asset_type,
+                                        "Market Condition": "Arbitrage",
+                                        "Strategy Role": "Arbitrage Strategy",
+                                        "Strategy Name": strat_name,
+                                        "Trade Construction Steps": steps,
+                                        "Financial Logic": logic,
+                                        "Expected Driver of Profit": driver,
+                                        "Risk Notes": risk_notes,
+                                        "Confidence Level": "High" if edge >= 2 * (thr_abs + cost_per_unit) else "Medium",
+                                        "Commodity": label,
+                                        "Spot": f"{s0:,.{dec}f}",
+                                        "Unit": unit,
+                                    }
+                                )
+
+                                # Step 8: volatility distortion (informational)
+                                try:
+                                    hist_df = p.get("history_df")
+                                    vcol = p.get("info", {}).get("value_col") or p.get("value_col") or "value"
+                                    sigma_model = None
+                                    if isinstance(hist_df, pd.DataFrame) and vcol in hist_df.columns:
+                                        sigma_model = float(_annualized_volatility_from_history(hist_df[vcol]))
+                                    iv = _implied_volatility_bs(price=float(c_f), s=s0, k=k_f, t_years=t_years, opt_type="CALL")
+                                    if iv is not None and sigma_model is not None and np.isfinite(iv) and np.isfinite(sigma_model):
+                                        iv_gap = (iv - sigma_model) * 100.0
+                                        if abs(iv_gap) >= 10.0:
+                                            outputs.append(
+                                                {
+                                                    "Asset Type": asset_type,
+                                                    "Market Condition": "Forecast Opportunity",
+                                                    "Strategy Role": "Speculative Timing Strategy",
+                                                    "Strategy Name": "Volatility Distortion (Idea)",
+                                                    "Trade Construction Steps": "If IV is cheap: buy options; if IV is rich: consider spreads (policy permitting)",
+                                                    "Financial Logic": f"IV(call) {iv*100:.0f}% vs realized/model {sigma_model*100:.0f}% (gap {iv_gap:+.0f} vol pts).",
+                                                    "Expected Driver of Profit": "IV mean reversion / realized vs implied gap",
+                                                    "Risk Notes": "Vega risk, liquidity, model risk",
+                                                    "Confidence Level": "Low",
+                                                    "Commodity": label,
+                                                    "Spot": f"{s0:,.{dec}f}",
+                                                    "Unit": unit,
+                                                }
+                                            )
+                                except Exception:
+                                    pass
+
+                        except Exception:
+                            pass
+
+        out_df = pd.DataFrame(outputs)
+        if out_df.empty:
+            st.info("No recommendations available (missing forecasts/inputs).")
+            return
+
+        # Keep the requested structured output first; extra columns at end.
+        ordered_cols = [
+            "Asset Type",
+            "Market Condition",
+            "Strategy Role",
+            "Strategy Name",
+            "Trade Construction Steps",
+            "Financial Logic",
+            "Expected Driver of Profit",
+            "Risk Notes",
+            "Confidence Level",
+            "Commodity",
+            "Spot",
+            "Unit",
+        ]
+        cols = [c for c in ordered_cols if c in out_df.columns] + [c for c in out_df.columns if c not in ordered_cols]
+        out_df = out_df[cols]
+
+        def _conf_style(v: str) -> str:
+            vv = str(v)
+            if "High" in vv:
+                return "background-color:#052e16; color:#dcfce7; font-weight:900;"
+            if "Medium" in vv:
+                return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
+            return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
+
+        def _role_style(v: str) -> str:
+            vv = str(v)
+            if "Arbitrage" in vv:
+                return "background-color:#7c2d12; color:#fff7ed; font-weight:900;"
+            if "Hedging" in vv:
+                return "background-color:#064e3b; color:#dcfce7; font-weight:900;"
+            return "background-color:#0b1220; color:#e5e7eb; font-weight:900;"
+
+        styled = (
+            out_df.style
+            .applymap(_conf_style, subset=["Confidence Level"])
+            .applymap(_role_style, subset=["Strategy Role"])
+            .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
+            .set_table_styles(
+                [
+                    {
+                        "selector": "thead th",
+                        "props": [
+                            ("background-color", "#0b1220"),
+                            ("color", "#e5e7eb"),
+                            ("font-weight", "900"),
+                            ("padding", "12px 12px"),
+                            ("font-size", "0.75rem"),
+                            ("text-transform", "uppercase"),
+                        ],
+                    }
+                ]
+            )
+        )
+        st.dataframe(styled, use_container_width=True, height=520)
+        st.caption("Arbitrage rows require quotes and feasibility (storage/shorting/costs). Hedge + Speculative rows come from model forecasts and historical volatility.")
+        return
+
+
 def _implied_volatility_bs(*, price: float, s: float, k: float, t_years: float, opt_type: str) -> float | None:
     """Solve for implied vol using bisection. Returns sigma_ann or None if not solvable."""
     try:
@@ -4522,12 +5061,12 @@ def render_executive_summary():
     else:
         st.info("Electricity tariff data unavailable right now.")
 
-    # Forecast-driven strategist (buy/sell timing + hedge playbook)
+    # Integrated strategist (Forecast + Carry/Parity + Risk filter)
     st.markdown("---")
-    render_forecast_strategy_engine(
-        expander_title="🧭 Strategy Engine (Buy/Sell Timing + Hedge Plan)",
+    render_integrated_strategy_engine(
+        expander_title="🏛️ Institutional Strategy Engine (Forecast + Arbitrage + Hedge)",
         expanded=True,
-        key_prefix="summary_forecast_strat",
+        key_prefix="summary_institutional",
         commodity_payloads=commodity_payloads,
     )
     
