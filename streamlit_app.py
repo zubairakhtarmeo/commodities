@@ -3227,6 +3227,7 @@ def render_integrated_strategy_engine(
                 trade_recommendation = ""
                 expected_profit = None  # None indicates N/A, 0.0 indicates zero profit
                 strategy_details = ""
+                strategy_already_set = False  # Flag to prevent overwriting Natural Gas/Crude Oil strategies
 
                 # SKIP STRATEGY if no actual purchase quantity (avoid unrealistic profit projections)
                 if mqty == 0 or mqty is None or not np.isfinite(mqty):
@@ -3293,6 +3294,7 @@ def render_integrated_strategy_engine(
                         conf = _confidence_from_interval(s0=s0, target_price=float(min_e.get("price", s0)), 
                                                          lower=float(min_e.get("low", s0*0.95)), 
                                                          upper=float(min_e.get("high", s0*1.05)))
+                        strategy_already_set = True  # Prevent overwriting
                     
                     elif "crude" in pc_lower:
                         # Crude oil affects polyester/synthetic fiber costs
@@ -3361,6 +3363,7 @@ def render_integrated_strategy_engine(
                         conf = _confidence_from_interval(s0=s0, target_price=float(min_e.get("price", s0)),
                                                          lower=float(min_e.get("low", s0*0.95)),
                                                          upper=float(min_e.get("high", s0*1.05)))
+                        strategy_already_set = True  # Prevent overwriting
                     
                     else:
                         # Generic fallback for other non-purchased commodities
@@ -3373,6 +3376,10 @@ def render_integrated_strategy_engine(
                         conf = _confidence_from_interval(s0=s0, target_price=s0, lower=s0*0.95, upper=s0*1.05)
                         how_txt = trade_recommendation
                         expected_profit = None  # Truly N/A for generic indicators
+                    
+                    # Skip regular strategy logic - we already set all values above
+                    pass  # Natural Gas and Crude Oil logic complete
+                    
                 # For procurement: falling forecast suggests delaying; rising suggests early procurement
                 elif move_to_min <= -float(forecast_sig):
                     market_condition = "Forecast Opportunity"
@@ -3611,15 +3618,16 @@ def render_integrated_strategy_engine(
                         upper=max_e.get("upper"),
                     )
                 else:
-                    decision = "Monitor / staged execution"
-                    when_txt = "Re-check monthly"
-                    why_txt = "No strong forecast edge"
-                    conf = _confidence_from_interval(
-                        s0=s0,
-                        target_price=float(mid_e.get("price", s0)),
-                        lower=mid_e.get("lower"),
-                        upper=mid_e.get("upper"),
-                    )
+                    if not strategy_already_set:  # Don't overwrite Natural Gas/Crude Oil strategies
+                        decision = "Monitor / staged execution"
+                        when_txt = "Re-check monthly"
+                        why_txt = "No strong forecast edge"
+                        conf = _confidence_from_interval(
+                            s0=s0,
+                            target_price=float(mid_e.get("price", s0)),
+                            lower=mid_e.get("lower"),
+                            upper=mid_e.get("upper"),
+                        )
 
                 # Simple triggers using volatility (if available)
                 triggers = ""
