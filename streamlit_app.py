@@ -5412,6 +5412,213 @@ def main():
                 
                 st.dataframe(styled_df, use_container_width=True, hide_index=True, height=440)
         
+        # Purchasing Forecast Section
+        st.markdown("---")
+        st.markdown("### 📦 Quarterly Purchasing Forecast")
+        st.caption("🔮 Predicted procurement volumes · Based on historical trends from mid-2024 onwards")
+        
+        try:
+            purch_df = _load_purchase_monthly_agg()
+            if isinstance(purch_df, pd.DataFrame) and not purch_df.empty and "month" in purch_df.columns:
+                qty_col = "total_qty_kg" if "total_qty_kg" in purch_df.columns else ("total_qty" if "total_qty" in purch_df.columns else None)
+                
+                if qty_col:
+                    # Prepare data
+                    purch_df = purch_df.copy()
+                    purch_df["month"] = pd.to_datetime(purch_df["month"], errors="coerce")
+                    purch_df = purch_df.dropna(subset=["month"])
+                    purch_df[qty_col] = pd.to_numeric(purch_df[qty_col], errors="coerce")
+                    purch_df = purch_df.dropna(subset=[qty_col])
+                    
+                    # Filter from mid-2024 onwards
+                    start_date = pd.Timestamp("2024-07-01")
+                    purch_df = purch_df[purch_df["month"] >= start_date].sort_values("month")
+                    
+                    if not purch_df.empty:
+                        # Get today's date and calculate forecast end (1 year from now)
+                        today = pd.Timestamp("2026-02-04")  # Current date from context
+                        forecast_end = today + pd.DateOffset(years=1)
+                        
+                        # Aggregate by commodity and quarter
+                        purch_df["quarter"] = purch_df["month"].dt.to_period("Q")
+                        quarterly = purch_df.groupby(["commodity", "quarter"], dropna=False)[qty_col].sum().reset_index()
+                        
+                        # Pivot to get commodities as columns
+                        pivot_df = quarterly.pivot(index="quarter", columns="commodity", values=qty_col).fillna(0)
+                        
+                        # Generate future quarters for forecast
+                        last_quarter = pivot_df.index.max()
+                        future_quarters = []
+                        current_q = last_quarter
+                        while current_q.end_time < forecast_end:
+                            current_q = current_q + 1
+                            future_quarters.append(current_q)
+                        
+                        # Simple forecast: use average of last 4 quarters for each commodity
+                        forecast_rows = []
+                        for q in future_quarters:
+                            forecast_row = {}
+                            for commodity in pivot_df.columns:
+                                last_4_quarters = pivot_df[commodity].tail(4)
+                                avg_qty = last_4_quarters.mean() if len(last_4_quarters) > 0 else 0
+                                forecast_row[commodity] = avg_qty
+                            forecast_rows.append(forecast_row)
+                        
+                        if forecast_rows:
+                            forecast_df = pd.DataFrame(forecast_rows, index=future_quarters)
+                            # Combine historical and forecast
+                            combined_df = pd.concat([pivot_df, forecast_df])
+                        else:
+                            combined_df = pivot_df
+                        
+                        # Convert to tonnes and format
+                        display_df = combined_df / 1000.0  # kg to tonnes
+                        display_df.index = display_df.index.astype(str)
+                        
+                        # Create visualization
+                        col1, col2 = st.columns([3, 2])
+                        
+                        with col1:
+                            # Create stacked bar chart
+                            import plotly.graph_objects as go
+                            
+                            fig = go.Figure()
+                            colors_map = {
+                                'Cotton': '#3b82f6',
+                                'Polyester': '#10b981', 
+                                'Viscose': '#8b5cf6',
+                                'Crude Oil': '#ef4444',
+                                'Natural Gas': '#ec4899'
+                            }
+                            
+                            for commodity in display_df.columns:
+                                fig.add_trace(go.Bar(
+                                    name=commodity,
+                                    x=display_df.index,
+                                    y=display_df[commodity],
+                                    marker_color=colors_map.get(commodity, '#64748b'),
+                                    hovertemplate=f'<b>{commodity}</b><br>%{{y:,.0f}} tonnes<extra></extra>'
+                                ))
+                            
+                            # Mark historical vs forecast
+                            last_historical_idx = len(pivot_df) - 1
+                            
+                            fig.update_layout(
+                                barmode='group',
+                                title=dict(
+                                    text='Quarterly Purchasing Volume (Tonnes)',
+                                    font=dict(size=14, weight='bold')
+                                ),
+                                xaxis_title='Quarter',
+                                yaxis_title='Volume (Tonnes)',
+                                hovermode='x unified',
+                                plot_bgcolor='#f8fafc',
+                                paper_bgcolor='white',
+                                height=400,
+                                showlegend=True,
+                                legend=dict(
+                                    orientation='h',
+                                    yanchor='bottom',
+                                    y=1.02,
+                                    xanchor='right',
+                                    x=1
+                                ),
+                                shapes=[
+                                    # Add vertical line separating historical from forecast
+                                    dict(
+                                        type='line',
+                                        x0=last_historical_idx + 0.5,
+                                        x1=last_historical_idx + 0.5,
+                                        y0=0,
+                                        yref='paper',
+                                        y1=1,
+                                        line=dict(color='#f59e0b', width=2, dash='dash')
+                                    )
+                                ],
+                                annotations=[
+                                    dict(
+                                        x=last_historical_idx + 0.5,
+                                        y=1.05,
+                                        xref='x',
+                                        yref='paper',
+                                        text='← Historical | Forecast →',
+                                        showarrow=False,
+                                        font=dict(size=10, color='#f59e0b'),
+                                        xanchor='center'
+                                    )
+                                ]
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True, key="purchasing_forecast")
+                        
+                        with col2:
+                            # Create summary table
+                            summary_data = []
+                            for commodity in display_df.columns:
+                                historical_avg = display_df[commodity].iloc[:len(pivot_df)].mean()
+                                forecast_avg = display_df[commodity].iloc[len(pivot_df):].mean() if len(forecast_rows) > 0 else 0
+                                change_pct = ((forecast_avg / historical_avg - 1) * 100) if historical_avg > 0 else 0
+                                
+                                summary_data.append({
+                                    'Commodity': commodity,
+                                    'Avg Historical': f'{historical_avg:,.0f} t',
+                                    'Avg Forecast': f'{forecast_avg:,.0f} t',
+                                    'Change': f'{change_pct:+.1f}%'
+                                })
+                            
+                            summary_df = pd.DataFrame(summary_data)
+                            
+                            # Style the table
+                            def color_forecast_change(val):
+                                if isinstance(val, str) and '%' in val:
+                                    num = float(val.replace('%', '').replace('+', ''))
+                                    if num > 5:
+                                        return 'background-color: #dcfce7; color: #166534; font-weight: bold'
+                                    elif num > 0:
+                                        return 'background-color: #e0f2fe; color: #075985; font-weight: bold'
+                                    elif num < -5:
+                                        return 'background-color: #fee2e2; color: #991b1b; font-weight: bold'
+                                    elif num < 0:
+                                        return 'background-color: #fed7aa; color: #9a3412; font-weight: bold'
+                                return ''
+                            
+                            styled_summary = summary_df.style.applymap(
+                                color_forecast_change, subset=['Change']
+                            ).set_properties(**{
+                                'text-align': 'right',
+                                'font-size': '0.9rem'
+                            }, subset=['Avg Historical', 'Avg Forecast', 'Change']).set_properties(**{
+                                'text-align': 'left',
+                                'font-weight': 'bold',
+                                'font-size': '0.9rem'
+                            }, subset=['Commodity']).set_table_styles([
+                                {'selector': 'thead th', 'props': [
+                                    ('background-color', '#1e40af'),
+                                    ('color', 'white'),
+                                    ('font-weight', 'bold'),
+                                    ('text-align', 'center'),
+                                    ('padding', '10px'),
+                                    ('font-size', '0.85rem')
+                                ]},
+                                {'selector': 'tbody tr:nth-child(even)', 'props': [
+                                    ('background-color', '#f8fafc')
+                                ]},
+                                {'selector': 'tbody tr:hover', 'props': [
+                                    ('background-color', '#e0e7ff')
+                                ]}
+                            ])
+                            
+                            st.dataframe(styled_summary, use_container_width=True, hide_index=True, height=240)
+                            
+                            st.caption(f"📊 Forecast based on {len(pivot_df)} quarters of historical data")
+                            st.caption("🔮 Predictions use 4-quarter rolling average")
+                    else:
+                        st.info("Purchase data available from mid-2024 onwards. Waiting for sufficient history to generate forecasts.")
+            else:
+                st.info("No purchase history available. Upload procurement data to enable forecasting.")
+        except Exception as e:
+            st.warning(f"Unable to generate purchasing forecast: {str(e)}")
+        
         st.markdown("---")
         
         # Render available local commodity data
