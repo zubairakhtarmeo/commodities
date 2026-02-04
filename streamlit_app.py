@@ -2833,7 +2833,7 @@ def render_integrated_strategy_engine(
                 
                 # Extract key metrics from How text for prominent display
                 import re
-                profit_amount = 0.0
+                profit_amount = None  # None = N/A, number = actual profit
                 phase1_qty = "—"
                 phase1_price = "—"
                 strategy_name = "—"
@@ -2919,7 +2919,7 @@ def render_integrated_strategy_engine(
         </div>
         <div style='text-align: right;'>
             <div style='font-size: 0.7rem; color: #64748b; font-weight: 700; margin-bottom: 0.15rem;'>EXPECTED PROFIT</div>
-            <div style='font-size: 1.8rem; font-weight: 900; color: #059669;'>${profit_amount:,.0f}</div>
+            <div style='font-size: 1.8rem; font-weight: 900; color: {'#94a3b8' if profit_amount is None else '#059669'};'>{'N/A' if profit_amount is None else f'${profit_amount:,.0f}'}</div>
         </div>
     </div>
 </div>
@@ -3181,7 +3181,7 @@ def render_integrated_strategy_engine(
                 
                 # NEW: Specific trade recommendation with profit calculation
                 trade_recommendation = ""
-                expected_profit = 0.0
+                expected_profit = None  # None indicates N/A, 0.0 indicates zero profit
                 strategy_details = ""
 
                 # SKIP STRATEGY if no actual purchase quantity (avoid unrealistic profit projections)
@@ -3193,6 +3193,8 @@ def render_integrated_strategy_engine(
                     when_txt = "Not applicable"
                     why_txt = "Not a regularly purchased commodity"
                     conf = _confidence_from_interval(s0=s0, target_price=s0, lower=s0*0.95, upper=s0*1.05)
+                    # Don't include profit in recommendation text to force N/A display
+                    how_txt = trade_recommendation
                 # For procurement: falling forecast suggests delaying; rising suggests early procurement
                 elif move_to_min <= -float(forecast_sig):
                     market_condition = "Forecast Opportunity"
@@ -5614,6 +5616,8 @@ def main():
                             st.caption("🔮 Predictions use 4-quarter rolling average")
                     else:
                         st.info("Purchase data available from mid-2024 onwards. Waiting for sufficient history to generate forecasts.")
+                else:
+                    st.info("No quantity column found in purchase data. Check data format.")
             else:
                 st.info("No purchase history available. Upload procurement data to enable forecasting.")
         except Exception as e:
