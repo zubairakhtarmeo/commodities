@@ -5595,13 +5595,6 @@ def main():
         
         try:
             purch_df = _load_purchase_monthly_agg()
-            
-            # Debug info
-            if purch_df.empty:
-                st.error("🔍 DEBUG: Purchase dataframe is EMPTY")
-            else:
-                st.success(f"✅ Loaded {len(purch_df)} purchase records with columns: {', '.join(purch_df.columns.tolist())}")
-            
             if isinstance(purch_df, pd.DataFrame) and not purch_df.empty and "month" in purch_df.columns:
                 qty_col = "total_qty_kg" if "total_qty_kg" in purch_df.columns else ("total_qty" if "total_qty" in purch_df.columns else None)
                 
