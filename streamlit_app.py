@@ -2822,6 +2822,30 @@ def render_integrated_strategy_engine(
                 why_txt = str(r.get("Why") or "—")
                 how_txt = str(r.get("How") or "—")  # This contains the detailed trade recommendations
                 
+                # Extract key metrics from How text for prominent display
+                import re
+                profit_amount = 0.0
+                phase1_qty = "—"
+                phase1_price = "—"
+                strategy_name = "—"
+                
+                if how_txt and how_txt != "—":
+                    # Extract profit
+                    profit_match = re.search(r'(?:SAVINGS|PROFIT):\*\*\s*([\d,\.]+)', how_txt)
+                    if profit_match:
+                        profit_amount = float(profit_match.group(1).replace(',', ''))
+                    
+                    # Extract Phase 1 details
+                    phase1_match = re.search(r'Phase 1 \(NOW\):\*\* Buy ([\d,\.]+[^\@]*) @ ([\d\.]+)', how_txt)
+                    if phase1_match:
+                        phase1_qty = phase1_match.group(1).strip()
+                        phase1_price = phase1_match.group(2)
+                    
+                    # Extract strategy
+                    strategy_match = re.search(r'\*\*STRATEGY: ([^\n]+)', how_text)
+                    if strategy_match:
+                        strategy_name = strategy_match.group(1).replace('**', '')[:45]
+                
                 # Priority styling
                 if priority == "High":
                     badge_color = "#dc2626"
@@ -2836,7 +2860,7 @@ def render_integrated_strategy_engine(
                     badge_icon = "🟢"
                     border_color = "#10b981"
                 
-                # Compact visual card
+                # Compact visual card with profit prominently displayed
                 st.markdown(f"""
 <div style='background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); 
             border-left: 5px solid {border_color}; 
@@ -2844,27 +2868,40 @@ def render_integrated_strategy_engine(
             padding: 1rem 1.25rem; 
             margin-bottom: 0.75rem;
             box-shadow: 0 2px 4px rgba(0,0,0,0.08);'>
-    <div style='display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;'>
+    <div style='display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.75rem;'>
         <div style='flex: 1;'>
             <div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;'>
-                <span style='font-size: 1.1rem; font-weight: 900; color: #0f172a;'>{commodity}</span>
+                <span style='font-size: 1.2rem; font-weight: 900; color: #0f172a;'>{commodity}</span>
                 <span style='background: {badge_color}; color: white; padding: 0.15rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 800;'>{badge_icon} {priority}</span>
             </div>
-            <div style='background: rgba(59,130,246,0.08); padding: 0.5rem 0.75rem; border-radius: 6px; margin-bottom: 0.4rem;'>
-                <div style='font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.15rem;'>Action</div>
-                <div style='font-size: 0.9rem; font-weight: 700; color: #1e293b;'>{decision}</div>
+            <div style='font-size: 0.85rem; color: #64748b; font-weight: 600;'>{decision}</div>
+        </div>
+        <div style='text-align: right;'>
+            <div style='font-size: 0.7rem; color: #64748b; font-weight: 700; margin-bottom: 0.15rem;'>EXPECTED PROFIT</div>
+            <div style='font-size: 1.8rem; font-weight: 900; color: #059669;'>${profit_amount:,.0f}</div>
+        </div>
+    </div>
+    
+    <div style='background: rgba(59,130,246,0.08); padding: 0.75rem; border-radius: 6px; margin-bottom: 0.5rem;'>
+        <div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;'>
+            <div>
+                <div style='font-size: 0.65rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.2rem;'>📦 Phase 1 Qty</div>
+                <div style='font-size: 0.85rem; font-weight: 800; color: #0f172a;'>{phase1_qty}</div>
             </div>
-            <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;'>
-                <div style='background: rgba(16,185,129,0.08); padding: 0.4rem 0.6rem; border-radius: 4px;'>
-                    <div style='font-size: 0.7rem; font-weight: 600; color: #64748b;'>⏰ Timing</div>
-                    <div style='font-size: 0.8rem; font-weight: 700; color: #0f172a;'>{when_txt[:35]}</div>
-                </div>
-                <div style='background: rgba(249,115,22,0.08); padding: 0.4rem 0.6rem; border-radius: 4px;'>
-                    <div style='font-size: 0.7rem; font-weight: 600; color: #64748b;'>📊 Rationale</div>
-                    <div style='font-size: 0.8rem; font-weight: 700; color: #0f172a;'>{why_txt[:35]}</div>
-                </div>
+            <div>
+                <div style='font-size: 0.65rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.2rem;'>💰 Price</div>
+                <div style='font-size: 0.85rem; font-weight: 800; color: #0f172a;'>{phase1_price}</div>
+            </div>
+            <div>
+                <div style='font-size: 0.65rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.2rem;'>⏰ Timing</div>
+                <div style='font-size: 0.85rem; font-weight: 800; color: #0f172a;'>{when_txt[:20]}</div>
             </div>
         </div>
+    </div>
+    
+    <div style='background: rgba(249,115,22,0.08); padding: 0.5rem 0.75rem; border-radius: 4px;'>
+        <div style='font-size: 0.7rem; font-weight: 600; color: #78350f; margin-bottom: 0.15rem;'>🎯 STRATEGY</div>
+        <div style='font-size: 0.85rem; font-weight: 700; color: #0f172a;'>{strategy_name}</div>
     </div>
 </div>
                 """, unsafe_allow_html=True)
@@ -3321,9 +3358,114 @@ def render_integrated_strategy_engine(
             st.info("No recommendations available (missing forecasts/inputs).")
             return
 
+        # EXECUTIVE SUMMARY - Extract profit numbers from "How" field
+        exec_summary = []
+        for _, row in out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"].iterrows():
+            how_text = str(row.get("How", ""))
+            commodity = str(row.get("Commodity", ""))
+            priority = str(row.get("Priority", "Medium"))
+            decision = str(row.get("Decision", ""))
+            
+            # Extract profit/savings from text
+            profit = 0.0
+            if "EXPECTED SAVINGS:" in how_text or "EXPECTED PROFIT:" in how_text:
+                import re
+                match = re.search(r'(?:SAVINGS|PROFIT):\*\*\s*([\d,\.]+)', how_text)
+                if match:
+                    profit = float(match.group(1).replace(',', ''))
+            
+            if profit > 0:
+                exec_summary.append({
+                    "commodity": commodity,
+                    "profit": profit,
+                    "priority": priority,
+                    "decision": decision,
+                    "how": how_text
+                })
+        
+        exec_summary.sort(key=lambda x: (-prio_rank.get(x["priority"], 9), -x["profit"]))
+        
+        # Display Executive Summary
+        if exec_summary:
+            total_opportunity = sum(item["profit"] for item in exec_summary)
+            urgent_count = sum(1 for item in exec_summary if item["priority"] == "Elevated")
+            
+            st.markdown(f"""
+<div style='background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); 
+            padding: 1.5rem; 
+            border-radius: 12px; 
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>
+    <div style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;'>
+        <div>
+            <div style='color: #93c5fd; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;'>Executive Summary</div>
+            <div style='color: white; font-size: 2.5rem; font-weight: 900; margin-top: 0.25rem;'>${total_opportunity:,.0f}</div>
+            <div style='color: #dbeafe; font-size: 0.95rem; font-weight: 600;'>Total Profit Opportunity · {len(exec_summary)} Commodities · {urgent_count} Urgent</div>
+        </div>
+        <div style='text-align: right;'>
+            <div style='background: rgba(255,255,255,0.15); padding: 0.75rem 1.25rem; border-radius: 8px; backdrop-filter: blur(10px);'>
+                <div style='color: #dbeafe; font-size: 0.75rem; font-weight: 600;'>PERIOD</div>
+                <div style='color: white; font-size: 1.1rem; font-weight: 800;'>Next 6-12 Months</div>
+            </div>
+        </div>
+    </div>
+</div>
+            """, unsafe_allow_html=True)
+            
+            # Top 3 Urgent Actions
+            urgent_items = [item for item in exec_summary if item["priority"] == "Elevated"][:3]
+            if urgent_items:
+                st.markdown("### 🔴 URGENT ACTIONS (Execute This Week)")
+                
+                for i, item in enumerate(urgent_items, 1):
+                    # Extract key numbers from detailed trade recommendation
+                    how_text = item["how"]
+                    
+                    # Extract Phase 1 quantity and price
+                    phase1_match = re.search(r'Phase 1 \(NOW\):\*\* Buy ([\d,\.]+[^\@]*) @ ([\d\.]+)', how_text)
+                    phase1_qty = phase1_match.group(1).strip() if phase1_match else "—"
+                    phase1_price = phase1_match.group(2) if phase1_match else "—"
+                    
+                    # Extract strategy name
+                    strategy_match = re.search(r'\*\*STRATEGY: ([^\n]+)', how_text)
+                    strategy = strategy_match.group(1).replace('**', '') if strategy_match else "Phased Procurement"
+                    
+                    action = "BUY NOW" if "Accelerate" in item["decision"] or "Buy" in how_text else "DEFER & WAIT"
+                    action_color = "#10b981" if action == "BUY NOW" else "#f59e0b"
+                    
+                    st.markdown(f"""
+<div style='background: linear-gradient(135deg, #fff 0%, #fef3c7 100%); 
+            padding: 1rem 1.25rem; 
+            border-left: 6px solid #dc2626;
+            border-radius: 8px; 
+            margin-bottom: 0.75rem;'>
+    <div style='display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;'>
+        <div style='flex: 1; min-width: 200px;'>
+            <div style='font-size: 0.7rem; color: #78350f; font-weight: 700; margin-bottom: 0.25rem;'>#{i} PRIORITY</div>
+            <div style='font-size: 1.3rem; font-weight: 900; color: #0f172a;'>{item["commodity"]}</div>
+        </div>
+        <div style='flex: 1; min-width: 150px;'>
+            <div style='font-size: 0.7rem; color: #78350f; font-weight: 700; margin-bottom: 0.25rem;'>ACTION</div>
+            <div style='font-size: 1.1rem; font-weight: 900; color: {action_color};'>{action}</div>
+            <div style='font-size: 0.75rem; color: #64748b; font-weight: 600;'>{phase1_qty} @ {phase1_price}</div>
+        </div>
+        <div style='flex: 1; min-width: 150px;'>
+            <div style='font-size: 0.7rem; color: #78350f; font-weight: 700; margin-bottom: 0.25rem;'>EXPECTED PROFIT</div>
+            <div style='font-size: 1.5rem; font-weight: 900; color: #059669;'>${item["profit"]:,.0f}</div>
+        </div>
+        <div style='flex: 1; min-width: 180px;'>
+            <div style='font-size: 0.7rem; color: #78350f; font-weight: 700; margin-bottom: 0.25rem;'>STRATEGY</div>
+            <div style='font-size: 0.85rem; font-weight: 800; color: #1e40af;'>{strategy[:40]}</div>
+        </div>
+    </div>
+</div>
+                    """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+
         # New executive layout (cards)
-        st.markdown("<div class='cp-kv-label' style='margin-top: 0.5rem;'>Strategic Positioning Directives</div>", unsafe_allow_html=True)
-        st.caption("Decision support: structured sourcing schedule plus derivatives positioning, no user inputs.")
+        st.markdown("<div class='cp-kv-label' style='margin-top: 0.5rem;'>Detailed Trade Recommendations</div>", unsafe_allow_html=True)
+        st.caption("Click on any commodity below to see full execution strategy with quantities, timing, and profit calculations.")
 
         spec_rows = (
             out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"]
