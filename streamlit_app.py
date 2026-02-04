@@ -2820,6 +2820,7 @@ def render_integrated_strategy_engine(
                     when_txt = when_txt.split("Procurement Timing Strategy:")[1].split("·")[0].strip()
                 
                 why_txt = str(r.get("Why") or "—")
+                how_txt = str(r.get("How") or "—")  # This contains the detailed trade recommendations
                 
                 # Priority styling
                 if priority == "High":
@@ -2853,7 +2854,7 @@ def render_integrated_strategy_engine(
                 <div style='font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.15rem;'>Action</div>
                 <div style='font-size: 0.9rem; font-weight: 700; color: #1e293b;'>{decision}</div>
             </div>
-            <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;'>
+            <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;'>
                 <div style='background: rgba(16,185,129,0.08); padding: 0.4rem 0.6rem; border-radius: 4px;'>
                     <div style='font-size: 0.7rem; font-weight: 600; color: #64748b;'>⏰ Timing</div>
                     <div style='font-size: 0.8rem; font-weight: 700; color: #0f172a;'>{when_txt[:35]}</div>
@@ -2867,6 +2868,25 @@ def render_integrated_strategy_engine(
     </div>
 </div>
                 """, unsafe_allow_html=True)
+                
+                # Display detailed trade recommendations with profit calculations
+                if how_txt and how_txt != "—" and len(how_txt) > 50:
+                    # Convert markdown-style formatting to HTML
+                    how_html = how_txt.replace("**", "<b>").replace("**", "</b>")
+                    how_html = how_html.replace("\n•", "<br>•").replace("\n\n", "<br><br>")
+                    
+                    with st.expander(f"💰 View Detailed Trade Recommendation & Profit Calculation", expanded=False):
+                        st.markdown(f"""
+<div style='background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); 
+            padding: 1rem; 
+            border-radius: 8px; 
+            border-left: 4px solid #0284c7;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: #0c4a6e;'>
+    {how_html}
+</div>
+                        """, unsafe_allow_html=True)
             
             # Full details in expander
             if len(rows) > 0:
