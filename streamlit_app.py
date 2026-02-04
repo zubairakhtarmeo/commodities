@@ -3152,15 +3152,26 @@ def render_integrated_strategy_engine(
                 
                 # Extract currency to determine financing rates (borrow vs invest)
                 currency = unit.split("/")[0] if "/" in unit else unit
+                
+                # Currency conversion factor to USD (for consistent profit reporting)
+                usd_conversion_rate = 1.0  # Default: already in USD
+                base_currency = currency  # Original currency for display
+                
                 if "USD" in currency.upper():
                     borrowing_rate = 0.055  # 5.5% commercial loan rate
                     investment_rate = 0.045  # 4.5% bank deposit rate
+                    usd_conversion_rate = 1.0
                 elif "PKR" in currency.upper() or "RS" in currency.upper():
                     borrowing_rate = 0.165  # 16.5% commercial loan rate
                     investment_rate = 0.145  # 14.5% bank deposit rate
+                    usd_conversion_rate = 1.0 / 280.0  # PKR to USD (1 USD = 280 PKR as of Feb 2026)
                 else:
                     borrowing_rate = 0.060  # 6% generic
                     investment_rate = 0.050  # 5% generic
+                    usd_conversion_rate = 1.0
+                
+                # Set display currency to USD for all profit calculations
+                display_currency = "USD"
                 
                 # NEW: Specific trade recommendation with profit calculation
                 trade_recommendation = ""
@@ -3232,38 +3243,46 @@ def render_integrated_strategy_engine(
                         storage_phase2 = actual_cost_phase2 * storage_cost_pct * (time_to_target_years - time_to_mid_years)
                         total_storage = storage_phase1 + storage_phase2
                         
-                        # NET PROFIT
+                        # NET PROFIT (convert to USD for consistent reporting)
                         baseline_cost = total_need * unit_multiplier * s0
                         strategy_cost = cost_phase1 + actual_cost_phase2 + actual_cost_phase3
                         price_savings = baseline_cost - strategy_cost
-                        expected_profit = price_savings + total_interest_earned - total_storage
+                        expected_profit_local = price_savings + total_interest_earned - total_storage
+                        
+                        # Convert to USD if needed
+                        expected_profit = expected_profit_local * usd_conversion_rate
+                        baseline_cost_usd = baseline_cost * usd_conversion_rate
+                        strategy_cost_usd = strategy_cost * usd_conversion_rate
+                        price_savings_usd = price_savings * usd_conversion_rate
+                        interest_earned_usd = total_interest_earned * usd_conversion_rate
+                        storage_usd = total_storage * usd_conversion_rate
                         
                         # BUILD CASH FLOW TABLE
                         trade_recommendation = f"**🔴 BEARISH REVERSE CARRY STRATEGY**\n"
                         trade_recommendation += f"*Price Expected to Fall: {s0:,.{dec}f} → {float(min_e['price']):,.{dec}f} ({move_to_min:.1f}%)*\n\n"
-                        trade_recommendation += f"**CASH FLOW TABLE:**\n"
+                        trade_recommendation += f"**CASH FLOW TABLE:** *(in {base_currency}, USD equivalent shown)*\n"
                         trade_recommendation += f"```\n"
-                        trade_recommendation += f"Time           Action                                Cash Flow\n"
-                        trade_recommendation += f"{'─'*70}\n"
-                        trade_recommendation += f"TODAY          Buy {_fmt_qty_kg(qty_now)} (10%)              -{cost_phase1:,.0f} {currency}\n"
-                        trade_recommendation += f"TODAY          Invest budget (Phase 2)                 -{investment_phase2:,.0f} {currency}\n"
-                        trade_recommendation += f"TODAY          Invest budget (Phase 3)                 -{investment_phase3:,.0f} {currency}\n"
-                        trade_recommendation += f"{half_e.get('horizon', 'Mid-point')}    Investment grows at {investment_rate*100:.1f}%        +{interest_earned_phase2:,.0f} {currency}\n"
-                        trade_recommendation += f"{half_e.get('horizon', 'Mid-point')}    Buy {_fmt_qty_kg(qty_mid)} @ lower price          -{actual_cost_phase2:,.0f} {currency}\n"
-                        trade_recommendation += f"{min_e['horizon']}  Investment grows at {investment_rate*100:.1f}%        +{interest_earned_phase3:,.0f} {currency}\n"
-                        trade_recommendation += f"{min_e['horizon']}  Buy {_fmt_qty_kg(qty_target)} @ low price           -{actual_cost_phase3:,.0f} {currency}\n"
-                        trade_recommendation += f"{min_e['horizon']}  Pay storage costs                       -{total_storage:,.0f} {currency}\n"
-                        trade_recommendation += f"{'─'*70}\n"
-                        trade_recommendation += f"NET PROFIT                                          +{expected_profit:,.0f} {currency}\n"
+                        trade_recommendation += f"Time           Action                                Cash Flow ({base_currency})    USD\n"
+                        trade_recommendation += f"{'─'*85}\n"
+                        trade_recommendation += f"TODAY          Buy {_fmt_qty_kg(qty_now)} (10%)              -{cost_phase1:,.0f}        {cost_phase1*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"TODAY          Invest budget (Phase 2)                 -{investment_phase2:,.0f}        {investment_phase2*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"TODAY          Invest budget (Phase 3)                 -{investment_phase3:,.0f}        {investment_phase3*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"{half_e.get('horizon', 'Mid-point')}    Investment grows at {investment_rate*100:.1f}%        +{interest_earned_phase2:,.0f}        {interest_earned_phase2*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"{half_e.get('horizon', 'Mid-point')}    Buy {_fmt_qty_kg(qty_mid)} @ lower price          -{actual_cost_phase2:,.0f}        {actual_cost_phase2*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"{min_e['horizon']}  Investment grows at {investment_rate*100:.1f}%        +{interest_earned_phase3:,.0f}        {interest_earned_phase3*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"{min_e['horizon']}  Buy {_fmt_qty_kg(qty_target)} @ low price           -{actual_cost_phase3:,.0f}        {actual_cost_phase3*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"{min_e['horizon']}  Pay storage costs                       -{total_storage:,.0f}        {total_storage*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"{'─'*85}\n"
+                        trade_recommendation += f"NET PROFIT                                          +{expected_profit_local:,.0f}        +{expected_profit:,.0f}\n"
                         trade_recommendation += f"```\n\n"
                         
-                        strategy_details = f"**BREAKDOWN:**\n"
-                        strategy_details += f"• Baseline (buy all now): {baseline_cost:,.0f} {currency}\n"
-                        strategy_details += f"• Strategy cost: {strategy_cost:,.0f} {currency}\n"
-                        strategy_details += f"• Price savings: +{price_savings:,.0f} {currency}\n"
-                        strategy_details += f"• Interest earned: +{total_interest_earned:,.0f} {currency} @ {investment_rate*100:.1f}% p.a.\n"
-                        strategy_details += f"• Storage costs: -{total_storage:,.0f} {currency} @ {storage_cost_pct*100:.1f}% p.a.\n"
-                        strategy_details += f"• **NET PROFIT: {expected_profit:,.0f} {currency}**\n\n"
+                        strategy_details = f"**BREAKDOWN:** *(All amounts in USD)*\n"
+                        strategy_details += f"• Baseline (buy all now): ${baseline_cost_usd:,.0f}\n"
+                        strategy_details += f"• Strategy cost: ${strategy_cost_usd:,.0f}\n"
+                        strategy_details += f"• Price savings: +${price_savings_usd:,.0f}\n"
+                        strategy_details += f"• Interest earned: +${interest_earned_usd:,.0f} @ {investment_rate*100:.1f}% p.a.\n"
+                        strategy_details += f"• Storage costs: -${storage_usd:,.0f} @ {storage_cost_pct*100:.1f}% p.a.\n"
+                        strategy_details += f"• **NET PROFIT: ${expected_profit:,.0f} USD**\n\n"
                         strategy_details += f"**LOGIC:**\n"
                         strategy_details += f"• Forecast shows price drop from {s0:,.{dec}f} to {float(min_e['price']):,.{dec}f}\n"
                         strategy_details += f"• Buy minimal {_fmt_qty_kg(qty_now)} now (operations)\n"
@@ -3329,32 +3348,39 @@ def render_integrated_strategy_engine(
                         interest_cost = loan_amount * borrowing_rate * time_to_peak_years
                         loan_repayment = loan_amount + interest_cost
                         
-                        # NET PROFIT
-                        expected_profit = sale_proceeds - loan_repayment - storage_cost
-                        profit_pct = (expected_profit / loan_amount * 100.0) if loan_amount > 0 else 0.0
+                        # NET PROFIT (convert to USD for consistent reporting)
+                        expected_profit_local = sale_proceeds - loan_repayment - storage_cost
+                        profit_pct = (expected_profit_local / loan_amount * 100.0) if loan_amount > 0 else 0.0
+                        
+                        # Convert to USD if needed
+                        expected_profit = expected_profit_local * usd_conversion_rate
+                        purchase_cost_usd = purchase_cost * usd_conversion_rate
+                        sale_proceeds_usd = sale_proceeds * usd_conversion_rate
+                        interest_cost_usd = interest_cost * usd_conversion_rate
+                        storage_cost_usd = storage_cost * usd_conversion_rate
                         
                         # BUILD CASH FLOW TABLE
                         trade_recommendation = f"**🟢 BULLISH LEVERAGED CARRY TRADE**\n"
                         trade_recommendation += f"*Price Expected to Rise: {s0:,.{dec}f} → {float(max_e['price']):,.{dec}f} (+{move_to_max:.1f}%)*\n\n"
-                        trade_recommendation += f"**CASH FLOW TABLE:**\n"
+                        trade_recommendation += f"**CASH FLOW TABLE:** *(in {base_currency}, USD equivalent shown)*\n"
                         trade_recommendation += f"```\n"
-                        trade_recommendation += f"Time           Action                                Cash Flow\n"
-                        trade_recommendation += f"{'─'*70}\n"
-                        trade_recommendation += f"TODAY          Borrow from bank                        +{loan_amount:,.0f} {currency}\n"
-                        trade_recommendation += f"TODAY          Buy {_fmt_qty_kg(qty_now)} (100%)             -{purchase_cost:,.0f} {currency}\n"
-                        trade_recommendation += f"{max_e['horizon']}  Sell commodity at peak                  +{sale_proceeds:,.0f} {currency}\n"
-                        trade_recommendation += f"{max_e['horizon']}  Repay loan + interest                   -{loan_repayment:,.0f} {currency}\n"
-                        trade_recommendation += f"{max_e['horizon']}  Pay storage costs                       -{storage_cost:,.0f} {currency}\n"
-                        trade_recommendation += f"{'─'*70}\n"
-                        trade_recommendation += f"NET PROFIT                                          +{expected_profit:,.0f} {currency}\n"
+                        trade_recommendation += f"Time           Action                                Cash Flow ({base_currency})    USD\n"
+                        trade_recommendation += f"{'─'*85}\n"
+                        trade_recommendation += f"TODAY          Borrow from bank                        +{loan_amount:,.0f}        {loan_amount*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"TODAY          Buy {_fmt_qty_kg(qty_now)} (100%)             -{purchase_cost:,.0f}        {purchase_cost_usd:,.0f}\n"
+                        trade_recommendation += f"{max_e['horizon']}  Sell commodity at peak                  +{sale_proceeds:,.0f}        {sale_proceeds_usd:,.0f}\n"
+                        trade_recommendation += f"{max_e['horizon']}  Repay loan + interest                   -{loan_repayment:,.0f}        {loan_repayment*usd_conversion_rate:,.0f}\n"
+                        trade_recommendation += f"{max_e['horizon']}  Pay storage costs                       -{storage_cost:,.0f}        {storage_cost_usd:,.0f}\n"
+                        trade_recommendation += f"{'─'*85}\n"
+                        trade_recommendation += f"NET PROFIT                                          +{expected_profit_local:,.0f}        +{expected_profit:,.0f}\n"
                         trade_recommendation += f"```\n\n"
                         
-                        strategy_details = f"**BREAKDOWN:**\n"
-                        strategy_details += f"• Purchase cost (borrow): {purchase_cost:,.0f} {currency}\n"
-                        strategy_details += f"• Sale proceeds (at peak): {sale_proceeds:,.0f} {currency}\n"
-                        strategy_details += f"• Interest cost: -{interest_cost:,.0f} {currency} @ {borrowing_rate*100:.1f}% p.a.\n"
-                        strategy_details += f"• Storage costs: -{storage_cost:,.0f} {currency} @ {storage_cost_pct*100:.1f}% p.a.\n"
-                        strategy_details += f"• **NET PROFIT: {expected_profit:,.0f} {currency} ({profit_pct:.1f}% ROI)**\n\n"
+                        strategy_details = f"**BREAKDOWN:** *(All amounts in USD)*\n"
+                        strategy_details += f"• Purchase cost (borrow): ${purchase_cost_usd:,.0f}\n"
+                        strategy_details += f"• Sale proceeds (at peak): ${sale_proceeds_usd:,.0f}\n"
+                        strategy_details += f"• Interest cost: -${interest_cost_usd:,.0f} @ {borrowing_rate*100:.1f}% p.a.\n"
+                        strategy_details += f"• Storage costs: -${storage_cost_usd:,.0f} @ {storage_cost_pct*100:.1f}% p.a.\n"
+                        strategy_details += f"• **NET PROFIT: ${expected_profit:,.0f} USD ({profit_pct:.1f}% ROI)**\n\n"
                         strategy_details += f"**LOGIC:**\n"
                         strategy_details += f"• Forecast shows price rise from {s0:,.{dec}f} to {float(max_e['price']):,.{dec}f}\n"
                         strategy_details += f"• Borrow {loan_amount:,.0f} {currency} @ {borrowing_rate*100:.1f}% p.a.\n"
