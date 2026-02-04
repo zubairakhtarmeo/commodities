@@ -5419,7 +5419,7 @@ def main():
         
         try:
             purch_df = _load_purchase_monthly_agg()
-                if isinstance(purch_df, pd.DataFrame) and not purch_df.empty and "month" in purch_df.columns:
+            if isinstance(purch_df, pd.DataFrame) and not purch_df.empty and "month" in purch_df.columns:
                 qty_col = "total_qty_kg" if "total_qty_kg" in purch_df.columns else ("total_qty" if "total_qty" in purch_df.columns else None)
                 
                 if qty_col:
