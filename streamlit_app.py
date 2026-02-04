@@ -3186,15 +3186,145 @@ def render_integrated_strategy_engine(
 
                 # SKIP STRATEGY if no actual purchase quantity (avoid unrealistic profit projections)
                 if mqty == 0 or mqty is None or not np.isfinite(mqty):
-                    trade_recommendation = "⚠️ **NO PURCHASE HISTORY**\n\nThis commodity is not regularly purchased by your organization.\nStrategy generation skipped to avoid unrealistic profit projections."
-                    steps = trade_recommendation
-                    logic = "No historical purchase data available"
-                    decision = "Monitor only (no trading strategy)"
-                    when_txt = "Not applicable"
-                    why_txt = "Not a regularly purchased commodity"
-                    conf = _confidence_from_interval(s0=s0, target_price=s0, lower=s0*0.95, upper=s0*1.05)
-                    # Don't include profit in recommendation text to force N/A display
-                    how_txt = trade_recommendation
+                    # SPECIAL HANDLING for commodities that impact costs indirectly
+                    pc_lower = commodity_name.lower()
+                    
+                    if "natural gas" in pc_lower:
+                        # Natural Gas affects electricity costs - calculate indirect impact
+                        # Estimate: 1 MMBTU price change → ~0.5 PKR/kWh electricity change
+                        # Textile manufacturing: ~500 kWh per tonne of production
+                        # Assume 10,000 tonnes/month total production
+                        
+                        gas_price_change = float(min_e.get("price", s0)) - s0
+                        monthly_production_tonnes = 10000  # Estimated total production
+                        kwh_per_tonne = 500
+                        total_kwh_monthly = monthly_production_tonnes * kwh_per_tonne
+                        
+                        # Impact: MMBTU price change → electricity cost impact
+                        electricity_impact_per_mmbtu = 0.5  # PKR per kWh per MMBTU change
+                        monthly_cost_impact_pkr = abs(gas_price_change * electricity_impact_per_mmbtu * total_kwh_monthly)
+                        target_months = float(min_e.get("months", 6))
+                        total_cost_impact_pkr = monthly_cost_impact_pkr * target_months
+                        
+                        expected_profit = total_cost_impact_pkr * usd_conversion_rate if gas_price_change < 0 else -total_cost_impact_pkr * usd_conversion_rate
+                        
+                        decision = "Monitor & Hedge Electricity Costs" if gas_price_change > 0 else "Benefit from Lower Energy Costs"
+                        when_txt = f"Over next {int(target_months)} months"
+                        why_txt = f"Natural gas {'increase' if gas_price_change > 0 else 'decrease'} drives electricity tariff changes"
+                        logic = f"Gas price forecast: {gas_price_change:+.2f} {unit} → Electricity impact: {monthly_cost_impact_pkr:,.0f} PKR/month"
+                        
+                        impact_direction = "increase" if gas_price_change > 0 else "decrease"
+                        strategy_details = f"**📊 INDIRECT COST IMPACT ANALYSIS**\n\n"
+                        strategy_details += f"• **Gas Price Change:** {gas_price_change:+.2f} {unit}\n"
+                        strategy_details += f"• **Electricity Impact:** ~{monthly_cost_impact_pkr:,.0f} PKR/month\n"
+                        strategy_details += f"• **Production Volume:** {monthly_production_tonnes:,} tonnes/month\n"
+                        strategy_details += f"• **Energy Intensity:** {kwh_per_tonne} kWh/tonne\n"
+                        strategy_details += f"• **Forecast Period:** {int(target_months)} months\n\n"
+                        
+                        if gas_price_change > 0:
+                            trade_recommendation = f"⚡ **HEDGE ELECTRICITY COST RISK**\n\n"
+                            trade_recommendation += f"Gas prices forecasted to {impact_direction} by {abs(gas_price_change):.2f} {unit}, "
+                            trade_recommendation += f"which will increase electricity costs by ~{monthly_cost_impact_pkr:,.0f} PKR/month.\n\n"
+                            trade_recommendation += f"**RECOMMENDED ACTIONS:**\n"
+                            trade_recommendation += f"1. Lock in current electricity tariffs through forward contracts\n"
+                            trade_recommendation += f"2. Negotiate fixed-rate agreements with WAPDA/K-Electric\n"
+                            trade_recommendation += f"3. Consider on-site solar/wind to reduce grid dependency\n"
+                            trade_recommendation += f"4. Implement energy efficiency measures to offset higher costs\n\n"
+                            strategy_details += f"**💰 COST AVOIDANCE: ${abs(expected_profit):,.0f} USD**"
+                        else:
+                            trade_recommendation = f"✅ **BENEFIT FROM LOWER ENERGY COSTS**\n\n"
+                            trade_recommendation += f"Gas prices forecasted to {impact_direction} by {abs(gas_price_change):.2f} {unit}, "
+                            trade_recommendation += f"which will reduce electricity costs by ~{monthly_cost_impact_pkr:,.0f} PKR/month.\n\n"
+                            trade_recommendation += f"**RECOMMENDED ACTIONS:**\n"
+                            trade_recommendation += f"1. Delay any solar/renewable energy CAPEX investments\n"
+                            trade_recommendation += f"2. Renegotiate electricity contracts at lower rates\n"
+                            trade_recommendation += f"3. Increase production volume to capitalize on lower energy costs\n"
+                            trade_recommendation += f"4. Offer competitive pricing to win new orders\n\n"
+                            strategy_details += f"**💰 COST SAVINGS: ${abs(expected_profit):,.0f} USD**"
+                        
+                        steps = trade_recommendation
+                        how_txt = strategy_details
+                        conf = _confidence_from_interval(s0=s0, target_price=float(min_e.get("price", s0)), 
+                                                         lower=float(min_e.get("low", s0*0.95)), 
+                                                         upper=float(min_e.get("high", s0*1.05)))
+                    
+                    elif "crude" in pc_lower:
+                        # Crude oil affects polyester/synthetic fiber costs
+                        # Estimate: 30% of polyester cost is crude oil derived
+                        # Use actual polyester purchase volume if available
+                        oil_price_change = float(min_e.get("price", s0)) - s0
+                        
+                        # Try to get actual polyester volume from purchase data
+                        try:
+                            purch_df = _load_purchase_monthly_agg()
+                            if not purch_df.empty and "commodity" in purch_df.columns:
+                                polyester_data = purch_df[purch_df["commodity"].str.contains("Polyester", case=False, na=False)]
+                                if not polyester_data.empty and "total_qty_kg" in purch_df.columns:
+                                    avg_polyester_monthly_kg = polyester_data["total_qty_kg"].mean()
+                                else:
+                                    avg_polyester_monthly_kg = 200000  # Fallback estimate
+                            else:
+                                avg_polyester_monthly_kg = 200000
+                        except:
+                            avg_polyester_monthly_kg = 200000
+                        
+                        # Crude oil impact on polyester: ~$1/barrel change → ~$0.02/kg polyester change
+                        polyester_cost_impact_per_barrel = 0.02  # USD per kg
+                        target_months = float(min_e.get("months", 6))
+                        monthly_impact_usd = abs(oil_price_change * polyester_cost_impact_per_barrel * avg_polyester_monthly_kg)
+                        total_impact_usd = monthly_impact_usd * target_months
+                        
+                        expected_profit = total_impact_usd if oil_price_change < 0 else -total_impact_usd
+                        
+                        decision = "Monitor Polyester/Synthetic Costs" if oil_price_change > 0 else "Benefit from Lower Feedstock Costs"
+                        when_txt = f"Over next {int(target_months)} months"
+                        why_txt = f"Crude oil {'increase' if oil_price_change > 0 else 'decrease'} affects polyester raw material costs"
+                        logic = f"Oil price forecast: {oil_price_change:+.2f} {unit} → Polyester impact: {monthly_impact_usd:,.0f} USD/month"
+                        
+                        strategy_details = f"**📊 FEEDSTOCK COST IMPACT ANALYSIS**\n\n"
+                        strategy_details += f"• **Crude Oil Change:** {oil_price_change:+.2f} {unit}\n"
+                        strategy_details += f"• **Polyester Volume:** {avg_polyester_monthly_kg:,.0f} kg/month\n"
+                        strategy_details += f"• **Cost Impact:** ~{monthly_impact_usd:,.0f} USD/month\n"
+                        strategy_details += f"• **Forecast Period:** {int(target_months)} months\n\n"
+                        
+                        if oil_price_change > 0:
+                            trade_recommendation = f"⚠️ **PREPARE FOR HIGHER POLYESTER COSTS**\n\n"
+                            trade_recommendation += f"Crude oil forecasted to rise {abs(oil_price_change):.2f} {unit}, "
+                            trade_recommendation += f"increasing polyester costs by ~${monthly_impact_usd:,.0f}/month.\n\n"
+                            trade_recommendation += f"**RECOMMENDED ACTIONS:**\n"
+                            trade_recommendation += f"1. Forward-buy polyester at current prices\n"
+                            trade_recommendation += f"2. Negotiate long-term contracts with suppliers\n"
+                            trade_recommendation += f"3. Increase cotton blend ratios to reduce polyester dependency\n"
+                            trade_recommendation += f"4. Pass through cost increases to customers\n\n"
+                            strategy_details += f"**💰 COST AVOIDANCE: ${abs(expected_profit):,.0f} USD**"
+                        else:
+                            trade_recommendation = f"✅ **BENEFIT FROM LOWER POLYESTER COSTS**\n\n"
+                            trade_recommendation += f"Crude oil forecasted to fall {abs(oil_price_change):.2f} {unit}, "
+                            trade_recommendation += f"reducing polyester costs by ~${monthly_impact_usd:,.0f}/month.\n\n"
+                            trade_recommendation += f"**RECOMMENDED ACTIONS:**\n"
+                            trade_recommendation += f"1. Delay polyester purchases to benefit from lower prices\n"
+                            trade_recommendation += f"2. Increase polyester orders for new product lines\n"
+                            trade_recommendation += f"3. Offer competitive pricing on synthetic blends\n"
+                            trade_recommendation += f"4. Build inventory at lower cost basis\n\n"
+                            strategy_details += f"**💰 COST SAVINGS: ${abs(expected_profit):,.0f} USD**"
+                        
+                        steps = trade_recommendation
+                        how_txt = strategy_details
+                        conf = _confidence_from_interval(s0=s0, target_price=float(min_e.get("price", s0)),
+                                                         lower=float(min_e.get("low", s0*0.95)),
+                                                         upper=float(min_e.get("high", s0*1.05)))
+                    
+                    else:
+                        # Generic fallback for other non-purchased commodities
+                        trade_recommendation = "📊 **MARKET INDICATOR ONLY**\n\nThis commodity is not directly purchased but serves as a market indicator.\nMonitor for broader market trends and supply chain signals."
+                        steps = trade_recommendation
+                        logic = "No direct procurement - use as market intelligence"
+                        decision = "Monitor for market trends"
+                        when_txt = "Continuous monitoring"
+                        why_txt = "Market indicator commodity"
+                        conf = _confidence_from_interval(s0=s0, target_price=s0, lower=s0*0.95, upper=s0*1.05)
+                        how_txt = trade_recommendation
+                        expected_profit = None  # Truly N/A for generic indicators
                 # For procurement: falling forecast suggests delaying; rising suggests early procurement
                 elif move_to_min <= -float(forecast_sig):
                     market_condition = "Forecast Opportunity"
