@@ -2846,22 +2846,25 @@ def render_integrated_strategy_engine(
                             break
                     
                     # Extract strategy name and details based on format
-                    if "Bearish Reverse Carry" in how_txt:
-                        strategy_name = "Bearish Reverse Carry (Defer & Invest)"
-                        # Extract invest amount: "TODAY Invest -123,456 USD"
-                        invest_match = re.search(r'TODAY.*?Invest\s+-?([\d,\.]+)', how_txt)
-                        if invest_match:
-                            phase1_qty = f"Invest {invest_match.group(1)}"
-                            phase1_price = "in bank"
-                            timing_display = "TODAY (Defer)"
-                    elif "Bullish Leveraged Carry" in how_txt:
-                        strategy_name = "Bullish Leveraged Carry Trade (Buy Now)"
-                        # Extract buy details: "Buy 1,234,567 kg @ 1.23"
-                        buy_match = re.search(r'Buy\s+([\d,\.]+)\s*kg\s*@\s*([\d\.]+)', how_txt)
+                    if "BEARISH REVERSE CARRY" in how_txt.upper():
+                        strategy_name = "Defer & Invest (Bearish)"
+                        # Extract TODAY buy quantity: "TODAY Buy 5,415 t (10%) -8,841,353 USD"
+                        buy_match = re.search(r'TODAY\s+Buy\s+([\d,\.]+\s*[tkgmton]+)\s*\((\d+)%\)', how_txt)
                         if buy_match:
-                            phase1_qty = f"{buy_match.group(1)} kg"
-                            phase1_price = buy_match.group(2)
-                            timing_display = "TODAY (Borrow & Buy)"
+                            phase1_qty = f"{buy_match.group(1)} ({buy_match.group(2)}%)"
+                            timing_display = "TODAY (Buy minimal)"
+                        # Extract invest amount: "TODAY Invest budget (Phase 2) -26,524,058 USD"
+                        invest_match = re.search(r'Invest budget.*?-([\d,\.]+)', how_txt)
+                        if invest_match:
+                            phase1_price = f"Invest {invest_match.group(1)}"
+                    elif "BULLISH LEVERAGED CARRY" in how_txt.upper():
+                        strategy_name = "Borrow & Buy (Bullish)"
+                        # Extract borrow and buy: "TODAY Borrow +123,456 USD + Buy 1,234,567 kg @ 1.23"
+                        buy_match = re.search(r'TODAY\s+Borrow.*?Buy\s+([\d,\.]+\s*[tkgmno]+)\s*@\s*([\d\.]+)', how_txt)
+                        if buy_match:
+                            phase1_qty = buy_match.group(1).strip()
+                            phase1_price = f"@ {buy_match.group(2)}"
+                            timing_display = "TODAY (Leveraged)"
                     else:
                         # OLD FORMAT: Extract Phase 1 details (matches: • **Phase 1 (NOW):** Buy X tonnes @ Y.YY USD/lb)
                         phase1_match = re.search(r'•\s*\*\*Phase 1 \(NOW\):\*\*\s*Buy\s+([\d,\.]+\s*\w+)\s*@\s*([\d,\.]+)', how_txt)
@@ -3555,22 +3558,25 @@ def render_integrated_strategy_engine(
                     how_text = item["how"]
                     
                     # Determine strategy type and extract relevant info
-                    if "Bearish Reverse Carry" in how_text or "Invest" in how_text:
-                        # Bearish strategy: "TODAY Invest -123,456 USD"
-                        invest_match = re.search(r'TODAY.*Invest\s+-?([\d,\.]+)', how_text)
+                    if "BEARISH REVERSE CARRY" in how_text.upper():
+                        # Bearish strategy: "TODAY Buy 5,415 t (10%) -8,841,353 USD"
+                        buy_match = re.search(r'TODAY\s+Buy\s+([\d,\.]+\s*[tkgmton]+)\s*\((\d+)%\)', how_text)
                         action = "DEFER & INVEST"
                         action_color = "#f59e0b"
-                        phase1_qty = f"Invest {invest_match.group(1) if invest_match else '—'}"
-                        phase1_price = "in bank"
-                        strategy = "Reverse Carry (Bearish)"
-                    elif "Bullish Leveraged Carry" in how_text or "Borrow" in how_text:
+                        if buy_match:
+                            phase1_qty = f"Buy {buy_match.group(1)} ({buy_match.group(2)}%)"
+                        else:
+                            phase1_qty = "Minimal buy"
+                        phase1_price = "Invest rest"
+                        strategy = "Defer & Invest (Bearish)"
+                    elif "BULLISH LEVERAGED CARRY" in how_text.upper():
                         # Bullish strategy: "TODAY Borrow +123,456 USD + Buy 1,234,567 kg @ 1.23"
-                        buy_match = re.search(r'Buy\s+([\d,\.]+[^\@]*)\s+@\s+([\d\.]+)', how_text)
-                        action = "BUY NOW (LEVERAGED)"
+                        buy_match = re.search(r'Buy\s+([\d,\.]+\s*[tkgmton]+)\s*@\s*([\d\.]+)', how_text)
+                        action = "BORROW & BUY NOW"
                         action_color = "#10b981"
-                        phase1_qty = buy_match.group(1).strip() if buy_match else "—"
-                        phase1_price = buy_match.group(2) if buy_match else "—"
-                        strategy = "Leveraged Carry Trade (Bullish)"
+                        phase1_qty = buy_match.group(1).strip() if buy_match else "Full quantity"
+                        phase1_price = f"@ {buy_match.group(2)}" if buy_match else "—"
+                        strategy = "Borrow & Buy (Bullish)"
                     else:
                         # Fallback for old format
                         phase1_match = re.search(r'Phase 1 \(NOW\):\*\* Buy ([\d,\.]+[^\@]*) @ ([\d\.]+)', how_text)
