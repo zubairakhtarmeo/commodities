@@ -2832,11 +2832,12 @@ def render_integrated_strategy_engine(
                 timing_display = when_txt[:30] if when_txt and when_txt != "—" else "—"
                 
                 if how_txt and how_txt != "—":
-                    # Extract profit (matches: **EXPECTED SAVINGS:** or **NET EXPECTED PROFIT:** or **TOTAL EXPECTED PROFIT:**)
+                    # Extract profit - NEW FORMAT: "NET PROFIT +123,456 USD" or OLD FORMAT: "**EXPECTED SAVINGS:** 123,456"
                     profit_patterns = [
-                        r'\*\*NET EXPECTED PROFIT:\*\*\s*([\d,\.]+)',
-                        r'\*\*TOTAL EXPECTED PROFIT:\*\*\s*([\d,\.]+)',
-                        r'\*\*EXPECTED SAVINGS:\*\*\s*([\d,\.]+)'
+                        r'NET PROFIT\s+\+?([\d,\.]+)',  # New simplified format
+                        r'\*\*NET EXPECTED PROFIT:\*\*\s*([\d,\.]+)',  # Old format
+                        r'\*\*TOTAL EXPECTED PROFIT:\*\*\s*([\d,\.]+)',  # Old format
+                        r'\*\*EXPECTED SAVINGS:\*\*\s*([\d,\.]+)'  # Old format
                     ]
                     for pattern in profit_patterns:
                         profit_match = re.search(pattern, how_txt)
@@ -2844,17 +2845,35 @@ def render_integrated_strategy_engine(
                             profit_amount = float(profit_match.group(1).replace(',', ''))
                             break
                     
-                    # Extract Phase 1 details (matches: • **Phase 1 (NOW):** Buy X tonnes @ Y.YY USD/lb)
-                    phase1_match = re.search(r'•\s*\*\*Phase 1 \(NOW\):\*\*\s*Buy\s+([\d,\.]+\s*\w+)\s*@\s*([\d,\.]+)', how_txt)
-                    if phase1_match:
-                        phase1_qty = phase1_match.group(1).strip()
-                        phase1_price = phase1_match.group(2).strip()
-                        timing_display = "NOW (Phase 1)"
-                    
-                    # Extract strategy (matches: **STRATEGY: strategy name**)
-                    strategy_match = re.search(r'\*\*STRATEGY:\s*([^\n\*]+)', how_txt)
-                    if strategy_match:
-                        strategy_name = strategy_match.group(1).strip()[:55]
+                    # Extract strategy name and details based on format
+                    if "Bearish Reverse Carry" in how_txt:
+                        strategy_name = "Bearish Reverse Carry (Defer & Invest)"
+                        # Extract invest amount: "TODAY Invest -123,456 USD"
+                        invest_match = re.search(r'TODAY.*?Invest\s+-?([\d,\.]+)', how_txt)
+                        if invest_match:
+                            phase1_qty = f"Invest {invest_match.group(1)}"
+                            phase1_price = "in bank"
+                            timing_display = "TODAY (Defer)"
+                    elif "Bullish Leveraged Carry" in how_txt:
+                        strategy_name = "Bullish Leveraged Carry Trade (Buy Now)"
+                        # Extract buy details: "Buy 1,234,567 kg @ 1.23"
+                        buy_match = re.search(r'Buy\s+([\d,\.]+)\s*kg\s*@\s*([\d\.]+)', how_txt)
+                        if buy_match:
+                            phase1_qty = f"{buy_match.group(1)} kg"
+                            phase1_price = buy_match.group(2)
+                            timing_display = "TODAY (Borrow & Buy)"
+                    else:
+                        # OLD FORMAT: Extract Phase 1 details (matches: • **Phase 1 (NOW):** Buy X tonnes @ Y.YY USD/lb)
+                        phase1_match = re.search(r'•\s*\*\*Phase 1 \(NOW\):\*\*\s*Buy\s+([\d,\.]+\s*\w+)\s*@\s*([\d,\.]+)', how_txt)
+                        if phase1_match:
+                            phase1_qty = phase1_match.group(1).strip()
+                            phase1_price = phase1_match.group(2).strip()
+                            timing_display = "NOW (Phase 1)"
+                        
+                        # Extract strategy (matches: **STRATEGY: strategy name**)
+                        strategy_match = re.search(r'\*\*STRATEGY:\s*([^\n\*]+)', how_txt)
+                        if strategy_match:
+                            strategy_name = strategy_match.group(1).strip()[:55]
                 
                 # Priority styling
                 if priority == "High":
