@@ -2821,6 +2821,7 @@ def render_integrated_strategy_engine(
                 
                 why_txt = str(r.get("Why") or "—")
                 how_txt = str(r.get("How") or "—")  # This contains the detailed trade recommendations
+                when_txt = str(r.get("When") or "—")
                 
                 # Extract key metrics from How text for prominent display
                 import re
@@ -2828,6 +2829,7 @@ def render_integrated_strategy_engine(
                 phase1_qty = "—"
                 phase1_price = "—"
                 strategy_name = "—"
+                timing_display = when_txt[:30] if when_txt and when_txt != "—" else "—"
                 
                 if how_txt and how_txt != "—":
                     # Extract profit
@@ -2840,11 +2842,12 @@ def render_integrated_strategy_engine(
                     if phase1_match:
                         phase1_qty = phase1_match.group(1).strip()
                         phase1_price = phase1_match.group(2)
+                        timing_display = "NOW (Phase 1)"
                     
                     # Extract strategy
-                    strategy_match = re.search(r'\*\*STRATEGY: ([^\n]+)', how_text)
+                    strategy_match = re.search(r'\*\*STRATEGY: ([^\n]+)', how_txt)
                     if strategy_match:
-                        strategy_name = strategy_match.group(1).replace('**', '')[:45]
+                        strategy_name = strategy_match.group(1).replace('**', '').strip()[:50]
                 
                 # Priority styling
                 if priority == "High":
@@ -2894,7 +2897,7 @@ def render_integrated_strategy_engine(
             </div>
             <div>
                 <div style='font-size: 0.65rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.2rem;'>⏰ Timing</div>
-                <div style='font-size: 0.85rem; font-weight: 800; color: #0f172a;'>{when_txt[:20]}</div>
+                <div style='font-size: 0.85rem; font-weight: 800; color: #0f172a;'>{timing_display}</div>
             </div>
         </div>
     </div>
