@@ -3116,36 +3116,48 @@ def render_integrated_strategy_engine(
                         qty_mid = 0.30 * total_need
                         qty_target = 0.60 * total_need
                         
-                        # Cost calculation
-                        cost_now = qty_now * s0
-                        cost_mid = qty_mid * float(half_e.get("price", s0))
-                        cost_target = qty_target * float(min_e["price"])
+                        # Unit conversion: if price is per lb, convert kg to lb
+                        unit_multiplier = 1.0
+                        if "/lb" in unit.lower():
+                            unit_multiplier = 2.20462  # kg to lb conversion
+                        
+                        # Cost calculation (all costs in same currency as s0)
+                        # Formula: Cost = Quantity(kg) × Conversion × Price(per unit)
+                        cost_now = qty_now * unit_multiplier * s0
+                        cost_mid = qty_mid * unit_multiplier * float(half_e.get("price", s0))
+                        cost_target = qty_target * unit_multiplier * float(min_e["price"])
                         total_cost_strategy = cost_now + cost_mid + cost_target
                         
                         # Baseline: buying all now
-                        cost_baseline = total_need * s0
+                        cost_baseline = total_need * unit_multiplier * s0
                         
                         # Expected savings
+                        # Formula: Profit = Baseline Cost - Strategy Cost
                         expected_profit = cost_baseline - total_cost_strategy
                         savings_pct = (expected_profit / cost_baseline * 100.0) if cost_baseline > 0 else 0.0
                         
                         # Strategy: Synthetic Forward using options
-                        atm_call_premium = s0 * 0.05  # ~5% of spot (rough estimate)
-                        hedge_cost = qty_target * atm_call_premium
+                        # Formula: Call Premium ≈ 5% of spot price (industry standard for ATM options)
+                        atm_call_premium = s0 * 0.05
+                        hedge_cost = qty_target * unit_multiplier * atm_call_premium
+                        # Formula: Net Profit = Gross Savings - Hedge Cost
                         net_profit = expected_profit - hedge_cost
                         
+                        # Extract currency from unit (e.g., "USD/lb" -> "USD")
+                        currency = unit.split("/")[0] if "/" in unit else unit
+                        
                         trade_recommendation = f"**RECOMMENDED TRADE:**\n"
-                        trade_recommendation += f"• **Phase 1 (NOW):** Buy {_fmt_qty_kg(qty_now)} @ {s0:,.{dec}f} {unit} = Cost: {cost_now:,.0f}\n"
-                        trade_recommendation += f"• **Phase 2 ({half_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_mid)} @ {float(half_e.get('price')):,.{dec}f} {unit} = Cost: {cost_mid:,.0f}\n"
-                        trade_recommendation += f"• **Phase 3 ({min_e['horizon']}):** Buy {_fmt_qty_kg(qty_target)} @ {float(min_e['price']):,.{dec}f} {unit} = Cost: {cost_target:,.0f}\n"
-                        trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} (vs {cost_baseline:,.0f} if buying all now)\n"
-                        trade_recommendation += f"**EXPECTED SAVINGS:** {expected_profit:,.0f} ({savings_pct:.1f}%)\n"
+                        trade_recommendation += f"• **Phase 1 (NOW):** Buy {_fmt_qty_kg(qty_now)} @ {s0:,.{dec}f} {unit} = Cost: {cost_now:,.0f} {currency}\n"
+                        trade_recommendation += f"• **Phase 2 ({half_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_mid)} @ {float(half_e.get('price')):,.{dec}f} {unit} = Cost: {cost_mid:,.0f} {currency}\n"
+                        trade_recommendation += f"• **Phase 3 ({min_e['horizon']}):** Buy {_fmt_qty_kg(qty_target)} @ {float(min_e['price']):,.{dec}f} {unit} = Cost: {cost_target:,.0f} {currency}\n"
+                        trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} {currency} (vs {cost_baseline:,.0f} {currency} if buying all now)\n"
+                        trade_recommendation += f"**EXPECTED SAVINGS:** {expected_profit:,.0f} {currency} ({savings_pct:.1f}%)\n"
                         
                         strategy_details = f"**STRATEGY: Synthetic Long Forward + Call Protection**\n"
                         strategy_details += f"• Buy ATM Call options for Phase 3 quantity ({_fmt_qty_kg(qty_target)})\n"
-                        strategy_details += f"• Strike: {s0:,.{dec}f} | Premium: ~{atm_call_premium:,.{dec}f}/unit | Total: {hedge_cost:,.0f}\n"
-                        strategy_details += f"• **NET EXPECTED PROFIT:** {net_profit:,.0f} (after hedge cost)\n"
-                        strategy_details += f"• **Max Loss:** Limited to premium paid ({hedge_cost:,.0f})\n"
+                        strategy_details += f"• Strike: {s0:,.{dec}f} | Premium: ~{atm_call_premium:,.{dec}f}/unit | Total: {hedge_cost:,.0f} {currency}\n"
+                        strategy_details += f"• **NET EXPECTED PROFIT:** {net_profit:,.0f} {currency} (after hedge cost)\n"
+                        strategy_details += f"• **Max Loss:** Limited to premium paid ({hedge_cost:,.0f} {currency})\n"
                         strategy_details += f"• **Max Gain:** Unlimited if prices fall as forecast"
                         
                         steps = trade_recommendation + "\n" + strategy_details
@@ -3184,44 +3196,57 @@ def render_integrated_strategy_engine(
                         qty_early = 0.30 * total_need
                         qty_forward = 0.30 * total_need
                         
-                        # Cost calculation
-                        cost_now = qty_now * s0
-                        cost_early = qty_early * float(early_e.get("price", s0 * 1.02))
+                        # Unit conversion: if price is per lb, convert kg to lb
+                        unit_multiplier = 1.0
+                        if "/lb" in unit.lower():
+                            unit_multiplier = 2.20462  # kg to lb conversion
+                        
+                        # Cost calculation (all costs in same currency as s0)
+                        # Formula: Cost = Quantity(kg) × Conversion × Price(per unit)
+                        cost_now = qty_now * unit_multiplier * s0
+                        cost_early = qty_early * unit_multiplier * float(early_e.get("price", s0 * 1.02))
                         forward_price = float(max_e["price"]) * 0.98  # Lock in at slight discount to forecast max
-                        cost_forward = qty_forward * forward_price
+                        cost_forward = qty_forward * unit_multiplier * forward_price
                         total_cost_strategy = cost_now + cost_early + cost_forward
                         
                         # Baseline: buying all at forecast high
-                        cost_at_high = total_need * float(max_e["price"])
+                        cost_at_high = total_need * unit_multiplier * float(max_e["price"])
                         
                         # Expected savings
+                        # Formula: Profit = Cost at Peak - Strategy Cost
                         expected_profit = cost_at_high - total_cost_strategy
                         savings_pct = (expected_profit / cost_at_high * 100.0) if cost_at_high > 0 else 0.0
                         
                         # Strategy: Bull Call Spread for remaining coverage
+                        # Formula: Buy ATM Call (5% premium) + Sell OTM Call (2% premium)
                         lower_strike = s0
                         upper_strike = float(max_e["price"])
-                        call_buy_premium = s0 * 0.05
-                        call_sell_premium = s0 * 0.02
-                        net_premium = (call_buy_premium - call_sell_premium) * qty_forward
-                        max_profit_from_spread = qty_forward * (upper_strike - lower_strike) - net_premium
+                        call_buy_premium = s0 * 0.05  # Buy ATM call at 5% of spot
+                        call_sell_premium = s0 * 0.02  # Sell OTM call at 2% of spot
+                        net_premium = (call_buy_premium - call_sell_premium) * qty_forward * unit_multiplier
+                        # Formula: Max Profit = (Upper Strike - Lower Strike) × Qty - Net Premium
+                        max_profit_from_spread = qty_forward * unit_multiplier * (upper_strike - lower_strike) - net_premium
+                        # Formula: Total Profit = Procurement Savings + Options Profit
                         total_expected_profit = expected_profit + max_profit_from_spread
                         
+                        # Extract currency from unit (e.g., "USD/lb" -> "USD")
+                        currency = unit.split("/")[0] if "/" in unit else unit
+                        
                         trade_recommendation = f"**RECOMMENDED TRADE:**\n"
-                        trade_recommendation += f"• **Phase 1 (NOW):** Buy {_fmt_qty_kg(qty_now)} @ {s0:,.{dec}f} {unit} = Cost: {cost_now:,.0f}\n"
-                        trade_recommendation += f"• **Phase 2 ({early_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_early)} @ {float(early_e.get('price')):,.{dec}f} {unit} = Cost: {cost_early:,.0f}\n"
-                        trade_recommendation += f"• **Phase 3 (Forward Lock):** Lock {_fmt_qty_kg(qty_forward)} @ {forward_price:,.{dec}f} {unit} = Cost: {cost_forward:,.0f}\n"
-                        trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} (vs {cost_at_high:,.0f} at forecast peak)\n"
-                        trade_recommendation += f"**EXPECTED SAVINGS:** {expected_profit:,.0f} ({savings_pct:.1f}%)\n"
+                        trade_recommendation += f"• **Phase 1 (NOW):** Buy {_fmt_qty_kg(qty_now)} @ {s0:,.{dec}f} {unit} = Cost: {cost_now:,.0f} {currency}\n"
+                        trade_recommendation += f"• **Phase 2 ({early_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_early)} @ {float(early_e.get('price')):,.{dec}f} {unit} = Cost: {cost_early:,.0f} {currency}\n"
+                        trade_recommendation += f"• **Phase 3 (Forward Lock):** Lock {_fmt_qty_kg(qty_forward)} @ {forward_price:,.{dec}f} {unit} = Cost: {cost_forward:,.0f} {currency}\n"
+                        trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} {currency} (vs {cost_at_high:,.0f} {currency} at forecast peak)\n"
+                        trade_recommendation += f"**EXPECTED SAVINGS:** {expected_profit:,.0f} {currency} ({savings_pct:.1f}%)\n"
                         
                         strategy_details = f"**STRATEGY: Bull Call Spread (Cap Cost Upside)**\n"
                         strategy_details += f"• BUY Call @ {lower_strike:,.{dec}f} | Premium: {call_buy_premium:,.{dec}f}/unit\n"
                         strategy_details += f"• SELL Call @ {upper_strike:,.{dec}f} | Premium: {call_sell_premium:,.{dec}f}/unit\n"
-                        strategy_details += f"• Net Premium: {(call_buy_premium - call_sell_premium):,.{dec}f}/unit × {_fmt_qty_kg(qty_forward)} = {net_premium:,.0f}\n"
-                        strategy_details += f"• **MAX PROFIT FROM SPREAD:** {max_profit_from_spread:,.0f}\n"
-                        strategy_details += f"• **TOTAL EXPECTED PROFIT:** {total_expected_profit:,.0f}\n"
-                        strategy_details += f"• **Max Loss:** Net premium paid ({net_premium:,.0f})\n"
-                        strategy_details += f"• **Max Gain:** Capped at {max_profit_from_spread:,.0f} from spread + {expected_profit:,.0f} from early buying"
+                        strategy_details += f"• Net Premium: {(call_buy_premium - call_sell_premium):,.{dec}f}/unit × {_fmt_qty_kg(qty_forward)} = {net_premium:,.0f} {currency}\n"
+                        strategy_details += f"• **MAX PROFIT FROM SPREAD:** {max_profit_from_spread:,.0f} {currency}\n"
+                        strategy_details += f"• **TOTAL EXPECTED PROFIT:** {total_expected_profit:,.0f} {currency}\n"
+                        strategy_details += f"• **Max Loss:** Net premium paid ({net_premium:,.0f} {currency})\n"
+                        strategy_details += f"• **Max Gain:** Capped at {max_profit_from_spread:,.0f} {currency} from spread + {expected_profit:,.0f} {currency} from early buying"
                         
                         steps = trade_recommendation + "\n" + strategy_details
                     else:
