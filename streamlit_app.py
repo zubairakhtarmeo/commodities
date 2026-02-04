@@ -2823,6 +2823,11 @@ def render_integrated_strategy_engine(
                 how_txt = str(r.get("How") or "—")  # This contains the detailed trade recommendations
                 when_txt = str(r.get("When") or "—")
                 
+                # DEBUG: Show first 500 chars of how_txt
+                if how_txt and how_txt != "—":
+                    with st.expander(f"🔍 DEBUG: Raw 'How' field for {commodity}", expanded=False):
+                        st.code(how_txt[:500], language="text")
+                
                 # Extract key metrics from How text for prominent display
                 import re
                 profit_amount = 0.0
