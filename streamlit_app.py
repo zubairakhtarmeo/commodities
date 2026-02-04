@@ -3004,10 +3004,18 @@ def render_integrated_strategy_engine(
             max_e = max(curve_s, key=lambda e: float(e.get("price", -1e18)))
             mid_e = _closest_curve_entry(curve_s, 6) or min_e
 
-            # Speculative timing strategy (Step 3)
+            # Speculative timing strategy (Step 3) - Enhanced with specific quantities, prices, and profit calculations
             if "Speculative Timing Strategy" in role_filter:
                 move_to_min = (float(min_e["price"]) / s0 - 1.0) * 100.0
                 move_to_max = (float(max_e["price"]) / s0 - 1.0) * 100.0
+
+                # Get actual purchase history for this commodity
+                pc = _purchase_commodity_from_label(label)
+                mqty = 0.0
+                monthly_spend = 0.0
+                if pc and pc in purchase_ctx:
+                    mqty = float(purchase_ctx[pc].get("median_monthly_kg") or 0.0)
+                    monthly_spend = mqty * s0 if mqty > 0 else 0.0
 
                 market_condition = "Efficient"
                 strat_name = "Monitor"
@@ -3015,6 +3023,11 @@ def render_integrated_strategy_engine(
                 logic = "Forecast does not show a strong edge vs Current Spot Market Price."
                 driver = "Forecast realization"
                 risk_notes = "Forecast uncertainty; execution constraints"
+                
+                # NEW: Specific trade recommendation with profit calculation
+                trade_recommendation = ""
+                expected_profit = 0.0
+                strategy_details = ""
 
                 # For procurement: falling forecast suggests delaying; rising suggests early procurement
                 if move_to_min <= -float(forecast_sig):
@@ -3022,18 +3035,60 @@ def render_integrated_strategy_engine(
                     strat_name = "Defer Procurement / Stagger Execution"
                     half_months = max(1, int(round(float(min_e.get("months", 6)) / 2.0)))
                     half_e = _closest_curve_entry(curve_s, half_months) or mid_e
-                    steps = (
-                        f"Procure 10% now (operational safety); 30% around {half_e.get('horizon','mid‑window')}; "
-                        f"60% around {min_e['horizon']}. Overlay: small CALL (or CALL SPREAD) to cap upside while waiting."
-                    )
-
-                    pc = _purchase_commodity_from_label(label)
-                    if pc and pc in purchase_ctx:
-                        mqty = float(purchase_ctx[pc].get("median_monthly_kg") or 0.0)
-                        total_need = mqty * float(min_e.get("months", 6) or 6)
-                        if np.isfinite(mqty) and mqty > 0 and np.isfinite(total_need) and total_need > 0:
+                    
+                    # Calculate specific quantities and costs
+                    target_months = float(min_e.get("months", 6))
+                    total_need = mqty * target_months if mqty > 0 else 0.0
+                    
+                    if mqty > 0 and total_need > 0:
+                        # Phased procurement: 10% now, 30% mid, 60% at target low
+                        qty_now = 0.10 * total_need
+                        qty_mid = 0.30 * total_need
+                        qty_target = 0.60 * total_need
+                        
+                        # Cost calculation
+                        cost_now = qty_now * s0
+                        cost_mid = qty_mid * float(half_e.get("price", s0))
+                        cost_target = qty_target * float(min_e["price"])
+                        total_cost_strategy = cost_now + cost_mid + cost_target
+                        
+                        # Baseline: buying all now
+                        cost_baseline = total_need * s0
+                        
+                        # Expected savings
+                        expected_profit = cost_baseline - total_cost_strategy
+                        savings_pct = (expected_profit / cost_baseline * 100.0) if cost_baseline > 0 else 0.0
+                        
+                        # Strategy: Synthetic Forward using options
+                        atm_call_premium = s0 * 0.05  # ~5% of spot (rough estimate)
+                        hedge_cost = qty_target * atm_call_premium
+                        net_profit = expected_profit - hedge_cost
+                        
+                        trade_recommendation = f"**RECOMMENDED TRADE:**\n"
+                        trade_recommendation += f"• **Phase 1 (NOW):** Buy {_fmt_qty_kg(qty_now)} @ {s0:,.{dec}f} {unit} = Cost: {cost_now:,.0f}\n"
+                        trade_recommendation += f"• **Phase 2 ({half_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_mid)} @ {float(half_e.get('price')):,.{dec}f} {unit} = Cost: {cost_mid:,.0f}\n"
+                        trade_recommendation += f"• **Phase 3 ({min_e['horizon']}):** Buy {_fmt_qty_kg(qty_target)} @ {float(min_e['price']):,.{dec}f} {unit} = Cost: {cost_target:,.0f}\n"
+                        trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} (vs {cost_baseline:,.0f} if buying all now)\n"
+                        trade_recommendation += f"**EXPECTED SAVINGS:** {expected_profit:,.0f} ({savings_pct:.1f}%)\n"
+                        
+                        strategy_details = f"**STRATEGY: Synthetic Long Forward + Call Protection**\n"
+                        strategy_details += f"• Buy ATM Call options for Phase 3 quantity ({_fmt_qty_kg(qty_target)})\n"
+                        strategy_details += f"• Strike: {s0:,.{dec}f} | Premium: ~{atm_call_premium:,.{dec}f}/unit | Total: {hedge_cost:,.0f}\n"
+                        strategy_details += f"• **NET EXPECTED PROFIT:** {net_profit:,.0f} (after hedge cost)\n"
+                        strategy_details += f"• **Max Loss:** Limited to premium paid ({hedge_cost:,.0f})\n"
+                        strategy_details += f"• **Max Gain:** Unlimited if prices fall as forecast"
+                        
+                        steps = trade_recommendation + "\n" + strategy_details
+                    else:
+                        steps = (
+                            f"Procure 10% now (operational safety); 30% around {half_e.get('horizon','mid‑window')}; "
+                            f"60% around {min_e['horizon']}. Overlay: small CALL (or CALL SPREAD) to cap upside while waiting."
+                        )
+                        if mqty > 0:
+                            total_need = mqty * target_months
                             a, b, c3 = 0.10 * total_need, 0.30 * total_need, 0.60 * total_need
-                            steps = f"{steps}  Sizing: ~{_fmt_qty_kg(mqty)}/month; total ~{_fmt_qty_kg(total_need)}; tranches ~{_fmt_qty_kg(a)}, { _fmt_qty_kg(b) }, { _fmt_qty_kg(c3) }."
+                            steps = f"{steps}  Sizing: ~{_fmt_qty_kg(mqty)}/month; total ~{_fmt_qty_kg(total_need)}; tranches ~{_fmt_qty_kg(a)}, {_fmt_qty_kg(b)}, {_fmt_qty_kg(c3)}."
+                    
                     logic = f"Downward Price Expectation (model minimum at {min_e['horizon']})."
                     decision = "Defer procurement (forecast indicates lower levels ahead)"
                     when_txt = f"Target {min_e['horizon']} (~{min_e['months']}M)"
@@ -3048,19 +3103,66 @@ def render_integrated_strategy_engine(
                     market_condition = "Forecast Opportunity"
                     strat_name = "Accelerate Procurement / Increase Coverage"
                     early_e = _closest_curve_entry(curve_s, 3) or mid_e
-                    steps = (
-                        f"Procure 40% now; 30% around {early_e.get('horizon','next window')}; "
-                        f"30% lock via FORWARD or CALL SPREAD into {max_e['horizon']}."
-                    )
-
-                    pc = _purchase_commodity_from_label(label)
-                    if pc and pc in purchase_ctx:
-                        mqty = float(purchase_ctx[pc].get("median_monthly_kg") or 0.0)
-                        months_cover = float(min(3, int(max(1, round(float(max_e.get("months", 3) or 3))))))
-                        total_need = mqty * months_cover
-                        if np.isfinite(mqty) and mqty > 0 and np.isfinite(total_need) and total_need > 0:
+                    
+                    # Calculate specific quantities and costs
+                    target_months = min(6, float(max_e.get("months", 3)))
+                    total_need = mqty * target_months if mqty > 0 else 0.0
+                    
+                    if mqty > 0 and total_need > 0:
+                        # Aggressive procurement: 40% now, 30% early, 30% forward/options
+                        qty_now = 0.40 * total_need
+                        qty_early = 0.30 * total_need
+                        qty_forward = 0.30 * total_need
+                        
+                        # Cost calculation
+                        cost_now = qty_now * s0
+                        cost_early = qty_early * float(early_e.get("price", s0 * 1.02))
+                        forward_price = float(max_e["price"]) * 0.98  # Lock in at slight discount to forecast max
+                        cost_forward = qty_forward * forward_price
+                        total_cost_strategy = cost_now + cost_early + cost_forward
+                        
+                        # Baseline: buying all at forecast high
+                        cost_at_high = total_need * float(max_e["price"])
+                        
+                        # Expected savings
+                        expected_profit = cost_at_high - total_cost_strategy
+                        savings_pct = (expected_profit / cost_at_high * 100.0) if cost_at_high > 0 else 0.0
+                        
+                        # Strategy: Bull Call Spread for remaining coverage
+                        lower_strike = s0
+                        upper_strike = float(max_e["price"])
+                        call_buy_premium = s0 * 0.05
+                        call_sell_premium = s0 * 0.02
+                        net_premium = (call_buy_premium - call_sell_premium) * qty_forward
+                        max_profit_from_spread = qty_forward * (upper_strike - lower_strike) - net_premium
+                        total_expected_profit = expected_profit + max_profit_from_spread
+                        
+                        trade_recommendation = f"**RECOMMENDED TRADE:**\n"
+                        trade_recommendation += f"• **Phase 1 (NOW):** Buy {_fmt_qty_kg(qty_now)} @ {s0:,.{dec}f} {unit} = Cost: {cost_now:,.0f}\n"
+                        trade_recommendation += f"• **Phase 2 ({early_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_early)} @ {float(early_e.get('price')):,.{dec}f} {unit} = Cost: {cost_early:,.0f}\n"
+                        trade_recommendation += f"• **Phase 3 (Forward Lock):** Lock {_fmt_qty_kg(qty_forward)} @ {forward_price:,.{dec}f} {unit} = Cost: {cost_forward:,.0f}\n"
+                        trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} (vs {cost_at_high:,.0f} at forecast peak)\n"
+                        trade_recommendation += f"**EXPECTED SAVINGS:** {expected_profit:,.0f} ({savings_pct:.1f}%)\n"
+                        
+                        strategy_details = f"**STRATEGY: Bull Call Spread (Cap Cost Upside)**\n"
+                        strategy_details += f"• BUY Call @ {lower_strike:,.{dec}f} | Premium: {call_buy_premium:,.{dec}f}/unit\n"
+                        strategy_details += f"• SELL Call @ {upper_strike:,.{dec}f} | Premium: {call_sell_premium:,.{dec}f}/unit\n"
+                        strategy_details += f"• Net Premium: {(call_buy_premium - call_sell_premium):,.{dec}f}/unit × {_fmt_qty_kg(qty_forward)} = {net_premium:,.0f}\n"
+                        strategy_details += f"• **MAX PROFIT FROM SPREAD:** {max_profit_from_spread:,.0f}\n"
+                        strategy_details += f"• **TOTAL EXPECTED PROFIT:** {total_expected_profit:,.0f}\n"
+                        strategy_details += f"• **Max Loss:** Net premium paid ({net_premium:,.0f})\n"
+                        strategy_details += f"• **Max Gain:** Capped at {max_profit_from_spread:,.0f} from spread + {expected_profit:,.0f} from early buying"
+                        
+                        steps = trade_recommendation + "\n" + strategy_details
+                    else:
+                        steps = (
+                            f"Procure 40% now; 30% around {early_e.get('horizon','next window')}; "
+                            f"30% lock via FORWARD or CALL SPREAD into {max_e['horizon']}."
+                        )
+                        if mqty > 0:
+                            total_need = mqty * target_months
                             a, b, c3 = 0.40 * total_need, 0.30 * total_need, 0.30 * total_need
-                            steps = f"{steps}  Sizing: ~{_fmt_qty_kg(mqty)}/month; cover ~{_fmt_qty_kg(total_need)} ({months_cover:.0f}M); tranches ~{_fmt_qty_kg(a)}, { _fmt_qty_kg(b) }, { _fmt_qty_kg(c3) }."
+                            steps = f"{steps}  Sizing: ~{_fmt_qty_kg(mqty)}/month; cover ~{_fmt_qty_kg(total_need)} ({target_months:.0f}M); tranches ~{_fmt_qty_kg(a)}, {_fmt_qty_kg(b)}, {_fmt_qty_kg(c3)}."
                     logic = f"Upward Price Expectation (model maximum at {max_e['horizon']})."
                     decision = "Accelerate procurement (forecast indicates higher levels ahead)"
                     when_txt = "Initiate coverage now"
