@@ -3104,6 +3104,7 @@ def render_integrated_strategy_engine(
                     monthly_spend = mqty * s0 if mqty > 0 else 0.0
                 
                 # If no purchase data, use reasonable defaults based on commodity type
+                # IMPORTANT: Only use defaults for commodities with actual purchase history
                 if mqty == 0:
                     if pc == "Cotton":
                         mqty = 6_389_000.0  # 6,389 tonnes/month (historical median)
@@ -3114,7 +3115,9 @@ def render_integrated_strategy_engine(
                     elif pc == "Crude Oil":
                         mqty = 500_000.0  # 500 tonnes/month (example)
                     else:
-                        mqty = 1_000_000.0  # 1,000 tonnes/month (generic default)
+                        # For commodities without purchase history, skip strategy generation
+                        # to avoid unrealistic profit projections
+                        mqty = 0.0
                     monthly_spend = mqty * s0 if mqty > 0 else 0.0
 
                 market_condition = "Efficient"
@@ -3164,8 +3167,17 @@ def render_integrated_strategy_engine(
                 expected_profit = 0.0
                 strategy_details = ""
 
+                # SKIP STRATEGY if no actual purchase quantity (avoid unrealistic profit projections)
+                if mqty == 0 or mqty is None or not np.isfinite(mqty):
+                    trade_recommendation = "⚠️ **NO PURCHASE HISTORY**\n\nThis commodity is not regularly purchased by your organization.\nStrategy generation skipped to avoid unrealistic profit projections."
+                    steps = trade_recommendation
+                    logic = "No historical purchase data available"
+                    decision = "Monitor only (no trading strategy)"
+                    when_txt = "Not applicable"
+                    why_txt = "Not a regularly purchased commodity"
+                    conf = _confidence_from_interval(s0=s0, target_price=s0, lower=s0*0.95, upper=s0*1.05)
                 # For procurement: falling forecast suggests delaying; rising suggests early procurement
-                if move_to_min <= -float(forecast_sig):
+                elif move_to_min <= -float(forecast_sig):
                     market_condition = "Forecast Opportunity"
                     strat_name = "Bearish Reverse Carry Strategy"
                     half_months = max(1, int(round(float(min_e.get("months", 6)) / 2.0)))
