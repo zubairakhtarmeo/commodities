@@ -2865,13 +2865,8 @@ def render_integrated_strategy_engine(
                 
                 # Compact visual card with profit prominently displayed
                 st.markdown(f"""
-<div style='background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); 
-            border-left: 5px solid {border_color}; 
-            border-radius: 8px; 
-            padding: 1rem 1.25rem; 
-            margin-bottom: 0.75rem;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.08);'>
-    <div style='display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.75rem;'>
+<div style='background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 5px solid {border_color}; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 0.75rem; box-shadow: 0 2px 4px rgba(0,0,0,0.08);'>
+    <div style='display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem;'>
         <div style='flex: 1;'>
             <div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;'>
                 <span style='font-size: 1.2rem; font-weight: 900; color: #0f172a;'>{commodity}</span>
@@ -2884,30 +2879,23 @@ def render_integrated_strategy_engine(
             <div style='font-size: 1.8rem; font-weight: 900; color: #059669;'>${profit_amount:,.0f}</div>
         </div>
     </div>
-    
-    <div style='background: rgba(59,130,246,0.08); padding: 0.75rem; border-radius: 6px; margin-bottom: 0.5rem;'>
-        <div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;'>
-            <div>
-                <div style='font-size: 0.65rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.2rem;'>📦 Phase 1 Qty</div>
-                <div style='font-size: 0.85rem; font-weight: 800; color: #0f172a;'>{phase1_qty}</div>
-            </div>
-            <div>
-                <div style='font-size: 0.65rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.2rem;'>💰 Price</div>
-                <div style='font-size: 0.85rem; font-weight: 800; color: #0f172a;'>{phase1_price}</div>
-            </div>
-            <div>
-                <div style='font-size: 0.65rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.2rem;'>⏰ Timing</div>
-                <div style='font-size: 0.85rem; font-weight: 800; color: #0f172a;'>{timing_display}</div>
-            </div>
-        </div>
-    </div>
-    
-    <div style='background: rgba(249,115,22,0.08); padding: 0.5rem 0.75rem; border-radius: 4px;'>
-        <div style='font-size: 0.7rem; font-weight: 600; color: #78350f; margin-bottom: 0.15rem;'>🎯 STRATEGY</div>
-        <div style='font-size: 0.85rem; font-weight: 700; color: #0f172a;'>{strategy_name}</div>
-    </div>
 </div>
                 """, unsafe_allow_html=True)
+                
+                # Display extracted metrics using columns
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.markdown("**📦 Phase 1 Qty**")
+                    st.markdown(f"**{phase1_qty}**")
+                with col2:
+                    st.markdown("**💰 Price**")
+                    st.markdown(f"**{phase1_price}**")
+                with col3:
+                    st.markdown("**⏰ Timing**")
+                    st.markdown(f"**{timing_display}**")
+                
+                st.markdown(f"**🎯 STRATEGY:** {strategy_name}")
+                st.markdown("---")
                 
                 # Display detailed trade recommendations with profit calculations
                 if how_txt and how_txt != "—" and len(how_txt) > 50:
