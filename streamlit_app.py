@@ -1443,12 +1443,42 @@ def _recommend_hedge_strategy(
             - _lognormal_prob_gt(s0=s0, s_mean=s_mean, sigma_ann=sigma_ann, t_years=t_years, k=float(leg["strike"]))
         )
 
+    # Calculate expected profit/savings from the strategy
+    # For procurement hedges: savings from avoiding price spikes
+    # For sales hedges: protection value from price floor
+    expected_profit = 0.0
+    if legs and qty > 0:
+        # Simulate profit from hedge vs unhedged position
+        # If prices move favorably, hedge limits upside but caps downside
+        if exposure.startswith("Procurement") and exp_ret > 0:
+            # Rising prices: hedge saves money by capping cost
+            # Potential loss without hedge: (s_mean - s0) * qty
+            # With hedge: max cost is capped at strike
+            unhedged_cost = (s_mean - s0) * qty
+            # Find highest call strike (our max cost)
+            call_legs = [l for l in legs if l["type"] == "CALL" and l["side"] == "BUY"]
+            if call_legs:
+                max_strike = max(float(l["strike"]) for l in call_legs)
+                hedged_cost = max(0, max_strike - s0) * qty
+                premium_cost = est_premium_per_unit * qty
+                expected_profit = max(0, unhedged_cost - hedged_cost - premium_cost)
+        elif exposure.startswith("Sales") and exp_ret < 0:
+            # Falling prices: hedge protects selling price
+            unhedged_loss = abs((s_mean - s0) * qty)
+            put_legs = [l for l in legs if l["type"] == "PUT" and l["side"] == "BUY"]
+            if put_legs:
+                min_strike = min(float(l["strike"]) for l in put_legs)
+                hedged_loss = max(0, s0 - min_strike) * qty
+                premium_cost = est_premium_per_unit * qty
+                expected_profit = max(0, unhedged_loss - hedged_loss - premium_cost)
+    
     metrics = {
         "exp_ret_pct": float(exp_ret),
         "p_up_5": float(p_up_5),
         "p_dn_5": float(p_dn_5),
         "est_premium_per_unit": float(est_premium_per_unit),
         "est_premium_total": float(est_premium_per_unit * float(max(qty, 0.0))),
+        "expected_profit": float(expected_profit),
         "unit": unit,
     }
 
@@ -1641,8 +1671,17 @@ def render_call_put_hedge_advisor(
                 return f"{q/1000.0:,.1f} t"
             return f"{q:,.0f} kg"
 
-        # Purchase history sizing (optional; local file may not exist on Streamlit Cloud)
+        # Purchase history sizing (with intelligent fallbacks for non-purchased commodities)
         purchase_ctx: dict[str, dict] = {}
+        # Default sizing for commodities based on industry standards
+        default_sizing = {
+            "Cotton": {"median_monthly_kg": 1700000, "note": "Typical textile mill consumption"},
+            "Polyester": {"median_monthly_kg": 250000, "note": "Synthetic blend usage"},
+            "Viscose": {"median_monthly_kg": 200000, "note": "Rayon fiber usage"},
+            "Crude Oil": {"median_monthly_kg": 0, "indirect_cost_monthly_usd": 50000, "note": "Indirect via polyester/transport"},
+            "Natural Gas": {"median_monthly_kg": 0, "indirect_cost_monthly_usd": 100000, "note": "Indirect via electricity"},
+        }
+        
         try:
             purch_df = _load_purchase_monthly_agg()
             if not purch_df.empty and "month" in purch_df.columns:
@@ -1662,7 +1701,12 @@ def render_call_put_hedge_advisor(
                         cv = float(std_monthly_kg / mean_monthly_kg) if mean_monthly_kg > 0 else 0.0
                         purchase_ctx[str(comm)] = {"median_monthly_kg": median_monthly_kg, "cv": cv}
         except Exception:
-            purchase_ctx = {}
+            pass
+        
+        # Fill in default sizing for commodities without purchase history
+        for commodity, sizing in default_sizing.items():
+            if commodity not in purchase_ctx:
+                purchase_ctx[commodity] = sizing
 
         if variant != "portfolio":
             st.markdown(
