@@ -3231,7 +3231,7 @@ def render_integrated_strategy_engine(
                 # SKIP STRATEGY if no actual purchase quantity (avoid unrealistic profit projections)
                 if mqty == 0 or mqty is None or not np.isfinite(mqty):
                     # SPECIAL HANDLING for commodities that impact costs indirectly
-                    pc_lower = commodity_name.lower()
+                    pc_lower = str(pc or "").lower()
                     
                     if "natural gas" in pc_lower:
                         # Natural Gas affects electricity costs - calculate indirect impact
