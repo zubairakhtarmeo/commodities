@@ -2832,22 +2832,29 @@ def render_integrated_strategy_engine(
                 timing_display = when_txt[:30] if when_txt and when_txt != "—" else "—"
                 
                 if how_txt and how_txt != "—":
-                    # Extract profit
-                    profit_match = re.search(r'(?:SAVINGS|PROFIT):\*\*\s*([\d,\.]+)', how_txt)
-                    if profit_match:
-                        profit_amount = float(profit_match.group(1).replace(',', ''))
+                    # Extract profit (matches: **EXPECTED SAVINGS:** or **NET EXPECTED PROFIT:** or **TOTAL EXPECTED PROFIT:**)
+                    profit_patterns = [
+                        r'\*\*NET EXPECTED PROFIT:\*\*\s*([\d,\.]+)',
+                        r'\*\*TOTAL EXPECTED PROFIT:\*\*\s*([\d,\.]+)',
+                        r'\*\*EXPECTED SAVINGS:\*\*\s*([\d,\.]+)'
+                    ]
+                    for pattern in profit_patterns:
+                        profit_match = re.search(pattern, how_txt)
+                        if profit_match:
+                            profit_amount = float(profit_match.group(1).replace(',', ''))
+                            break
                     
-                    # Extract Phase 1 details
-                    phase1_match = re.search(r'Phase 1 \(NOW\):\*\* Buy ([\d,\.]+[^\@]*) @ ([\d\.]+)', how_txt)
+                    # Extract Phase 1 details (matches: • **Phase 1 (NOW):** Buy X tonnes @ Y.YY USD/lb)
+                    phase1_match = re.search(r'•\s*\*\*Phase 1 \(NOW\):\*\*\s*Buy\s+([\d,\.]+\s*\w+)\s*@\s*([\d,\.]+)', how_txt)
                     if phase1_match:
                         phase1_qty = phase1_match.group(1).strip()
-                        phase1_price = phase1_match.group(2)
+                        phase1_price = phase1_match.group(2).strip()
                         timing_display = "NOW (Phase 1)"
                     
-                    # Extract strategy
-                    strategy_match = re.search(r'\*\*STRATEGY: ([^\n]+)', how_txt)
+                    # Extract strategy (matches: **STRATEGY: strategy name**)
+                    strategy_match = re.search(r'\*\*STRATEGY:\s*([^\n\*]+)', how_txt)
                     if strategy_match:
-                        strategy_name = strategy_match.group(1).replace('**', '').strip()[:50]
+                        strategy_name = strategy_match.group(1).strip()[:55]
                 
                 # Priority styling
                 if priority == "High":
