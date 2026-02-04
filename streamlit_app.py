@@ -3116,16 +3116,18 @@ def render_integrated_strategy_engine(
                     convenience_yield_pct = 0.030  # 3%
                 else:
                     storage_cost_pct = 0.025  # 2.5% default
-                    convenience_yield_pct = 0.010  # 1% default
                 
-                # Extract currency to determine risk-free rate
+                # Extract currency to determine financing rates (borrow vs invest)
                 currency = unit.split("/")[0] if "/" in unit else unit
                 if "USD" in currency.upper():
-                    risk_free_rate = 0.045  # 4.5% (US Treasury yield)
+                    borrowing_rate = 0.055  # 5.5% commercial loan rate
+                    investment_rate = 0.045  # 4.5% bank deposit rate
                 elif "PKR" in currency.upper() or "RS" in currency.upper():
-                    risk_free_rate = 0.145  # 14.5% (Pakistan govt bonds)
+                    borrowing_rate = 0.165  # 16.5% commercial loan rate
+                    investment_rate = 0.145  # 14.5% bank deposit rate
                 else:
-                    risk_free_rate = 0.050  # 5% generic
+                    borrowing_rate = 0.060  # 6% generic
+                    investment_rate = 0.050  # 5% generic
                 
                 # NEW: Specific trade recommendation with profit calculation
                 trade_recommendation = ""
@@ -3135,7 +3137,7 @@ def render_integrated_strategy_engine(
                 # For procurement: falling forecast suggests delaying; rising suggests early procurement
                 if move_to_min <= -float(forecast_sig):
                     market_condition = "Forecast Opportunity"
-                    strat_name = "Defer Procurement / Stagger Execution"
+                    strat_name = "Bearish Reverse Carry Strategy"
                     half_months = max(1, int(round(float(min_e.get("months", 6)) / 2.0)))
                     half_e = _closest_curve_entry(curve_s, half_months) or mid_e
                     
@@ -3144,80 +3146,90 @@ def render_integrated_strategy_engine(
                     total_need = mqty * target_months if mqty > 0 else 0.0
                     
                     if mqty > 0 and total_need > 0:
-                        # Phased procurement: 10% now, 30% mid, 60% at target low
+                        # BEARISH REVERSE CARRY: Delay purchase, invest savings, buy back cheaper
+                        # Buy only 10% now (operational safety), delay 90%
                         qty_now = 0.10 * total_need
                         qty_mid = 0.30 * total_need
                         qty_target = 0.60 * total_need
                         
-                        # Unit conversion: if price is per lb, convert kg to lb
+                        # Unit conversion
                         unit_multiplier = 1.0
                         if "/lb" in unit.lower():
-                            unit_multiplier = 2.20462  # kg to lb conversion
+                            unit_multiplier = 2.20462
                         
-                        # Hull Formula: Calculate theoretical forward price for validation
-                        # F = S × e^((r + u - y) × T)
                         import math
-                        time_to_maturity_years = target_months / 12.0
-                        carrying_cost_rate = risk_free_rate + storage_cost_pct - convenience_yield_pct
-                        theoretical_forward = s0 * math.exp(carrying_cost_rate * time_to_maturity_years)
+                        time_to_target_years = target_months / 12.0
+                        time_to_mid_years = half_months / 12.0
                         
-                        # Cost calculation (all costs in same currency as s0)
-                        # Formula: Cost = Quantity(kg) × Conversion × Price(per unit)
-                        cost_now = qty_now * unit_multiplier * s0
-                        cost_mid = qty_mid * unit_multiplier * float(half_e.get("price", s0))
-                        cost_target = qty_target * unit_multiplier * float(min_e["price"])
-                        total_cost_strategy = cost_now + cost_mid + cost_target
+                        # CASH FLOW TABLE (like team lead's example)
+                        # TODAY: Buy 10%, invest budget for remaining 90%
+                        cost_phase1 = qty_now * unit_multiplier * s0
+                        budget_for_phase2 = qty_mid * unit_multiplier * s0  # What we would spend now
+                        budget_for_phase3 = qty_target * unit_multiplier * s0
+                        total_invested = budget_for_phase2 + budget_for_phase3
                         
-                        # Baseline: buying all now
-                        cost_baseline = total_need * unit_multiplier * s0
+                        # INVEST AND EARN INTEREST
+                        # Phase 2: Invest until mid-point
+                        investment_phase2 = budget_for_phase2
+                        interest_earned_phase2 = investment_phase2 * investment_rate * time_to_mid_years
+                        proceeds_phase2 = investment_phase2 + interest_earned_phase2
                         
-                        # Carrying costs for inventory held (Hull: storage costs apply to held inventory)
-                        # Formula: Carrying Cost = Qty Held × Unit Price × Storage Rate × Time
-                        # Phase 1: held for full period
-                        carrying_cost_phase1 = qty_now * unit_multiplier * s0 * storage_cost_pct * time_to_maturity_years
-                        # Phase 2: held for remaining period
-                        time_phase2_to_end = (target_months - half_months) / 12.0
-                        carrying_cost_phase2 = qty_mid * unit_multiplier * float(half_e.get("price", s0)) * storage_cost_pct * time_phase2_to_end
-                        # Phase 3: no holding cost (consumed immediately)
-                        total_carrying_cost = carrying_cost_phase1 + carrying_cost_phase2
+                        # Phase 3: Invest until target
+                        investment_phase3 = budget_for_phase3
+                        interest_earned_phase3 = investment_phase3 * investment_rate * time_to_target_years
+                        proceeds_phase3 = investment_phase3 + interest_earned_phase3
                         
-                        # Expected savings (before carrying costs)
-                        # Formula: Profit = Baseline Cost - Strategy Cost - Carrying Costs
-                        gross_savings = cost_baseline - total_cost_strategy
-                        savings_after_carrying = gross_savings - total_carrying_cost
-                        savings_pct = (gross_savings / cost_baseline * 100.0) if cost_baseline > 0 else 0.0
+                        total_interest_earned = interest_earned_phase2 + interest_earned_phase3
                         
-                        # Strategy: Synthetic Forward using options
-                        # Formula: Call Premium ≈ 5% of spot price (industry standard for ATM options)
-                        atm_call_premium = s0 * 0.05
-                        hedge_cost = qty_target * unit_multiplier * atm_call_premium
-                        # Formula: Net Profit = Gross Savings - Carrying Costs - Hedge Cost
-                        expected_profit = savings_after_carrying - hedge_cost
+                        # BUY AT LOWER PRICES
+                        actual_cost_phase2 = qty_mid * unit_multiplier * float(half_e.get("price", s0))
+                        actual_cost_phase3 = qty_target * unit_multiplier * float(min_e["price"])
                         
-                        # Extract currency from unit (e.g., "USD/lb" -> "USD")
-                        currency = unit.split("/")[0] if "/" in unit else unit
+                        # STORAGE COSTS (only for qty bought)
+                        storage_phase1 = cost_phase1 * storage_cost_pct * time_to_target_years
+                        storage_phase2 = actual_cost_phase2 * storage_cost_pct * (time_to_target_years - time_to_mid_years)
+                        total_storage = storage_phase1 + storage_phase2
                         
-                        trade_recommendation = f"**RECOMMENDED TRADE:**\n"
-                        trade_recommendation += f"• **Phase 1 (NOW):** Buy {_fmt_qty_kg(qty_now)} @ {s0:,.{dec}f} {unit} = Cost: {cost_now:,.0f} {currency}\n"
-                        trade_recommendation += f"• **Phase 2 ({half_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_mid)} @ {float(half_e.get('price')):,.{dec}f} {unit} = Cost: {cost_mid:,.0f} {currency}\n"
-                        trade_recommendation += f"• **Phase 3 ({min_e['horizon']}):** Buy {_fmt_qty_kg(qty_target)} @ {float(min_e['price']):,.{dec}f} {unit} = Cost: {cost_target:,.0f} {currency}\n"
-                        trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} {currency} (vs {cost_baseline:,.0f} {currency} if buying all now)\n"
-                        trade_recommendation += f"**GROSS SAVINGS:** {gross_savings:,.0f} {currency} ({savings_pct:.1f}%)\n"
-                        trade_recommendation += f"**CARRYING COSTS:** {total_carrying_cost:,.0f} {currency} (storage {storage_cost_pct*100:.1f}% p.a.)\n"
-                        trade_recommendation += f"**NET SAVINGS (after carrying):** {savings_after_carrying:,.0f} {currency}\n"
+                        # NET PROFIT
+                        baseline_cost = total_need * unit_multiplier * s0
+                        strategy_cost = cost_phase1 + actual_cost_phase2 + actual_cost_phase3
+                        price_savings = baseline_cost - strategy_cost
+                        expected_profit = price_savings + total_interest_earned - total_storage
                         
-                        strategy_details = f"**STRATEGY: Synthetic Long Forward + Call Protection**\n"
-                        strategy_details += f"• Buy ATM Call options for Phase 3 quantity ({_fmt_qty_kg(qty_target)})\n"
-                        strategy_details += f"• Strike: {s0:,.{dec}f} | Premium: ~{atm_call_premium:,.{dec}f}/unit | Total: {hedge_cost:,.0f} {currency}\n"
-                        strategy_details += f"• **NET EXPECTED PROFIT:** {expected_profit:,.0f} {currency} (after carrying + hedge)\n"
-                        strategy_details += f"\n**HULL PRICING (Validation):**\n"
-                        strategy_details += f"• Theoretical Forward ({target_months:.0f}M): {theoretical_forward:,.{dec}f} {unit}\n"
-                        strategy_details += f"• Carrying Rate: {carrying_cost_rate*100:.2f}% = r({risk_free_rate*100:.1f}%) + u({storage_cost_pct*100:.1f}%) - y({convenience_yield_pct*100:.1f}%)\n"
-                        strategy_details += f"• Forecast Low: {float(min_e['price']):,.{dec}f} vs Theoretical: {theoretical_forward:,.{dec}f}\n"
-                        strategy_details += f"• **Max Loss:** Limited to call premium ({hedge_cost:,.0f} {currency})\n"
-                        strategy_details += f"• **Max Gain:** Unlimited if prices fall as forecast"
+                        # BUILD CASH FLOW TABLE
+                        trade_recommendation = f"**🔴 BEARISH REVERSE CARRY STRATEGY**\n"
+                        trade_recommendation += f"*Price Expected to Fall: {s0:,.{dec}f} → {float(min_e['price']):,.{dec}f} ({move_to_min:.1f}%)*\n\n"
+                        trade_recommendation += f"**CASH FLOW TABLE:**\n"
+                        trade_recommendation += f"```\n"
+                        trade_recommendation += f"Time           Action                                Cash Flow\n"
+                        trade_recommendation += f"{'─'*70}\n"
+                        trade_recommendation += f"TODAY          Buy {_fmt_qty_kg(qty_now)} (10%)              -{cost_phase1:,.0f} {currency}\n"
+                        trade_recommendation += f"TODAY          Invest budget (Phase 2)                 -{investment_phase2:,.0f} {currency}\n"
+                        trade_recommendation += f"TODAY          Invest budget (Phase 3)                 -{investment_phase3:,.0f} {currency}\n"
+                        trade_recommendation += f"{half_e.get('horizon', 'Mid-point')}    Investment grows at {investment_rate*100:.1f}%        +{interest_earned_phase2:,.0f} {currency}\n"
+                        trade_recommendation += f"{half_e.get('horizon', 'Mid-point')}    Buy {_fmt_qty_kg(qty_mid)} @ lower price          -{actual_cost_phase2:,.0f} {currency}\n"
+                        trade_recommendation += f"{min_e['horizon']}  Investment grows at {investment_rate*100:.1f}%        +{interest_earned_phase3:,.0f} {currency}\n"
+                        trade_recommendation += f"{min_e['horizon']}  Buy {_fmt_qty_kg(qty_target)} @ low price           -{actual_cost_phase3:,.0f} {currency}\n"
+                        trade_recommendation += f"{min_e['horizon']}  Pay storage costs                       -{total_storage:,.0f} {currency}\n"
+                        trade_recommendation += f"{'─'*70}\n"
+                        trade_recommendation += f"NET PROFIT                                          +{expected_profit:,.0f} {currency}\n"
+                        trade_recommendation += f"```\n\n"
                         
-                        steps = trade_recommendation + "\n" + strategy_details
+                        strategy_details = f"**BREAKDOWN:**\n"
+                        strategy_details += f"• Baseline (buy all now): {baseline_cost:,.0f} {currency}\n"
+                        strategy_details += f"• Strategy cost: {strategy_cost:,.0f} {currency}\n"
+                        strategy_details += f"• Price savings: +{price_savings:,.0f} {currency}\n"
+                        strategy_details += f"• Interest earned: +{total_interest_earned:,.0f} {currency} @ {investment_rate*100:.1f}% p.a.\n"
+                        strategy_details += f"• Storage costs: -{total_storage:,.0f} {currency} @ {storage_cost_pct*100:.1f}% p.a.\n"
+                        strategy_details += f"• **NET PROFIT: {expected_profit:,.0f} {currency}**\n\n"
+                        strategy_details += f"**LOGIC:**\n"
+                        strategy_details += f"• Forecast shows price drop from {s0:,.{dec}f} to {float(min_e['price']):,.{dec}f}\n"
+                        strategy_details += f"• Buy minimal {_fmt_qty_kg(qty_now)} now (operations)\n"
+                        strategy_details += f"• Invest saved budget in bank @ {investment_rate*100:.1f}%\n"
+                        strategy_details += f"• Buy remaining {_fmt_qty_kg(qty_mid + qty_target)} when prices fall\n"
+                        strategy_details += f"• Earn interest while waiting + save on lower prices"
+                        
+                        steps = trade_recommendation + strategy_details
                     else:
                         steps = (
                             f"Procure 10% now (operational safety); 30% around {half_e.get('horizon','mid‑window')}; "
@@ -3240,7 +3252,7 @@ def render_integrated_strategy_engine(
                     )
                 elif move_to_max >= float(forecast_sig):
                     market_condition = "Forecast Opportunity"
-                    strat_name = "Accelerate Procurement / Increase Coverage"
+                    strat_name = "Bullish Leveraged Carry Trade"
                     early_e = _closest_curve_entry(curve_s, 3) or mid_e
                     
                     # Calculate specific quantities and costs
@@ -3248,90 +3260,68 @@ def render_integrated_strategy_engine(
                     total_need = mqty * target_months if mqty > 0 else 0.0
                     
                     if mqty > 0 and total_need > 0:
-                        # Aggressive procurement: 40% now, 30% early, 30% forward/options
-                        qty_now = 0.40 * total_need
-                        qty_early = 0.30 * total_need
-                        qty_forward = 0.30 * total_need
+                        # BULLISH LEVERAGED CARRY: Borrow money, buy now, sell later at high
+                        # Buy 100% now using borrowed money, sell at peak
+                        qty_now = 1.0 * total_need  # Buy all now
                         
-                        # Unit conversion: if price is per lb, convert kg to lb
+                        # Unit conversion
                         unit_multiplier = 1.0
                         if "/lb" in unit.lower():
-                            unit_multiplier = 2.20462  # kg to lb conversion
+                            unit_multiplier = 2.20462
                         
-                        # Hull Formula: Calculate theoretical forward price for validation
-                        # F = S × e^((r + u - y) × T)
                         import math
-                        time_to_maturity_years = target_months / 12.0
-                        carrying_cost_rate = risk_free_rate + storage_cost_pct - convenience_yield_pct
-                        theoretical_forward = s0 * math.exp(carrying_cost_rate * time_to_maturity_years)
+                        time_to_peak_years = target_months / 12.0
                         
-                        # Cost calculation (all costs in same currency as s0)
-                        # Formula: Cost = Quantity(kg) × Conversion × Price(per unit)
-                        cost_now = qty_now * unit_multiplier * s0
-                        cost_early = qty_early * unit_multiplier * float(early_e.get("price", s0 * 1.02))
-                        forward_price = float(max_e["price"]) * 0.98  # Lock in at slight discount to forecast max
-                        cost_forward = qty_forward * unit_multiplier * forward_price
-                        total_cost_strategy = cost_now + cost_early + cost_forward
+                        # CASH FLOW TABLE (like team lead's example)
+                        # TODAY: Borrow money and buy commodity
+                        purchase_cost = qty_now * unit_multiplier * s0
+                        loan_amount = purchase_cost
                         
-                        # Baseline: buying all at forecast high
-                        cost_at_high = total_need * unit_multiplier * float(max_e["price"])
+                        # HOLD AND PAY STORAGE
+                        storage_cost = purchase_cost * storage_cost_pct * time_to_peak_years
                         
-                        # Carrying costs for early procurement (Hull: storage costs for inventory held)
-                        # Formula: Carrying Cost = Qty × Price × Storage Rate × Time Held
-                        early_months = float(early_e.get("months", 3))
-                        # Phase 1: held until peak
-                        time_phase1_held = target_months / 12.0
-                        carrying_cost_phase1 = qty_now * unit_multiplier * s0 * storage_cost_pct * time_phase1_held
-                        # Phase 2: held from early buy to peak
-                        time_phase2_held = (target_months - early_months) / 12.0
-                        carrying_cost_phase2 = qty_early * unit_multiplier * float(early_e.get("price", s0)) * storage_cost_pct * time_phase2_held
-                        # Phase 3: forward lock, no storage needed
-                        total_carrying_cost = carrying_cost_phase1 + carrying_cost_phase2
+                        # AT PEAK: Sell commodity
+                        sale_proceeds = qty_now * unit_multiplier * float(max_e["price"])
                         
-                        # Expected savings (before carrying costs)
-                        # Formula: Profit = Cost at Peak - Strategy Cost - Carrying Costs
-                        gross_savings = cost_at_high - total_cost_strategy
-                        savings_after_carrying = gross_savings - total_carrying_cost
-                        savings_pct = (gross_savings / cost_at_high * 100.0) if cost_at_high > 0 else 0.0
+                        # REPAY LOAN WITH INTEREST
+                        interest_cost = loan_amount * borrowing_rate * time_to_peak_years
+                        loan_repayment = loan_amount + interest_cost
                         
-                        # Strategy: Bull Call Spread for remaining coverage
-                        # Formula: Buy ATM Call (5% premium) + Sell OTM Call (2% premium)
-                        lower_strike = s0
-                        upper_strike = float(max_e["price"])
-                        call_buy_premium = s0 * 0.05  # Buy ATM call at 5% of spot
-                        call_sell_premium = s0 * 0.02  # Sell OTM call at 2% of spot
-                        net_premium = (call_buy_premium - call_sell_premium) * qty_forward * unit_multiplier
-                        # Formula: Max Profit = (Upper Strike - Lower Strike) × Qty - Net Premium
-                        max_profit_from_spread = qty_forward * unit_multiplier * (upper_strike - lower_strike) - net_premium
-                        # Formula: Total Profit = Procurement Savings (after carrying) + Options Profit
-                        expected_profit = savings_after_carrying + max_profit_from_spread
+                        # NET PROFIT
+                        expected_profit = sale_proceeds - loan_repayment - storage_cost
+                        profit_pct = (expected_profit / loan_amount * 100.0) if loan_amount > 0 else 0.0
                         
-                        # Extract currency from unit (e.g., "USD/lb" -> "USD")
-                        currency = unit.split("/")[0] if "/" in unit else unit
+                        # BUILD CASH FLOW TABLE
+                        trade_recommendation = f"**🟢 BULLISH LEVERAGED CARRY TRADE**\n"
+                        trade_recommendation += f"*Price Expected to Rise: {s0:,.{dec}f} → {float(max_e['price']):,.{dec}f} (+{move_to_max:.1f}%)*\n\n"
+                        trade_recommendation += f"**CASH FLOW TABLE:**\n"
+                        trade_recommendation += f"```\n"
+                        trade_recommendation += f"Time           Action                                Cash Flow\n"
+                        trade_recommendation += f"{'─'*70}\n"
+                        trade_recommendation += f"TODAY          Borrow from bank                        +{loan_amount:,.0f} {currency}\n"
+                        trade_recommendation += f"TODAY          Buy {_fmt_qty_kg(qty_now)} (100%)             -{purchase_cost:,.0f} {currency}\n"
+                        trade_recommendation += f"{max_e['horizon']}  Sell commodity at peak                  +{sale_proceeds:,.0f} {currency}\n"
+                        trade_recommendation += f"{max_e['horizon']}  Repay loan + interest                   -{loan_repayment:,.0f} {currency}\n"
+                        trade_recommendation += f"{max_e['horizon']}  Pay storage costs                       -{storage_cost:,.0f} {currency}\n"
+                        trade_recommendation += f"{'─'*70}\n"
+                        trade_recommendation += f"NET PROFIT                                          +{expected_profit:,.0f} {currency}\n"
+                        trade_recommendation += f"```\n\n"
                         
-                        trade_recommendation = f"**RECOMMENDED TRADE:**\n"
-                        trade_recommendation += f"• **Phase 1 (NOW):** Buy {_fmt_qty_kg(qty_now)} @ {s0:,.{dec}f} {unit} = Cost: {cost_now:,.0f} {currency}\n"
-                        trade_recommendation += f"• **Phase 2 ({early_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_early)} @ {float(early_e.get('price')):,.{dec}f} {unit} = Cost: {cost_early:,.0f} {currency}\n"
-                        trade_recommendation += f"• **Phase 3 (Forward Lock):** Lock {_fmt_qty_kg(qty_forward)} @ {forward_price:,.{dec}f} {unit} = Cost: {cost_forward:,.0f} {currency}\n"
-                        trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} {currency} (vs {cost_at_high:,.0f} {currency} at forecast peak)\n"
-                        trade_recommendation += f"**GROSS SAVINGS:** {gross_savings:,.0f} {currency} ({savings_pct:.1f}%)\n"
-                        trade_recommendation += f"**CARRYING COSTS:** {total_carrying_cost:,.0f} {currency} (storage {storage_cost_pct*100:.1f}% p.a.)\n"
-                        trade_recommendation += f"**NET SAVINGS (after carrying):** {savings_after_carrying:,.0f} {currency}\n"
+                        strategy_details = f"**BREAKDOWN:**\n"
+                        strategy_details += f"• Purchase cost (borrow): {purchase_cost:,.0f} {currency}\n"
+                        strategy_details += f"• Sale proceeds (at peak): {sale_proceeds:,.0f} {currency}\n"
+                        strategy_details += f"• Interest cost: -{interest_cost:,.0f} {currency} @ {borrowing_rate*100:.1f}% p.a.\n"
+                        strategy_details += f"• Storage costs: -{storage_cost:,.0f} {currency} @ {storage_cost_pct*100:.1f}% p.a.\n"
+                        strategy_details += f"• **NET PROFIT: {expected_profit:,.0f} {currency} ({profit_pct:.1f}% ROI)**\n\n"
+                        strategy_details += f"**LOGIC:**\n"
+                        strategy_details += f"• Forecast shows price rise from {s0:,.{dec}f} to {float(max_e['price']):,.{dec}f}\n"
+                        strategy_details += f"• Borrow {loan_amount:,.0f} {currency} @ {borrowing_rate*100:.1f}% p.a.\n"
+                        strategy_details += f"• Buy {_fmt_qty_kg(qty_now)} now at low price\n"
+                        strategy_details += f"• Hold until {max_e['horizon']} (pay storage)\n"
+                        strategy_details += f"• Sell at peak price {float(max_e['price']):,.{dec}f}\n"
+                        strategy_details += f"• Repay loan, keep profit"
                         
-                        strategy_details = f"**STRATEGY: Bull Call Spread (Cap Cost Upside)**\n"
-                        strategy_details += f"• BUY Call @ {lower_strike:,.{dec}f} | Premium: {call_buy_premium:,.{dec}f}/unit\n"
-                        strategy_details += f"• SELL Call @ {upper_strike:,.{dec}f} | Premium: {call_sell_premium:,.{dec}f}/unit\n"
-                        strategy_details += f"• Net Premium: {(call_buy_premium - call_sell_premium):,.{dec}f}/unit × {_fmt_qty_kg(qty_forward)} = {net_premium:,.0f} {currency}\n"
-                        strategy_details += f"• **MAX PROFIT FROM SPREAD:** {max_profit_from_spread:,.0f} {currency}\n"
-                        strategy_details += f"• **TOTAL EXPECTED PROFIT:** {expected_profit:,.0f} {currency}\n"
-                        strategy_details += f"\n**HULL PRICING (Validation):**\n"
-                        strategy_details += f"• Theoretical Forward ({target_months:.0f}M): {theoretical_forward:,.{dec}f} {unit}\n"
-                        strategy_details += f"• Carrying Rate: {carrying_cost_rate*100:.2f}% = r({risk_free_rate*100:.1f}%) + u({storage_cost_pct*100:.1f}%) - y({convenience_yield_pct*100:.1f}%)\n"
-                        strategy_details += f"• Forecast High: {float(max_e['price']):,.{dec}f} vs Theoretical: {theoretical_forward:,.{dec}f}\n"
-                        strategy_details += f"• **Max Loss:** Net premium paid ({net_premium:,.0f} {currency})\n"
-                        strategy_details += f"• **Max Gain:** Capped at {max_profit_from_spread:,.0f} {currency} from spread + {savings_after_carrying:,.0f} {currency} from early buying"
-                        
-                        steps = trade_recommendation + "\n" + strategy_details
+                        steps = trade_recommendation + strategy_details
                     else:
                         steps = (
                             f"Procure 40% now; 30% around {early_e.get('horizon','next window')}; "
@@ -3489,11 +3479,14 @@ def render_integrated_strategy_engine(
             
             # Extract profit/savings from text
             profit = 0.0
-            if "EXPECTED SAVINGS:" in how_text or "EXPECTED PROFIT:" in how_text:
-                import re
+            import re
+            # Try new format first: "NET PROFIT +123,456 USD"
+            match = re.search(r'NET PROFIT\s+\+?([\d,\.]+)', how_text)
+            if not match:
+                # Fallback to old format: "EXPECTED SAVINGS:** 123,456" or "EXPECTED PROFIT:** 123,456"
                 match = re.search(r'(?:SAVINGS|PROFIT):\*\*\s*([\d,\.]+)', how_text)
-                if match:
-                    profit = float(match.group(1).replace(',', ''))
+            if match:
+                profit = float(match.group(1).replace(',', ''))
             
             if profit > 0:
                 exec_summary.append({
@@ -3542,17 +3535,32 @@ def render_integrated_strategy_engine(
                     # Extract key numbers from detailed trade recommendation
                     how_text = item["how"]
                     
-                    # Extract Phase 1 quantity and price
-                    phase1_match = re.search(r'Phase 1 \(NOW\):\*\* Buy ([\d,\.]+[^\@]*) @ ([\d\.]+)', how_text)
-                    phase1_qty = phase1_match.group(1).strip() if phase1_match else "—"
-                    phase1_price = phase1_match.group(2) if phase1_match else "—"
-                    
-                    # Extract strategy name
-                    strategy_match = re.search(r'\*\*STRATEGY: ([^\n]+)', how_text)
-                    strategy = strategy_match.group(1).replace('**', '') if strategy_match else "Phased Procurement"
-                    
-                    action = "BUY NOW" if "Accelerate" in item["decision"] or "Buy" in how_text else "DEFER & WAIT"
-                    action_color = "#10b981" if action == "BUY NOW" else "#f59e0b"
+                    # Determine strategy type and extract relevant info
+                    if "Bearish Reverse Carry" in how_text or "Invest" in how_text:
+                        # Bearish strategy: "TODAY Invest -123,456 USD"
+                        invest_match = re.search(r'TODAY.*Invest\s+-?([\d,\.]+)', how_text)
+                        action = "DEFER & INVEST"
+                        action_color = "#f59e0b"
+                        phase1_qty = f"Invest {invest_match.group(1) if invest_match else '—'}"
+                        phase1_price = "in bank"
+                        strategy = "Reverse Carry (Bearish)"
+                    elif "Bullish Leveraged Carry" in how_text or "Borrow" in how_text:
+                        # Bullish strategy: "TODAY Borrow +123,456 USD + Buy 1,234,567 kg @ 1.23"
+                        buy_match = re.search(r'Buy\s+([\d,\.]+[^\@]*)\s+@\s+([\d\.]+)', how_text)
+                        action = "BUY NOW (LEVERAGED)"
+                        action_color = "#10b981"
+                        phase1_qty = buy_match.group(1).strip() if buy_match else "—"
+                        phase1_price = buy_match.group(2) if buy_match else "—"
+                        strategy = "Leveraged Carry Trade (Bullish)"
+                    else:
+                        # Fallback for old format
+                        phase1_match = re.search(r'Phase 1 \(NOW\):\*\* Buy ([\d,\.]+[^\@]*) @ ([\d\.]+)', how_text)
+                        phase1_qty = phase1_match.group(1).strip() if phase1_match else "—"
+                        phase1_price = phase1_match.group(2) if phase1_match else "—"
+                        strategy_match = re.search(r'\*\*STRATEGY: ([^\n]+)', how_text)
+                        strategy = strategy_match.group(1).replace('**', '') if strategy_match else "Phased Procurement"
+                        action = "BUY NOW" if "Accelerate" in item["decision"] or "Buy" in how_text else "DEFER & WAIT"
+                        action_color = "#10b981" if action == "BUY NOW" else "#f59e0b"
                     
                     st.markdown(f"""
 <div style='background: linear-gradient(135deg, #fff 0%, #fef3c7 100%); 
