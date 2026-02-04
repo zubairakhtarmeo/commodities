@@ -3274,6 +3274,7 @@ def render_integrated_strategy_engine(
                             trade_recommendation += f"2. Negotiate fixed-rate agreements with WAPDA/K-Electric\n"
                             trade_recommendation += f"3. Consider on-site solar/wind to reduce grid dependency\n"
                             trade_recommendation += f"4. Implement energy efficiency measures to offset higher costs\n\n"
+                            trade_recommendation += f"**💰 NET PROFIT: ${abs(expected_profit):,.0f} USD**"
                             strategy_details += f"**💰 COST AVOIDANCE: ${abs(expected_profit):,.0f} USD**"
                         else:
                             trade_recommendation = f"✅ **BENEFIT FROM LOWER ENERGY COSTS**\n\n"
@@ -3284,6 +3285,7 @@ def render_integrated_strategy_engine(
                             trade_recommendation += f"2. Renegotiate electricity contracts at lower rates\n"
                             trade_recommendation += f"3. Increase production volume to capitalize on lower energy costs\n"
                             trade_recommendation += f"4. Offer competitive pricing to win new orders\n\n"
+                            trade_recommendation += f"**💰 NET PROFIT: ${abs(expected_profit):,.0f} USD**"
                             strategy_details += f"**💰 COST SAVINGS: ${abs(expected_profit):,.0f} USD**"
                         
                         steps = trade_recommendation
@@ -3340,6 +3342,7 @@ def render_integrated_strategy_engine(
                             trade_recommendation += f"2. Negotiate long-term contracts with suppliers\n"
                             trade_recommendation += f"3. Increase cotton blend ratios to reduce polyester dependency\n"
                             trade_recommendation += f"4. Pass through cost increases to customers\n\n"
+                            trade_recommendation += f"**💰 NET PROFIT: ${abs(expected_profit):,.0f} USD**"
                             strategy_details += f"**💰 COST AVOIDANCE: ${abs(expected_profit):,.0f} USD**"
                         else:
                             trade_recommendation = f"✅ **BENEFIT FROM LOWER POLYESTER COSTS**\n\n"
@@ -3350,6 +3353,7 @@ def render_integrated_strategy_engine(
                             trade_recommendation += f"2. Increase polyester orders for new product lines\n"
                             trade_recommendation += f"3. Offer competitive pricing on synthetic blends\n"
                             trade_recommendation += f"4. Build inventory at lower cost basis\n\n"
+                            trade_recommendation += f"**💰 NET PROFIT: ${abs(expected_profit):,.0f} USD**"
                             strategy_details += f"**💰 COST SAVINGS: ${abs(expected_profit):,.0f} USD**"
                         
                         steps = trade_recommendation
@@ -5157,6 +5161,212 @@ def render_overview_tab(commodities_data: dict, title: str):
     )
     
     st.plotly_chart(fig, use_container_width=True)
+
+    # Quarterly Purchasing Forecast
+    st.markdown("---")
+    st.markdown("### 📦 Quarterly Purchasing Forecast")
+    st.caption("🔮 Predicted procurement volumes · Based on historical trends from mid-2024 onwards")
+    
+    try:
+        purch_df = _load_purchase_monthly_agg()
+        if isinstance(purch_df, pd.DataFrame) and not purch_df.empty and "month" in purch_df.columns:
+            qty_col = "total_qty_kg" if "total_qty_kg" in purch_df.columns else ("total_qty" if "total_qty" in purch_df.columns else None)
+            
+            if qty_col:
+                # Prepare data
+                purch_df = purch_df.copy()
+                purch_df["month"] = pd.to_datetime(purch_df["month"], errors="coerce")
+                purch_df = purch_df.dropna(subset=["month"])
+                purch_df[qty_col] = pd.to_numeric(purch_df[qty_col], errors="coerce")
+                purch_df = purch_df.dropna(subset=[qty_col])
+                
+                # Filter from mid-2024 onwards
+                start_date = pd.Timestamp("2024-07-01")
+                purch_df = purch_df[purch_df["month"] >= start_date].sort_values("month")
+                
+                if not purch_df.empty:
+                    # Get today's date and calculate forecast end (1 year from now)
+                    today = pd.Timestamp("2026-02-04")
+                    forecast_end = today + pd.DateOffset(years=1)
+                    
+                    # Aggregate by commodity and quarter
+                    purch_df["quarter"] = purch_df["month"].dt.to_period("Q")
+                    quarterly = purch_df.groupby(["commodity", "quarter"], dropna=False)[qty_col].sum().reset_index()
+                    
+                    # Pivot to get commodities as columns
+                    pivot_df = quarterly.pivot(index="quarter", columns="commodity", values=qty_col).fillna(0)
+                    
+                    # Generate future quarters for forecast
+                    last_quarter = pivot_df.index.max()
+                    future_quarters = []
+                    current_q = last_quarter
+                    while current_q.end_time < forecast_end:
+                        current_q = current_q + 1
+                        future_quarters.append(current_q)
+                    
+                    # Simple forecast: use average of last 4 quarters for each commodity
+                    forecast_rows = []
+                    for q in future_quarters:
+                        forecast_row = {}
+                        for commodity in pivot_df.columns:
+                            last_4_quarters = pivot_df[commodity].tail(4)
+                            forecast_row[commodity] = last_4_quarters.mean() if len(last_4_quarters) > 0 else 0
+                        forecast_rows.append(forecast_row)
+                    
+                    if forecast_rows:
+                        forecast_df = pd.DataFrame(forecast_rows, index=future_quarters)
+                        combined_df = pd.concat([pivot_df, forecast_df])
+                    else:
+                        combined_df = pivot_df
+                    
+                    # Convert to tonnes and format
+                    display_df = combined_df / 1000.0  # kg to tonnes
+                    display_df.index = display_df.index.astype(str)
+                    
+                    # Create visualization
+                    col1, col2 = st.columns([3, 2])
+                    
+                    with col1:
+                        import plotly.graph_objects as go
+                        
+                        fig = go.Figure()
+                        colors_map = {
+                            'Cotton': '#3b82f6',
+                            'Polyester': '#10b981',
+                            'Viscose': '#8b5cf6',
+                            'Crude Oil': '#ef4444',
+                            'Natural Gas': '#ec4899'
+                        }
+                        
+                        for commodity in display_df.columns:
+                            fig.add_trace(go.Bar(
+                                name=commodity,
+                                x=display_df.index,
+                                y=display_df[commodity],
+                                marker_color=colors_map.get(commodity, '#64748b')
+                            ))
+                        
+                        # Mark historical vs forecast
+                        last_historical_idx = len(pivot_df) - 1
+                        
+                        fig.update_layout(
+                            barmode='group',
+                            title=dict(
+                                text='Quarterly Purchasing Volume (Tonnes)',
+                                font=dict(size=14, weight='bold')
+                            ),
+                            xaxis_title='Quarter',
+                            yaxis_title='Volume (Tonnes)',
+                            hovermode='x unified',
+                            plot_bgcolor='#f8fafc',
+                            paper_bgcolor='white',
+                            height=400,
+                            showlegend=True,
+                            legend=dict(
+                                orientation='h',
+                                yanchor='bottom',
+                                y=1.02,
+                                xanchor='right',
+                                x=1
+                            ),
+                            shapes=[
+                                dict(
+                                    type='line',
+                                    x0=last_historical_idx + 0.5,
+                                    x1=last_historical_idx + 0.5,
+                                    y0=0,
+                                    yref='paper',
+                                    y1=1,
+                                    line=dict(color='#f59e0b', width=2, dash='dash')
+                                )
+                            ],
+                            annotations=[
+                                dict(
+                                    x=last_historical_idx + 0.5,
+                                    y=1.05,
+                                    xref='x',
+                                    yref='paper',
+                                    text='← Historical | Forecast →',
+                                    showarrow=False,
+                                    font=dict(size=10, color='#f59e0b'),
+                                    xanchor='center'
+                                )
+                            ]
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True, key="summary_purchasing_forecast")
+                    
+                    with col2:
+                        # Create summary table
+                        summary_data = []
+                        for commodity in display_df.columns:
+                            historical = display_df.loc[pivot_df.index.astype(str), commodity]
+                            forecast = display_df.loc[forecast_df.index.astype(str), commodity] if forecast_rows else pd.Series()
+                            
+                            avg_hist = historical.mean()
+                            avg_fcst = forecast.mean() if len(forecast) > 0 else 0
+                            pct_change = ((avg_fcst - avg_hist) / avg_hist * 100) if avg_hist > 0 else 0
+                            
+                            summary_data.append({
+                                'Commodity': commodity,
+                                'Avg Historical': f'{avg_hist:,.0f}t',
+                                'Avg Forecast': f'{avg_fcst:,.0f}t',
+                                'Change': f'{pct_change:+.1f}%'
+                            })
+                        
+                        summary_df = pd.DataFrame(summary_data)
+                        
+                        # Style the table
+                        def color_forecast_change(val):
+                            if isinstance(val, str) and '%' in val:
+                                try:
+                                    num = float(val.replace('%', '').replace('+', ''))
+                                    if num > 0:
+                                        return 'background-color: #dcfce7; color: #166534; font-weight: bold'
+                                    elif num < 0:
+                                        return 'background-color: #fee2e2; color: #991b1b; font-weight: bold'
+                                except:
+                                    pass
+                            return ''
+                        
+                        styled_summary = summary_df.style.applymap(
+                            color_forecast_change, subset=['Change']
+                        ).set_properties(**{
+                            'text-align': 'right',
+                            'font-size': '0.9rem'
+                        }, subset=['Avg Historical', 'Avg Forecast', 'Change']).set_properties(**{
+                            'text-align': 'left',
+                            'font-weight': 'bold',
+                            'font-size': '0.9rem'
+                        }, subset=['Commodity']).set_table_styles([
+                            {'selector': 'thead th', 'props': [
+                                ('background-color', '#1e40af'),
+                                ('color', 'white'),
+                                ('font-weight', 'bold'),
+                                ('text-align', 'center'),
+                                ('padding', '10px'),
+                                ('font-size', '0.85rem')
+                            ]},
+                            {'selector': 'tbody tr:nth-child(even)', 'props': [
+                                ('background-color', '#f8fafc')
+                            ]},
+                            {'selector': 'tbody tr:hover', 'props': [
+                                ('background-color', '#e0e7ff')
+                            ]}
+                        ])
+                        
+                        st.dataframe(styled_summary, use_container_width=True, hide_index=True, height=240)
+                        
+                        st.caption(f"📊 Forecast based on {len(pivot_df)} quarters of historical data")
+                        st.caption("🔮 Predictions use 4-quarter rolling average")
+                else:
+                    st.info("Purchase data available from mid-2024 onwards. Waiting for sufficient history to generate forecasts.")
+            else:
+                st.info("No quantity column found in purchase data. Check data format.")
+        else:
+            st.info("No purchase history available. Upload procurement data to enable forecasting.")
+    except Exception as e:
+        st.warning(f"Unable to generate purchasing forecast: {str(e)}")
 
     # Procurement & Options Strategist — moved here from Summary
     st.markdown("---")
