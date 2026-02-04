@@ -1,4 +1,5 @@
 from __future__ import annotations
+# Last updated: 2026-02-04 - Enhanced with profit calculations and specific trade recommendations
 
 from pathlib import Path
 from datetime import datetime
