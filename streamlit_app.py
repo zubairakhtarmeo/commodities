@@ -1607,7 +1607,7 @@ def render_call_put_hedge_advisor(
     with container:
         exposure = "Procurement (forward buying)"
         risk_profile = "Balanced"
-        budget_priority = "Medium"
+        budget_priority = "Moderate"
         allow_selling = False
         qty = 1.0
 
@@ -1702,7 +1702,7 @@ def render_call_put_hedge_advisor(
                 with copt2:
                     budget_priority = st.selectbox(
                         "Premium budget",
-                        ["Low", "Medium", "High"],
+                        ["Low", "Moderate", "High"],
                         index=1,
                         key=f"{key_prefix}_budget",
                     )
@@ -1962,7 +1962,7 @@ def render_call_put_hedge_advisor(
                     sigma_ann=sigma_ann,
                     t_years=t_years,
                     risk_profile="Balanced",
-                    budget_priority="Medium",
+                    budget_priority="Moderate",
                     allow_selling=False,
                     qty=1.0,
                     unit=unit,
@@ -1974,7 +1974,7 @@ def render_call_put_hedge_advisor(
                     sigma_ann=sigma_ann,
                     t_years=t_years,
                     risk_profile="Balanced",
-                    budget_priority="Medium",
+                    budget_priority="Moderate",
                     allow_selling=False,
                     qty=1.0,
                     unit=unit,
@@ -2016,8 +2016,8 @@ def render_call_put_hedge_advisor(
             def _urgency_style(val) -> str:
                 if val == "🔴":
                     return "background-color: #dc2626; color: white; font-weight: 900; text-align: center;"
-                if val == "🟡":
-                    return "background-color: #f59e0b; color: white; font-weight: 900; text-align: center;"
+                if val == "�":
+                    return "background-color: #3b82f6; color: white; font-weight: 900; text-align: center;"
                 return "background-color: #10b981; color: white; font-weight: 900; text-align: center;"
 
             def _chg_style(val) -> str:
@@ -2153,7 +2153,7 @@ def render_call_put_hedge_advisor(
         
         with col2:
             st.markdown(f"""
-<div style='background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); 
+<div style='background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); 
             padding: 1rem; border-radius: 8px; color: white; margin-bottom: 0.5rem;'>
     <div style='font-size: 0.7rem; font-weight: 600; opacity: 0.9; margin-bottom: 0.3rem;'>📊 RATIONALE</div>
     <div style='font-size: 0.95rem; font-weight: 800;'>{proc_rationale}</div>
@@ -2324,9 +2324,9 @@ def _confidence_from_interval(*, s0: float, target_price: float, lower: float | 
         s0 = float(s0)
         target_price = float(target_price)
     except Exception:
-        return "Medium"
+        return "Moderate"
     if s0 <= 0 or not (np.isfinite(s0) and np.isfinite(target_price)):
-        return "Medium"
+        return "Moderate"
 
     move_pct = abs((target_price / s0 - 1.0) * 100.0)
     width_pct = None
@@ -2344,14 +2344,14 @@ def _confidence_from_interval(*, s0: float, target_price: float, lower: float | 
         if move_pct >= 10:
             return "High"
         if move_pct >= 5:
-            return "Medium"
+            return "Moderate"
         return "Low"
 
     # Be more forgiving on interval width: forecast bands are often wide on commodities.
     if move_pct >= 8 and width_pct <= 30:
         return "High"
     if move_pct >= 4 and width_pct <= 50:
-        return "Medium"
+        return "Moderate"
     return "Low"
 
 
@@ -2457,7 +2457,7 @@ def render_forecast_strategy_engine(
                         conf_raw = _confidence_from_interval(s0=s0, target_price=float(target["price"]), lower=target.get("lower"), upper=target.get("upper"))
                         conf = {
                             "High": "Elevated Market Risk Classification",
-                            "Medium": "Moderate Risk Classification",
+                            "Moderate": "Moderate Risk Classification",
                             "Low": "Lower Risk Classification",
                         }.get(str(conf_raw), str(conf_raw))
                         exp_move = (float(target["price"]) / s0 - 1.0) * 100.0
@@ -2485,7 +2485,7 @@ def render_forecast_strategy_engine(
                         conf_raw = _confidence_from_interval(s0=s0, target_price=float(target["price"]), lower=target.get("lower"), upper=target.get("upper"))
                         conf = {
                             "High": "Elevated",
-                            "Medium": "Moderate",
+                            "Moderate": "Moderate",
                             "Low": "Lower",
                         }.get(str(conf_raw), str(conf_raw))
                         exp_move = (float(target["price"]) / s0 - 1.0) * 100.0
@@ -2514,7 +2514,7 @@ def render_forecast_strategy_engine(
                         conf_raw = _confidence_from_interval(s0=s0, target_price=float(target["price"]), lower=target.get("lower"), upper=target.get("upper"))
                         conf = {
                             "High": "Elevated",
-                            "Medium": "Moderate",
+                            "Moderate": "Moderate",
                             "Low": "Lower",
                         }.get(str(conf_raw), str(conf_raw))
                         exp_move = (float(target["price"]) / s0 - 1.0) * 100.0
@@ -2535,7 +2535,7 @@ def render_forecast_strategy_engine(
                             sigma_ann=sigma_ann,
                             t_years=t_years,
                             risk_profile="Balanced",
-                            budget_priority="Medium",
+                            budget_priority="Moderate",
                             allow_selling=False,
                             qty=1.0,
                             unit=unit,
@@ -2796,7 +2796,7 @@ def render_integrated_strategy_engine(
             vv = str(v)
             if "High" in vv:
                 return ("Elevated", "#16a34a")
-            if "Medium" in vv:
+            if "Moderate" in vv:
                 return ("Moderate", "#2563eb")
             return ("Lower", "#0f172a")
 
@@ -2897,10 +2897,10 @@ def render_integrated_strategy_engine(
                     badge_color = "#dc2626"
                     badge_icon = "🔴"
                     border_color = "#dc2626"
-                elif priority == "Medium":
-                    badge_color = "#f59e0b"
-                    badge_icon = "🟡"
-                    border_color = "#f59e0b"
+                elif priority == "Moderate":
+                    badge_color = "#3b82f6"  # Professional blue instead of yellow
+                    badge_icon = "🔵"
+                    border_color = "#3b82f6"
                 else:
                     badge_color = "#10b981"
                     badge_icon = "🟢"
@@ -3500,7 +3500,7 @@ def render_integrated_strategy_engine(
                         sigma_ann=float(sigma_ann),
                         t_years=t_years,
                         risk_profile="Balanced",
-                        budget_priority="Medium",
+                        budget_priority="Moderate",
                         allow_selling=False,
                         qty=1.0,
                         unit=unit,
@@ -3543,7 +3543,7 @@ def render_integrated_strategy_engine(
                             "Financial Logic": "Reduce procurement price risk (cap upside / manage volatility).",
                             "Expected Driver of Profit": "Risk reduction / budget certainty",
                             "Risk Notes": "Premium cost, basis risk, liquidity",
-                            "Priority": "Medium",
+                            "Priority": "Moderate",
                             "Commodity": label,
                             "Current Spot Market Price": f"{s0:,.{dec}f}",
                             "Unit": unit,
@@ -3558,12 +3558,12 @@ def render_integrated_strategy_engine(
             return
 
         # EXECUTIVE SUMMARY - Extract profit numbers from "How" field
-        prio_rank = {"High": 0, "Medium": 1, "Low": 2}
+        prio_rank = {"High": 0, "Moderate": 1, "Low": 2}
         exec_summary = []
         for _, row in out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"].iterrows():
             how_text = str(row.get("How", ""))
             commodity = str(row.get("Commodity", ""))
-            priority = str(row.get("Priority", "Medium"))
+            priority = str(row.get("Priority", "Moderate"))
             decision = str(row.get("Decision", ""))
             
             # Extract profit/savings from text
@@ -3629,7 +3629,7 @@ def render_integrated_strategy_engine(
                         # Bearish strategy: "TODAY Buy 5,415 t (10%) -8,841,353 USD"
                         buy_match = re.search(r'TODAY\s+Buy\s+([\d,\.]+\s*[tkgmton]+)\s*\((\d+)%\)', how_text)
                         action = "DEFER & INVEST"
-                        action_color = "#f59e0b"
+                        action_color = "#3b82f6"
                         if buy_match:
                             phase1_qty = f"Buy {buy_match.group(1)} ({buy_match.group(2)}%)"
                         else:
@@ -3652,7 +3652,7 @@ def render_integrated_strategy_engine(
                         strategy_match = re.search(r'\*\*STRATEGY: ([^\n]+)', how_text)
                         strategy = strategy_match.group(1).replace('**', '') if strategy_match else "Phased Procurement"
                         action = "BUY NOW" if "Accelerate" in item["decision"] or "Buy" in how_text else "DEFER & WAIT"
-                        action_color = "#10b981" if action == "BUY NOW" else "#f59e0b"
+                        action_color = "#10b981" if action == "BUY NOW" else "#3b82f6"
                     
                     st.markdown(f"""
 <div style='background: linear-gradient(135deg, #fff 0%, #fef3c7 100%); 
@@ -3700,7 +3700,7 @@ def render_integrated_strategy_engine(
         )
 
         # Re-rank priority order for display
-        prio_rank = {"High": 0, "Medium": 1, "Low": 2}
+        prio_rank = {"High": 0, "Moderate": 1, "Low": 2}
         spec_rows.sort(key=lambda r: prio_rank.get(str(r.get("Priority")), 9))
         hedge_rows.sort(key=lambda r: prio_rank.get(str(r.get("Priority")), 9))
 
@@ -3731,7 +3731,7 @@ def render_integrated_strategy_engine(
             pr_s = prio_rank.get(str((s or {}).get("Priority")), 9)
             pr_h = prio_rank.get(str((h or {}).get("Priority")), 9)
             pr_best = min(pr_s, pr_h)
-            priority = "High" if pr_best == 0 else ("Medium" if pr_best == 1 else "Low")
+            priority = "High" if pr_best == 0 else ("Moderate" if pr_best == 1 else "Low")
 
             proc_dec = str((s or {}).get("Decision") or "—")
             proc_when = str((s or {}).get("When") or "—")
@@ -4091,7 +4091,7 @@ def render_no_arbitrage_strategist(
             signal = "—"
             logic = "—"
             risk = "Costs, funding/margin, execution, liquidity"
-            confidence = "Medium"
+            confidence = "Moderate"
 
             # Step 1–3: Cost-of-carry futures mispricing
             if pd.notna(f_mkt) and np.isfinite(float(f_mkt)) and s0 > 0:
@@ -4111,21 +4111,21 @@ def render_no_arbitrage_strategist(
                     trade = "—"
                     signal = f"F_quote vs F_fair: {mis_pct:+.2f}%"
                     logic = "Futures aligns with carry fair value within threshold."
-                    confidence = "Medium"
+                    confidence = "Moderate"
                 elif mis_pct < 0:
                     opportunity = "Carry Mispricing"
                     strategy = "Cash‑and‑Carry Arbitrage"
                     trade = "Short spot, invest cash, long futures"
                     signal = f"F_quote vs F_fair: {mis_pct:+.2f}%"
                     logic = "Forward underpriced vs carry fair value."
-                    confidence = "High" if abs(mis_pct) >= 2 * float(threshold_pct) else "Medium"
+                    confidence = "High" if abs(mis_pct) >= 2 * float(threshold_pct) else "Moderate"
                 else:
                     opportunity = "Carry Mispricing"
                     strategy = "Reverse Cash‑and‑Carry"
                     trade = "Long spot (financed), short futures"
                     signal = f"F_quote vs F_fair: {mis_pct:+.2f}%"
                     logic = "Forward overpriced vs carry fair value."
-                    confidence = "High" if abs(mis_pct) >= 2 * float(threshold_pct) else "Medium"
+                    confidence = "High" if abs(mis_pct) >= 2 * float(threshold_pct) else "Moderate"
 
             # Step 4: Put-call parity / synthetic forward
             if all(pd.notna(x) for x in (c_mkt, p_mkt, k)) and s0 > 0:
@@ -4153,7 +4153,7 @@ def render_no_arbitrage_strategist(
                         trade = parity_trade if trade == "—" else f"{trade} | Options: {parity_trade}"
                         signal = f"Parity gap: {gap_pct:+.2f}% of spot"
                         logic = "Put‑call parity violation (should be ~0 after carry + funding)."
-                        confidence = "High" if abs(gap_pct) >= 2 * parity_thr else "Medium"
+                        confidence = "High" if abs(gap_pct) >= 2 * parity_thr else "Moderate"
 
                     # Volatility mispricing (market IV vs model sigma)
                     # Compare implied vol from call with our historical sigma (if available)
@@ -4202,7 +4202,7 @@ def render_no_arbitrage_strategist(
             return
 
         try:
-            out_df["__conf_rank"] = out_df["Confidence"].map({"High": 2, "Medium": 1, "Low": 0}).fillna(1)
+            out_df["__conf_rank"] = out_df["Confidence"].map({"High": 2, "Moderate": 1, "Low": 0}).fillna(1)
             out_df = out_df.sort_values(["__conf_rank", "Commodity"], ascending=[False, True]).drop(columns=["__conf_rank"])
         except Exception:
             pass
@@ -4211,7 +4211,7 @@ def render_no_arbitrage_strategist(
             vv = str(v)
             if "High" in vv:
                 return "background-color:#052e16; color:#dcfce7; font-weight:900;"
-            if "Medium" in vv:
+            if "Moderate" in vv:
                 return "background-color:#1e3a8a; color:#e0e7ff; font-weight:900;"
             return "background-color:#0f172a; color:#e5e7eb; font-weight:900;"
 
@@ -4947,7 +4947,7 @@ def render_overview_tab(commodities_data: dict, title: str):
     st.caption("All series indexed to 100 at start period")
     
     fig = go.Figure()
-    colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
+    colors = ['#3b82f6', '#10b981', '#8b5cf6', '#ef4444', '#ec4899']
     
     for idx, (name, (metadata, _, icon, _)) in enumerate(commodities_data.items()):
         if metadata['df'] is not None:
