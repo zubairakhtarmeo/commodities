@@ -2821,7 +2821,15 @@ def render_integrated_strategy_engine(
                 
                 why_txt = str(r.get("Why") or "—")
                 how_txt = str(r.get("How") or "—")  # This contains the detailed trade recommendations
-                when_txt = str(r.get("When") or "—")
+                
+                # Extract forecast % from why_txt to show market direction
+                forecast_move = ""
+                if why_txt and why_txt != "—":
+                    import re
+                    move_match = re.search(r'([\+\-]?[\d\.]+)%', why_txt)
+                    if move_match:
+                        move_val = move_match.group(1)
+                        forecast_move = f" [{move_val}%]"
                 
                 # Extract key metrics from How text for prominent display
                 import re
@@ -2901,7 +2909,7 @@ def render_integrated_strategy_engine(
                 <span style='font-size: 1.2rem; font-weight: 900; color: #0f172a;'>{commodity}</span>
                 <span style='background: {badge_color}; color: white; padding: 0.15rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 800;'>{badge_icon} {priority}</span>
             </div>
-            <div style='font-size: 0.85rem; color: #64748b; font-weight: 600;'>{decision}</div>
+            <div style='font-size: 0.85rem; color: #64748b; font-weight: 600;'>{decision}{forecast_move}</div>
         </div>
         <div style='text-align: right;'>
             <div style='font-size: 0.7rem; color: #64748b; font-weight: 700; margin-bottom: 0.15rem;'>EXPECTED PROFIT</div>
