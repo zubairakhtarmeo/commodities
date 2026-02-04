@@ -3094,6 +3094,39 @@ def render_integrated_strategy_engine(
                 driver = "Forecast realization"
                 risk_notes = "Forecast uncertainty; execution constraints"
                 
+                # Hull Chapter 5: Commodity Forward Pricing Parameters
+                # F = S × e^((r + u - y) × T)
+                # r = risk-free rate, u = storage cost, y = convenience yield
+                
+                # Commodity-specific parameters (% per annum)
+                if pc == "Cotton":
+                    storage_cost_pct = 0.025  # 2.5% - warehousing, insurance
+                    convenience_yield_pct = 0.010  # 1% - immediate availability value
+                elif pc == "Polyester":
+                    storage_cost_pct = 0.020  # 2% - less perishable
+                    convenience_yield_pct = 0.005  # 0.5% - lower convenience
+                elif pc == "Viscose":
+                    storage_cost_pct = 0.020  # 2%
+                    convenience_yield_pct = 0.005  # 0.5%
+                elif pc == "Crude Oil":
+                    storage_cost_pct = 0.035  # 3.5% - tank storage expensive
+                    convenience_yield_pct = 0.040  # 4% - high convenience (energy security)
+                elif pc == "Natural Gas":
+                    storage_cost_pct = 0.050  # 5% - very expensive storage
+                    convenience_yield_pct = 0.030  # 3%
+                else:
+                    storage_cost_pct = 0.025  # 2.5% default
+                    convenience_yield_pct = 0.010  # 1% default
+                
+                # Extract currency to determine risk-free rate
+                currency = unit.split("/")[0] if "/" in unit else unit
+                if "USD" in currency.upper():
+                    risk_free_rate = 0.045  # 4.5% (US Treasury yield)
+                elif "PKR" in currency.upper() or "RS" in currency.upper():
+                    risk_free_rate = 0.145  # 14.5% (Pakistan govt bonds)
+                else:
+                    risk_free_rate = 0.050  # 5% generic
+                
                 # NEW: Specific trade recommendation with profit calculation
                 trade_recommendation = ""
                 expected_profit = 0.0
@@ -3121,6 +3154,13 @@ def render_integrated_strategy_engine(
                         if "/lb" in unit.lower():
                             unit_multiplier = 2.20462  # kg to lb conversion
                         
+                        # Hull Formula: Calculate theoretical forward price for validation
+                        # F = S × e^((r + u - y) × T)
+                        import math
+                        time_to_maturity_years = target_months / 12.0
+                        carrying_cost_rate = risk_free_rate + storage_cost_pct - convenience_yield_pct
+                        theoretical_forward = s0 * math.exp(carrying_cost_rate * time_to_maturity_years)
+                        
                         # Cost calculation (all costs in same currency as s0)
                         # Formula: Cost = Quantity(kg) × Conversion × Price(per unit)
                         cost_now = qty_now * unit_multiplier * s0
@@ -3131,17 +3171,28 @@ def render_integrated_strategy_engine(
                         # Baseline: buying all now
                         cost_baseline = total_need * unit_multiplier * s0
                         
-                        # Expected savings
-                        # Formula: Profit = Baseline Cost - Strategy Cost
-                        expected_profit = cost_baseline - total_cost_strategy
-                        savings_pct = (expected_profit / cost_baseline * 100.0) if cost_baseline > 0 else 0.0
+                        # Carrying costs for inventory held (Hull: storage costs apply to held inventory)
+                        # Formula: Carrying Cost = Qty Held × Unit Price × Storage Rate × Time
+                        # Phase 1: held for full period
+                        carrying_cost_phase1 = qty_now * unit_multiplier * s0 * storage_cost_pct * time_to_maturity_years
+                        # Phase 2: held for remaining period
+                        time_phase2_to_end = (target_months - half_months) / 12.0
+                        carrying_cost_phase2 = qty_mid * unit_multiplier * float(half_e.get("price", s0)) * storage_cost_pct * time_phase2_to_end
+                        # Phase 3: no holding cost (consumed immediately)
+                        total_carrying_cost = carrying_cost_phase1 + carrying_cost_phase2
+                        
+                        # Expected savings (before carrying costs)
+                        # Formula: Profit = Baseline Cost - Strategy Cost - Carrying Costs
+                        gross_savings = cost_baseline - total_cost_strategy
+                        savings_after_carrying = gross_savings - total_carrying_cost
+                        savings_pct = (gross_savings / cost_baseline * 100.0) if cost_baseline > 0 else 0.0
                         
                         # Strategy: Synthetic Forward using options
                         # Formula: Call Premium ≈ 5% of spot price (industry standard for ATM options)
                         atm_call_premium = s0 * 0.05
                         hedge_cost = qty_target * unit_multiplier * atm_call_premium
-                        # Formula: Net Profit = Gross Savings - Hedge Cost
-                        net_profit = expected_profit - hedge_cost
+                        # Formula: Net Profit = Gross Savings - Carrying Costs - Hedge Cost
+                        expected_profit = savings_after_carrying - hedge_cost
                         
                         # Extract currency from unit (e.g., "USD/lb" -> "USD")
                         currency = unit.split("/")[0] if "/" in unit else unit
@@ -3151,13 +3202,19 @@ def render_integrated_strategy_engine(
                         trade_recommendation += f"• **Phase 2 ({half_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_mid)} @ {float(half_e.get('price')):,.{dec}f} {unit} = Cost: {cost_mid:,.0f} {currency}\n"
                         trade_recommendation += f"• **Phase 3 ({min_e['horizon']}):** Buy {_fmt_qty_kg(qty_target)} @ {float(min_e['price']):,.{dec}f} {unit} = Cost: {cost_target:,.0f} {currency}\n"
                         trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} {currency} (vs {cost_baseline:,.0f} {currency} if buying all now)\n"
-                        trade_recommendation += f"**EXPECTED SAVINGS:** {expected_profit:,.0f} {currency} ({savings_pct:.1f}%)\n"
+                        trade_recommendation += f"**GROSS SAVINGS:** {gross_savings:,.0f} {currency} ({savings_pct:.1f}%)\n"
+                        trade_recommendation += f"**CARRYING COSTS:** {total_carrying_cost:,.0f} {currency} (storage {storage_cost_pct*100:.1f}% p.a.)\n"
+                        trade_recommendation += f"**NET SAVINGS (after carrying):** {savings_after_carrying:,.0f} {currency}\n"
                         
                         strategy_details = f"**STRATEGY: Synthetic Long Forward + Call Protection**\n"
                         strategy_details += f"• Buy ATM Call options for Phase 3 quantity ({_fmt_qty_kg(qty_target)})\n"
                         strategy_details += f"• Strike: {s0:,.{dec}f} | Premium: ~{atm_call_premium:,.{dec}f}/unit | Total: {hedge_cost:,.0f} {currency}\n"
-                        strategy_details += f"• **NET EXPECTED PROFIT:** {net_profit:,.0f} {currency} (after hedge cost)\n"
-                        strategy_details += f"• **Max Loss:** Limited to premium paid ({hedge_cost:,.0f} {currency})\n"
+                        strategy_details += f"• **NET EXPECTED PROFIT:** {expected_profit:,.0f} {currency} (after carrying + hedge)\n"
+                        strategy_details += f"\n**HULL PRICING (Validation):**\n"
+                        strategy_details += f"• Theoretical Forward ({target_months:.0f}M): {theoretical_forward:,.{dec}f} {unit}\n"
+                        strategy_details += f"• Carrying Rate: {carrying_cost_rate*100:.2f}% = r({risk_free_rate*100:.1f}%) + u({storage_cost_pct*100:.1f}%) - y({convenience_yield_pct*100:.1f}%)\n"
+                        strategy_details += f"• Forecast Low: {float(min_e['price']):,.{dec}f} vs Theoretical: {theoretical_forward:,.{dec}f}\n"
+                        strategy_details += f"• **Max Loss:** Limited to call premium ({hedge_cost:,.0f} {currency})\n"
                         strategy_details += f"• **Max Gain:** Unlimited if prices fall as forecast"
                         
                         steps = trade_recommendation + "\n" + strategy_details
@@ -3201,6 +3258,13 @@ def render_integrated_strategy_engine(
                         if "/lb" in unit.lower():
                             unit_multiplier = 2.20462  # kg to lb conversion
                         
+                        # Hull Formula: Calculate theoretical forward price for validation
+                        # F = S × e^((r + u - y) × T)
+                        import math
+                        time_to_maturity_years = target_months / 12.0
+                        carrying_cost_rate = risk_free_rate + storage_cost_pct - convenience_yield_pct
+                        theoretical_forward = s0 * math.exp(carrying_cost_rate * time_to_maturity_years)
+                        
                         # Cost calculation (all costs in same currency as s0)
                         # Formula: Cost = Quantity(kg) × Conversion × Price(per unit)
                         cost_now = qty_now * unit_multiplier * s0
@@ -3212,10 +3276,23 @@ def render_integrated_strategy_engine(
                         # Baseline: buying all at forecast high
                         cost_at_high = total_need * unit_multiplier * float(max_e["price"])
                         
-                        # Expected savings
-                        # Formula: Profit = Cost at Peak - Strategy Cost
-                        expected_profit = cost_at_high - total_cost_strategy
-                        savings_pct = (expected_profit / cost_at_high * 100.0) if cost_at_high > 0 else 0.0
+                        # Carrying costs for early procurement (Hull: storage costs for inventory held)
+                        # Formula: Carrying Cost = Qty × Price × Storage Rate × Time Held
+                        early_months = float(early_e.get("months", 3))
+                        # Phase 1: held until peak
+                        time_phase1_held = target_months / 12.0
+                        carrying_cost_phase1 = qty_now * unit_multiplier * s0 * storage_cost_pct * time_phase1_held
+                        # Phase 2: held from early buy to peak
+                        time_phase2_held = (target_months - early_months) / 12.0
+                        carrying_cost_phase2 = qty_early * unit_multiplier * float(early_e.get("price", s0)) * storage_cost_pct * time_phase2_held
+                        # Phase 3: forward lock, no storage needed
+                        total_carrying_cost = carrying_cost_phase1 + carrying_cost_phase2
+                        
+                        # Expected savings (before carrying costs)
+                        # Formula: Profit = Cost at Peak - Strategy Cost - Carrying Costs
+                        gross_savings = cost_at_high - total_cost_strategy
+                        savings_after_carrying = gross_savings - total_carrying_cost
+                        savings_pct = (gross_savings / cost_at_high * 100.0) if cost_at_high > 0 else 0.0
                         
                         # Strategy: Bull Call Spread for remaining coverage
                         # Formula: Buy ATM Call (5% premium) + Sell OTM Call (2% premium)
@@ -3226,8 +3303,8 @@ def render_integrated_strategy_engine(
                         net_premium = (call_buy_premium - call_sell_premium) * qty_forward * unit_multiplier
                         # Formula: Max Profit = (Upper Strike - Lower Strike) × Qty - Net Premium
                         max_profit_from_spread = qty_forward * unit_multiplier * (upper_strike - lower_strike) - net_premium
-                        # Formula: Total Profit = Procurement Savings + Options Profit
-                        total_expected_profit = expected_profit + max_profit_from_spread
+                        # Formula: Total Profit = Procurement Savings (after carrying) + Options Profit
+                        expected_profit = savings_after_carrying + max_profit_from_spread
                         
                         # Extract currency from unit (e.g., "USD/lb" -> "USD")
                         currency = unit.split("/")[0] if "/" in unit else unit
@@ -3237,16 +3314,22 @@ def render_integrated_strategy_engine(
                         trade_recommendation += f"• **Phase 2 ({early_e.get('horizon')}):** Buy {_fmt_qty_kg(qty_early)} @ {float(early_e.get('price')):,.{dec}f} {unit} = Cost: {cost_early:,.0f} {currency}\n"
                         trade_recommendation += f"• **Phase 3 (Forward Lock):** Lock {_fmt_qty_kg(qty_forward)} @ {forward_price:,.{dec}f} {unit} = Cost: {cost_forward:,.0f} {currency}\n"
                         trade_recommendation += f"\n**TOTAL COST:** {total_cost_strategy:,.0f} {currency} (vs {cost_at_high:,.0f} {currency} at forecast peak)\n"
-                        trade_recommendation += f"**EXPECTED SAVINGS:** {expected_profit:,.0f} {currency} ({savings_pct:.1f}%)\n"
+                        trade_recommendation += f"**GROSS SAVINGS:** {gross_savings:,.0f} {currency} ({savings_pct:.1f}%)\n"
+                        trade_recommendation += f"**CARRYING COSTS:** {total_carrying_cost:,.0f} {currency} (storage {storage_cost_pct*100:.1f}% p.a.)\n"
+                        trade_recommendation += f"**NET SAVINGS (after carrying):** {savings_after_carrying:,.0f} {currency}\n"
                         
                         strategy_details = f"**STRATEGY: Bull Call Spread (Cap Cost Upside)**\n"
                         strategy_details += f"• BUY Call @ {lower_strike:,.{dec}f} | Premium: {call_buy_premium:,.{dec}f}/unit\n"
                         strategy_details += f"• SELL Call @ {upper_strike:,.{dec}f} | Premium: {call_sell_premium:,.{dec}f}/unit\n"
                         strategy_details += f"• Net Premium: {(call_buy_premium - call_sell_premium):,.{dec}f}/unit × {_fmt_qty_kg(qty_forward)} = {net_premium:,.0f} {currency}\n"
                         strategy_details += f"• **MAX PROFIT FROM SPREAD:** {max_profit_from_spread:,.0f} {currency}\n"
-                        strategy_details += f"• **TOTAL EXPECTED PROFIT:** {total_expected_profit:,.0f} {currency}\n"
+                        strategy_details += f"• **TOTAL EXPECTED PROFIT:** {expected_profit:,.0f} {currency}\n"
+                        strategy_details += f"\n**HULL PRICING (Validation):**\n"
+                        strategy_details += f"• Theoretical Forward ({target_months:.0f}M): {theoretical_forward:,.{dec}f} {unit}\n"
+                        strategy_details += f"• Carrying Rate: {carrying_cost_rate*100:.2f}% = r({risk_free_rate*100:.1f}%) + u({storage_cost_pct*100:.1f}%) - y({convenience_yield_pct*100:.1f}%)\n"
+                        strategy_details += f"• Forecast High: {float(max_e['price']):,.{dec}f} vs Theoretical: {theoretical_forward:,.{dec}f}\n"
                         strategy_details += f"• **Max Loss:** Net premium paid ({net_premium:,.0f} {currency})\n"
-                        strategy_details += f"• **Max Gain:** Capped at {max_profit_from_spread:,.0f} {currency} from spread + {expected_profit:,.0f} {currency} from early buying"
+                        strategy_details += f"• **Max Gain:** Capped at {max_profit_from_spread:,.0f} {currency} from spread + {savings_after_carrying:,.0f} {currency} from early buying"
                         
                         steps = trade_recommendation + "\n" + strategy_details
                     else:
