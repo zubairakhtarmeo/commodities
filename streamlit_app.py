@@ -3371,6 +3371,7 @@ def render_integrated_strategy_engine(
             return
 
         # EXECUTIVE SUMMARY - Extract profit numbers from "How" field
+        prio_rank = {"High": 0, "Medium": 1, "Low": 2}
         exec_summary = []
         for _, row in out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"].iterrows():
             how_text = str(row.get("How", ""))
