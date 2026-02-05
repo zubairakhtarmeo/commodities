@@ -252,6 +252,214 @@ def _load_purchase_monthly_agg() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def render_quarterly_purchasing_forecast(*, key_prefix: str = "purch_forecast") -> None:
+    """Render the Quarterly Purchasing Forecast section.
+
+    Uses Oracle purchase history if present; otherwise degrades gracefully.
+    """
+
+    st.markdown("### 📦 Quarterly Purchasing Forecast")
+    st.caption("🔮 Predicted procurement volumes · Based on historical trends from mid-2024 onwards")
+
+    try:
+        purch_df = _load_purchase_monthly_agg()
+        if not (isinstance(purch_df, pd.DataFrame) and (not purch_df.empty) and "month" in purch_df.columns):
+            st.info("No purchase history available. Upload procurement data to enable forecasting.")
+            return
+
+        qty_col = (
+            "total_qty_kg"
+            if "total_qty_kg" in purch_df.columns
+            else ("total_qty" if "total_qty" in purch_df.columns else None)
+        )
+        if not qty_col:
+            st.info("No quantity column found in purchase data. Check data format.")
+            return
+
+        df = purch_df.copy()
+        df["month"] = pd.to_datetime(df["month"], errors="coerce")
+        df = df.dropna(subset=["month"])
+        df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce")
+        df = df.dropna(subset=[qty_col])
+
+        start_date = pd.Timestamp("2024-07-01")
+        df = df[df["month"] >= start_date].sort_values("month")
+        if df.empty:
+            st.info("Purchase data available from mid-2024 onwards. Waiting for sufficient history to generate forecasts.")
+            return
+
+        today = pd.Timestamp.now().normalize()
+        forecast_end = today + pd.DateOffset(years=1)
+
+        df["quarter"] = df["month"].dt.to_period("Q")
+        quarterly = df.groupby(["commodity", "quarter"], dropna=False)[qty_col].sum().reset_index()
+        pivot_df = quarterly.pivot(index="quarter", columns="commodity", values=qty_col).fillna(0)
+        if pivot_df.empty:
+            st.info("Not enough purchase history yet to compute quarterly totals.")
+            return
+
+        last_quarter = pivot_df.index.max()
+        future_quarters = []
+        current_q = last_quarter
+        while current_q.end_time < forecast_end:
+            current_q = current_q + 1
+            future_quarters.append(current_q)
+
+        forecast_rows = []
+        for _q in future_quarters:
+            forecast_row = {}
+            for commodity in pivot_df.columns:
+                last_4_quarters = pivot_df[commodity].tail(4)
+                forecast_row[commodity] = float(last_4_quarters.mean()) if len(last_4_quarters) > 0 else 0.0
+            forecast_rows.append(forecast_row)
+
+        if forecast_rows:
+            forecast_df = pd.DataFrame(forecast_rows, index=future_quarters)
+            combined_df = pd.concat([pivot_df, forecast_df])
+        else:
+            forecast_df = None
+            combined_df = pivot_df
+
+        display_df = combined_df / 1000.0  # kg -> tonnes
+        display_df.index = display_df.index.astype(str)
+
+        col1, col2 = st.columns([3, 2])
+        with col1:
+            fig = go.Figure()
+            colors_map = {
+                "Cotton": "#3b82f6",
+                "Polyester": "#10b981",
+                "Viscose": "#8b5cf6",
+                "Crude Oil": "#ef4444",
+                "Natural Gas": "#ec4899",
+            }
+            for commodity in display_df.columns:
+                fig.add_trace(
+                    go.Bar(
+                        name=commodity,
+                        x=display_df.index,
+                        y=display_df[commodity],
+                        marker_color=colors_map.get(commodity, "#64748b"),
+                    )
+                )
+
+            last_historical_idx = len(pivot_df) - 1
+            fig.update_layout(
+                barmode="group",
+                title=dict(text="Quarterly Purchasing Volume (Tonnes)", font=dict(size=14, weight="bold")),
+                xaxis_title="Quarter",
+                yaxis_title="Volume (Tonnes)",
+                hovermode="x unified",
+                plot_bgcolor="#f8fafc",
+                paper_bgcolor="white",
+                height=400,
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+
+            if forecast_rows:
+                fig.update_layout(
+                    shapes=[
+                        dict(
+                            type="line",
+                            x0=last_historical_idx + 0.5,
+                            x1=last_historical_idx + 0.5,
+                            y0=0,
+                            yref="paper",
+                            y1=1,
+                            line=dict(color="#f59e0b", width=2, dash="dash"),
+                        )
+                    ],
+                    annotations=[
+                        dict(
+                            x=last_historical_idx + 0.5,
+                            y=1.05,
+                            xref="x",
+                            yref="paper",
+                            text="← Historical | Forecast →",
+                            showarrow=False,
+                            font=dict(size=10, color="#f59e0b"),
+                            xanchor="center",
+                        )
+                    ],
+                )
+
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_chart")
+
+        with col2:
+            summary_data = []
+            for commodity in display_df.columns:
+                historical = display_df.loc[pivot_df.index.astype(str), commodity]
+                forecast = (
+                    display_df.loc[forecast_df.index.astype(str), commodity]
+                    if (forecast_rows and forecast_df is not None)
+                    else pd.Series(dtype=float)
+                )
+
+                avg_hist = float(historical.mean()) if len(historical) else 0.0
+                avg_fcst = float(forecast.mean()) if len(forecast) else 0.0
+                pct_change = ((avg_fcst - avg_hist) / avg_hist * 100.0) if avg_hist > 0 else 0.0
+
+                summary_data.append(
+                    {
+                        "Commodity": commodity,
+                        "Avg Historical": f"{avg_hist:,.0f}t",
+                        "Avg Forecast": f"{avg_fcst:,.0f}t",
+                        "Change": f"{pct_change:+.1f}%",
+                    }
+                )
+
+            summary_df = pd.DataFrame(summary_data)
+
+            def color_forecast_change(val):
+                if isinstance(val, str) and "%" in val:
+                    try:
+                        num = float(val.replace("%", "").replace("+", ""))
+                        if num > 0:
+                            return "background-color: #dcfce7; color: #166534; font-weight: bold"
+                        if num < 0:
+                            return "background-color: #fee2e2; color: #991b1b; font-weight: bold"
+                    except Exception:
+                        return ""
+                return ""
+
+            styled_summary = (
+                summary_df.style.applymap(color_forecast_change, subset=["Change"])
+                .set_properties(
+                    **{"text-align": "right", "font-size": "0.9rem"},
+                    subset=["Avg Historical", "Avg Forecast", "Change"],
+                )
+                .set_properties(
+                    **{"text-align": "left", "font-weight": "bold", "font-size": "0.9rem"},
+                    subset=["Commodity"],
+                )
+                .set_table_styles(
+                    [
+                        {
+                            "selector": "thead th",
+                            "props": [
+                                ("background-color", "#1e40af"),
+                                ("color", "white"),
+                                ("font-weight", "bold"),
+                                ("text-align", "center"),
+                                ("padding", "10px"),
+                                ("font-size", "0.85rem"),
+                            ],
+                        },
+                        {"selector": "tbody tr:nth-child(even)", "props": [("background-color", "#f8fafc")]},
+                        {"selector": "tbody tr:hover", "props": [("background-color", "#e0e7ff")]},
+                    ]
+                )
+            )
+
+            st.dataframe(styled_summary, use_container_width=True, hide_index=True, height=240)
+            st.caption(f"📊 Forecast based on {len(pivot_df)} quarters of historical data")
+            st.caption("🔮 Predictions use 4-quarter rolling average")
+
+    except Exception as e:
+        st.warning(f"Unable to generate purchasing forecast: {str(e)}")
+
+
 def render_ai_predictions_page():
     st.markdown("""
     <div style='border-left: 4px solid #7c3aed; padding-left: 1rem; margin: 1rem 0 1.25rem 0;'>
@@ -1443,34 +1651,32 @@ def _recommend_hedge_strategy(
             - _lognormal_prob_gt(s0=s0, s_mean=s_mean, sigma_ann=sigma_ann, t_years=t_years, k=float(leg["strike"]))
         )
 
-    # Calculate expected profit/savings from the strategy
-    # For procurement hedges: savings from avoiding price spikes
-    # For sales hedges: protection value from price floor
+    # Calculate expected profit/savings from the hedge at the forecast mean price.
+    # Use option payoff at S_mean minus net premium (BUY positive, SELL negative).
     expected_profit = 0.0
     if legs and qty > 0:
-        # Simulate profit from hedge vs unhedged position
-        # If prices move favorably, hedge limits upside but caps downside
-        if exposure.startswith("Procurement") and exp_ret > 0:
-            # Rising prices: hedge saves money by capping cost
-            # Potential loss without hedge: (s_mean - s0) * qty
-            # With hedge: max cost is capped at strike
-            unhedged_cost = (s_mean - s0) * qty
-            # Find highest call strike (our max cost)
-            call_legs = [l for l in legs if l["type"] == "CALL" and l["side"] == "BUY"]
-            if call_legs:
-                max_strike = max(float(l["strike"]) for l in call_legs)
-                hedged_cost = max(0, max_strike - s0) * qty
-                premium_cost = est_premium_per_unit * qty
-                expected_profit = max(0, unhedged_cost - hedged_cost - premium_cost)
-        elif exposure.startswith("Sales") and exp_ret < 0:
-            # Falling prices: hedge protects selling price
-            unhedged_loss = abs((s_mean - s0) * qty)
-            put_legs = [l for l in legs if l["type"] == "PUT" and l["side"] == "BUY"]
-            if put_legs:
-                min_strike = min(float(l["strike"]) for l in put_legs)
-                hedged_loss = max(0, s0 - min_strike) * qty
-                premium_cost = est_premium_per_unit * qty
-                expected_profit = max(0, unhedged_loss - hedged_loss - premium_cost)
+        payoff_per_unit = 0.0
+        for leg in legs:
+            try:
+                side = str(leg.get("side", "")).upper().strip()
+                opt_type = str(leg.get("type", "")).upper().strip()
+                k_leg = float(leg.get("strike"))
+                if opt_type == "CALL":
+                    payoff = max(0.0, float(s_mean) - k_leg)
+                elif opt_type == "PUT":
+                    payoff = max(0.0, k_leg - float(s_mean))
+                else:
+                    continue
+
+                payoff_per_unit += payoff if side == "BUY" else -payoff
+            except Exception:
+                continue
+
+        net_payoff = payoff_per_unit * float(qty)
+        premium_cost = float(est_premium_per_unit) * float(qty)
+        expected_profit = net_payoff - premium_cost
+        # Keep metric intuitive (savings). If negative, show zero rather than a "loss".
+        expected_profit = max(0.0, float(expected_profit))
     
     metrics = {
         "exp_ret_pct": float(exp_ret),
@@ -2836,6 +3042,49 @@ def render_integrated_strategy_engine(
         # Internal defaults (kept conservative; do not expose as UI knobs)
         forecast_sig = 3.0
 
+        # Optional assumptions (only used when there is no purchase history)
+        with st.expander("Assumptions (optional — used when no purchase history)", expanded=False):
+            st.caption("These assumptions help estimate impact-based strategies (e.g., Natural Gas → electricity costs).")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                assumed_monthly_production_tonnes = st.number_input(
+                    "Assumed monthly production (tonnes)",
+                    min_value=0,
+                    max_value=500000,
+                    value=10000,
+                    step=500,
+                    key=f"{key_prefix}_assumed_prod_tonnes",
+                )
+            with c2:
+                assumed_kwh_per_tonne = st.number_input(
+                    "Assumed energy intensity (kWh/tonne)",
+                    min_value=0,
+                    max_value=50000,
+                    value=500,
+                    step=50,
+                    key=f"{key_prefix}_assumed_kwh_per_tonne",
+                )
+            with c3:
+                assumed_elec_impact_per_mmbtu = st.number_input(
+                    "Gas→electricity pass-through (PKR/kWh per 1 MMBTU move)",
+                    min_value=0.0,
+                    max_value=50.0,
+                    value=0.5,
+                    step=0.1,
+                    format="%.2f",
+                    key=f"{key_prefix}_assumed_gas_to_elec",
+                )
+
+            assumed_total_kwh_monthly = st.number_input(
+                "Optional: override monthly electricity usage (kWh)",
+                min_value=0,
+                max_value=2_000_000_000,
+                value=0,
+                step=100_000,
+                key=f"{key_prefix}_assumed_total_kwh_monthly",
+                help="If set > 0, this overrides production×intensity.",
+            )
+
         def _priority_badge(v: str) -> tuple[str, str]:
             vv = str(v)
             if "High" in vv:
@@ -2882,20 +3131,48 @@ def render_integrated_strategy_engine(
                 phase1_price = "—"
                 strategy_name = "—"
                 timing_display = when_txt[:30] if when_txt and when_txt != "—" else "—"
+
+                # Prefer structured numeric profit if present (avoid regex parsing issues)
+                try:
+                    profit_raw = r.get("Expected Profit USD", None)
+                    if profit_raw is not None and str(profit_raw).strip() != "":
+                        profit_val = float(profit_raw)
+                        if np.isfinite(profit_val):
+                            profit_amount = profit_val
+                except Exception:
+                    profit_amount = None
                 
                 if how_txt and how_txt != "—":
                     # Extract profit - NEW FORMAT: "NET PROFIT +123,456 USD" or OLD FORMAT: "**EXPECTED SAVINGS:** 123,456"
+                    profit_from_text = None
                     profit_patterns = [
+                        r'NET\s+PROFIT\s*[:\-]?\s*\$?\s*([\-\d,\.]+)',  # "NET PROFIT: $123,456 USD"
                         r'NET PROFIT\s+\+?([\d,\.]+)',  # New simplified format
                         r'\*\*NET EXPECTED PROFIT:\*\*\s*([\d,\.]+)',  # Old format
                         r'\*\*TOTAL EXPECTED PROFIT:\*\*\s*([\d,\.]+)',  # Old format
                         r'\*\*EXPECTED SAVINGS:\*\*\s*([\d,\.]+)'  # Old format
                     ]
                     for pattern in profit_patterns:
-                        profit_match = re.search(pattern, how_txt)
+                        profit_match = re.search(pattern, how_txt, flags=re.IGNORECASE)
                         if profit_match:
-                            profit_amount = float(profit_match.group(1).replace(',', ''))
+                            try:
+                                profit_from_text = float(str(profit_match.group(1)).replace(",", "").strip())
+                            except Exception:
+                                profit_from_text = None
                             break
+
+                    # If the structured field is missing/0/NaN but the text clearly has a profit,
+                    # prefer the text-derived value (prevents "$0" when details show a large NET PROFIT).
+                    try:
+                        structured_bad = (
+                            profit_amount is None
+                            or (isinstance(profit_amount, (int, float)) and (not np.isfinite(float(profit_amount)) or float(profit_amount) <= 0.0))
+                        )
+                    except Exception:
+                        structured_bad = True
+                    if profit_from_text is not None and np.isfinite(float(profit_from_text)) and float(profit_from_text) > 0.0:
+                        if structured_bad:
+                            profit_amount = float(profit_from_text)
                     
                     # Extract strategy name and details based on format
                     if "BEARISH STRATEGY" in how_txt.upper() or "DEFER & INVEST" in how_txt.upper():
@@ -3240,23 +3517,39 @@ def render_integrated_strategy_engine(
                         # Textile manufacturing: ~500 kWh per tonne of production
                         # Assume 10,000 tonnes/month total production
                         
-                        gas_price_change = float(min_e.get("price", s0)) - s0
-                        monthly_production_tonnes = 10000  # Estimated total production
-                        kwh_per_tonne = 500
-                        total_kwh_monthly = monthly_production_tonnes * kwh_per_tonne
+                        # Optional diagnostics only
+                        if debug_mode:
+                            st.write(f"🔍 DEBUG - Natural Gas: s0={s0}, min_e_price={min_e.get('price', s0)}, unit={unit}")
+                            st.write(f"🔍 DEBUG - min_e data: {min_e}")
+                            st.write(f"🔍 DEBUG - usd_conversion_rate={usd_conversion_rate}")
                         
+                        # Use the larger absolute move (min or max) so the estimate doesn't collapse to ~0.
+                        min_price = float((min_e or {}).get("price", s0))
+                        max_price = float((max_e or {}).get("price", s0))
+                        delta_min = min_price - s0
+                        delta_max = max_price - s0
+
+                        use_max = abs(delta_max) >= abs(delta_min)
+                        gas_price_change = float(delta_max if use_max else delta_min)
+                        target_months = float((max_e if use_max else min_e).get("months", 6) if (max_e if use_max else min_e) else 6)
+                        target_horizon = str((max_e if use_max else min_e).get("horizon", "next period") if (max_e if use_max else min_e) else "next period")
+
+                        monthly_production_tonnes = float(assumed_monthly_production_tonnes)
+                        kwh_per_tonne = float(assumed_kwh_per_tonne)
+                        total_kwh_monthly = float(assumed_total_kwh_monthly) if float(assumed_total_kwh_monthly) > 0 else (monthly_production_tonnes * kwh_per_tonne)
+
                         # Impact: MMBTU price change → electricity cost impact
-                        electricity_impact_per_mmbtu = 0.5  # PKR per kWh per MMBTU change
-                        monthly_cost_impact_pkr = abs(gas_price_change * electricity_impact_per_mmbtu * total_kwh_monthly)
-                        target_months = float(min_e.get("months", 6))
-                        total_cost_impact_pkr = monthly_cost_impact_pkr * target_months
-                        
-                        expected_profit = total_cost_impact_pkr * usd_conversion_rate if gas_price_change < 0 else -total_cost_impact_pkr * usd_conversion_rate
+                        electricity_impact_per_mmbtu = float(assumed_elec_impact_per_mmbtu)
+                        monthly_cost_impact_pkr = abs(gas_price_change) * electricity_impact_per_mmbtu * total_kwh_monthly
+                        total_cost_impact_pkr = monthly_cost_impact_pkr * float(max(target_months, 0.0))
+
+                        # Report as positive opportunity size (cost avoidance or savings), not signed PnL.
+                        expected_profit = abs(total_cost_impact_pkr * usd_conversion_rate)
                         
                         decision = "Monitor & Hedge Electricity Costs" if gas_price_change > 0 else "Benefit from Lower Energy Costs"
-                        when_txt = f"Over next {int(target_months)} months"
+                        when_txt = f"{target_horizon} (~{int(target_months)} months)"
                         why_txt = f"Natural gas {'increase' if gas_price_change > 0 else 'decrease'} drives electricity tariff changes"
-                        logic = f"Gas price forecast: {gas_price_change:+.2f} {unit} → Electricity impact: {monthly_cost_impact_pkr:,.0f} PKR/month"
+                        logic = f"Gas forecast move: {gas_price_change:+.2f} {unit} → Electricity impact: {monthly_cost_impact_pkr:,.0f} PKR/month"
                         
                         impact_direction = "increase" if gas_price_change > 0 else "decrease"
                         strategy_details = f"**📊 INDIRECT COST IMPACT ANALYSIS**\n\n"
@@ -3275,8 +3568,8 @@ def render_integrated_strategy_engine(
                             trade_recommendation += f"2. Negotiate fixed-rate agreements with WAPDA/K-Electric\n"
                             trade_recommendation += f"3. Consider on-site solar/wind to reduce grid dependency\n"
                             trade_recommendation += f"4. Implement energy efficiency measures to offset higher costs\n\n"
-                            trade_recommendation += f"**💰 NET PROFIT: ${abs(expected_profit):,.0f} USD**"
-                            strategy_details += f"**💰 COST AVOIDANCE: ${abs(expected_profit):,.0f} USD**"
+                            trade_recommendation += f"**💰 NET PROFIT: ${expected_profit:,.0f} USD**"
+                            strategy_details += f"**💰 COST AVOIDANCE: ${expected_profit:,.0f} USD**"
                         else:
                             trade_recommendation = f"✅ **BENEFIT FROM LOWER ENERGY COSTS**\n\n"
                             trade_recommendation += f"Gas prices forecasted to {impact_direction} by {abs(gas_price_change):.2f} {unit}, "
@@ -3286,14 +3579,20 @@ def render_integrated_strategy_engine(
                             trade_recommendation += f"2. Renegotiate electricity contracts at lower rates\n"
                             trade_recommendation += f"3. Increase production volume to capitalize on lower energy costs\n"
                             trade_recommendation += f"4. Offer competitive pricing to win new orders\n\n"
-                            trade_recommendation += f"**💰 NET PROFIT: ${abs(expected_profit):,.0f} USD**"
-                            strategy_details += f"**💰 COST SAVINGS: ${abs(expected_profit):,.0f} USD**"
+                            trade_recommendation += f"**💰 NET PROFIT: ${expected_profit:,.0f} USD**"
+                            strategy_details += f"**💰 COST SAVINGS: ${expected_profit:,.0f} USD**"
                         
                         steps = trade_recommendation
                         how_txt = strategy_details
-                        conf = _confidence_from_interval(s0=s0, target_price=float(min_e.get("price", s0)), 
-                                                         lower=float(min_e.get("low", s0*0.95)), 
-                                                         upper=float(min_e.get("high", s0*1.05)))
+                        target_price = float(max_price if use_max else min_price)
+                        lower_v = (max_e if use_max else min_e).get("low") if (max_e if use_max else min_e) else None
+                        upper_v = (max_e if use_max else min_e).get("high") if (max_e if use_max else min_e) else None
+                        conf = _confidence_from_interval(
+                            s0=s0,
+                            target_price=target_price,
+                            lower=float(lower_v) if lower_v is not None else float(s0 * 0.95),
+                            upper=float(upper_v) if upper_v is not None else float(s0 * 1.05),
+                        )
                         strategy_already_set = True  # Prevent overwriting
                     
                     elif "crude" in pc_lower:
@@ -3664,6 +3963,7 @@ def render_integrated_strategy_engine(
                         "Expected Driver of Profit": driver,
                         "Risk Notes": risk_notes,
                         "Priority": conf,
+                        "Expected Profit USD": float(expected_profit) if expected_profit is not None and np.isfinite(expected_profit) else None,
                         "Commodity": label,
                         "Current Spot Market Price": f"{s0:,.{dec}f}",
                         "Unit": unit,
@@ -3732,6 +4032,7 @@ def render_integrated_strategy_engine(
                             "Expected Driver of Profit": "Risk reduction / budget certainty",
                             "Risk Notes": "Premium cost, basis risk, liquidity",
                             "Priority": "Moderate",
+                            "Expected Profit USD": float(hedge_strat.get("expected_profit")) if hedge_strat.get("expected_profit") is not None and np.isfinite(float(hedge_strat.get("expected_profit"))) else None,
                             "Commodity": label,
                             "Current Spot Market Price": f"{s0:,.{dec}f}",
                             "Unit": unit,
@@ -3745,7 +4046,7 @@ def render_integrated_strategy_engine(
             st.info("No recommendations available (missing forecasts/inputs).")
             return
 
-        # EXECUTIVE SUMMARY - Extract profit numbers from "How" field
+        # EXECUTIVE SUMMARY - Prefer structured numeric profit, fallback to parsing "How"
         prio_rank = {"High": 0, "Moderate": 1, "Low": 2}
         exec_summary = []
         for _, row in out_df[out_df["Strategy Role"] == "Speculative Timing Strategy"].iterrows():
@@ -3754,21 +4055,33 @@ def render_integrated_strategy_engine(
             priority = str(row.get("Priority", "Moderate"))
             decision = str(row.get("Decision", ""))
             
-            # Extract profit/savings from text
-            profit = 0.0
-            import re
-            # Try new format first: "NET PROFIT +123,456 USD"
-            match = re.search(r'NET PROFIT\s+\+?([\d,\.]+)', how_text)
-            if not match:
-                # Fallback to old format: "EXPECTED SAVINGS:** 123,456" or "EXPECTED PROFIT:** 123,456"
-                match = re.search(r'(?:SAVINGS|PROFIT):\*\*\s*([\d,\.]+)', how_text)
-            if match:
-                profit = float(match.group(1).replace(',', ''))
+            profit = None
+            try:
+                profit_raw = row.get("Expected Profit USD", None)
+                if profit_raw is not None and str(profit_raw).strip() != "":
+                    profit_val = float(profit_raw)
+                    if np.isfinite(profit_val):
+                        profit = profit_val
+            except Exception:
+                profit = None
+
+            if profit is None or (isinstance(profit, (int, float)) and (not np.isfinite(float(profit)) or float(profit) <= 0.0)):
+                import re
+                match = re.search(r'NET\s+PROFIT\s*[:\-]?\s*\$?\s*([\-\d,\.]+)', how_text, flags=re.IGNORECASE)
+                if not match:
+                    match = re.search(r'NET PROFIT\s+\+?([\d,\.]+)', how_text, flags=re.IGNORECASE)
+                if not match:
+                    match = re.search(r'(?:SAVINGS|PROFIT):\*\*\s*\$?\s*([\-\d,\.]+)', how_text, flags=re.IGNORECASE)
+                if match:
+                    try:
+                        profit = float(str(match.group(1)).replace(",", "").strip())
+                    except Exception:
+                        profit = None
             
-            if profit > 0:
+            if profit is not None and profit > 0:
                 exec_summary.append({
                     "commodity": commodity,
-                    "profit": profit,
+                    "profit": float(profit),
                     "priority": priority,
                     "decision": decision,
                     "how": how_text
@@ -3927,6 +4240,22 @@ def render_integrated_strategy_engine(
             proc_how = str((s or {}).get("How") or "—")
             proc_trig = str((s or {}).get("Triggers") or "").strip()
 
+            # Prefer procurement strategy profit; fallback to hedge profit
+            expected_profit_usd = None
+            try:
+                sp = (s or {}).get("Expected Profit USD", None)
+                hp = (h or {}).get("Expected Profit USD", None)
+                if sp is not None and str(sp).strip() != "":
+                    spv = float(sp)
+                    if np.isfinite(spv):
+                        expected_profit_usd = spv
+                if expected_profit_usd is None and hp is not None and str(hp).strip() != "":
+                    hpv = float(hp)
+                    if np.isfinite(hpv):
+                        expected_profit_usd = hpv
+            except Exception:
+                expected_profit_usd = None
+
             hedge_name = str((h or {}).get("Strategy Name") or (h or {}).get("Decision") or "—")
             hedge_when = str((h or {}).get("When") or "—")
             hedge_how = str((h or {}).get("How") or "—")
@@ -3940,6 +4269,7 @@ def render_integrated_strategy_engine(
                     "How": f"{proc_how}  Establish Hedge Position: {hedge_how}" if h and proc_how != "—" else (f"Establish Hedge Position: {hedge_how}" if h else proc_how),
                     "Triggers": proc_trig,
                     "Priority": priority,
+                    "Expected Profit USD": expected_profit_usd,
                 }
             )
 
@@ -6516,6 +6846,9 @@ def render_executive_summary():
         )
     else:
         st.info("Electricity tariff data unavailable right now.")
+
+    st.markdown("---")
+    render_quarterly_purchasing_forecast(key_prefix="summary_quarterly")
 
     # Integrated strategist (Forecast + Carry/Parity + Risk filter)
     st.markdown("---")
