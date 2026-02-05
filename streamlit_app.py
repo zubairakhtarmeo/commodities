@@ -3150,7 +3150,7 @@ def render_integrated_strategy_engine(
                 profit_amount = None  # None = N/A, number = actual profit
                 phase1_qty = "—"
                 phase1_price = "—"
-                strategy_name = "—"
+                strategy_name = str(r.get("Strategy Name") or "—")
                 timing_display = when_txt[:30] if when_txt and when_txt != "—" else "—"
 
                 # Prefer structured numeric profit if present (avoid regex parsing issues)
@@ -3233,6 +3233,10 @@ def render_integrated_strategy_engine(
                         strategy_match = re.search(r'\*\*STRATEGY:\s*([^\n\*]+)', how_txt)
                         if strategy_match:
                             strategy_name = strategy_match.group(1).strip()[:55]
+
+                # If we still don't have a good strategy name, fall back to the row's Strategy Name
+                if not strategy_name or strategy_name.strip() in ("—", "Monitor"):
+                    strategy_name = str(r.get("Strategy Name") or strategy_name or "—")
                 
                 # Priority styling
                 if priority == "High":
@@ -3568,6 +3572,7 @@ def render_integrated_strategy_engine(
                         expected_profit = abs(total_cost_impact_pkr * usd_conversion_rate)
                         
                         decision = "Monitor & Hedge Electricity Costs" if gas_price_change > 0 else "Benefit from Lower Energy Costs"
+                        strat_name = "Electricity Cost Hedge (Indirect)" if gas_price_change > 0 else "Energy Cost Advantage (Indirect)"
                         when_txt = f"{target_horizon} (~{int(target_months)} months)"
                         why_txt = f"Natural gas {'increase' if gas_price_change > 0 else 'decrease'} drives electricity tariff changes"
                         logic = f"Gas forecast move: {gas_price_change:+.2f} {unit} → Electricity impact: {monthly_cost_impact_pkr:,.0f} PKR/month"
@@ -4261,6 +4266,8 @@ def render_integrated_strategy_engine(
             proc_how = str((s or {}).get("How") or "—")
             proc_trig = str((s or {}).get("Triggers") or "").strip()
 
+            proc_strat_name = str((s or {}).get("Strategy Name") or "—")
+
             # Prefer procurement strategy profit; fallback to hedge profit
             expected_profit_usd = None
             try:
@@ -4281,6 +4288,10 @@ def render_integrated_strategy_engine(
             hedge_when = str((h or {}).get("When") or "—")
             hedge_how = str((h or {}).get("How") or "—")
 
+            merged_strat_name = proc_strat_name
+            if (not merged_strat_name or merged_strat_name == "—") and h:
+                merged_strat_name = str((h or {}).get("Strategy Name") or hedge_name or "—")
+
             merged_rows.append(
                 {
                     "Commodity": comm,
@@ -4291,6 +4302,7 @@ def render_integrated_strategy_engine(
                     "Triggers": proc_trig,
                     "Priority": priority,
                     "Expected Profit USD": expected_profit_usd,
+                    "Strategy Name": merged_strat_name,
                 }
             )
 
