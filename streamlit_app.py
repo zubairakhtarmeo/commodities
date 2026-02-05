@@ -261,8 +261,29 @@ def render_quarterly_purchasing_forecast(*, key_prefix: str = "purch_forecast") 
     st.markdown("### 📦 Quarterly Purchasing Forecast")
     st.caption("🔮 Predicted procurement volumes · Based on historical trends from mid-2024 onwards")
 
+    with st.expander("Upload purchase history (optional)", expanded=False):
+        st.caption(
+            "On Streamlit Cloud, internal purchase files are typically not deployed (they are gitignored). "
+            "Upload `purchases_monthly_agg.csv` to enable this forecast."
+        )
+        uploaded = st.file_uploader(
+            "Purchase history CSV",
+            type=["csv"],
+            key=f"{key_prefix}_purch_upload",
+            help="Expected columns include at least `month` plus `total_qty_kg` (or `total_qty`) and `commodity`.",
+        )
+
     try:
         purch_df = _load_purchase_monthly_agg()
+
+        if uploaded is not None:
+            try:
+                upload_df = pd.read_csv(uploaded)
+                if isinstance(upload_df, pd.DataFrame) and not upload_df.empty:
+                    purch_df = upload_df
+            except Exception:
+                st.warning("Could not read uploaded CSV. Please verify the file format.")
+
         if not (isinstance(purch_df, pd.DataFrame) and (not purch_df.empty) and "month" in purch_df.columns):
             st.info("No purchase history available. Upload procurement data to enable forecasting.")
             return
