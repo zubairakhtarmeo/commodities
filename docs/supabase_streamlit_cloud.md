@@ -32,6 +32,35 @@ create unique index if not exists prediction_records_unique
 on prediction_records(asset, as_of_date, target_date, model_name, horizon);
 ```
 
+### (Recommended) Also store purchase history in Supabase
+
+If you want the **Quarterly Purchasing Forecast** to work on Streamlit Cloud without uploading files,
+store your monthly purchase aggregates in Supabase.
+
+Create this table:
+
+```sql
+create table if not exists purchases_monthly_agg (
+  id bigserial primary key,
+  operating_unit text null,
+  commodity text not null,
+  month date not null,
+  lines integer null,
+  total_qty numeric null,
+  total_qty_kg numeric null,
+  total_amount numeric null,
+  avg_unit_price numeric null,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists purchases_monthly_agg_unique
+on purchases_monthly_agg(commodity, month, operating_unit);
+```
+
+Then seed/update it from your internal machine (where the CSV exists):
+
+- `python scripts/push_purchases_monthly_agg_to_supabase.py`
+
 ### (Recommended) Also store commodity history in Supabase
 
 If you deploy the dashboard as **code-only** to Streamlit Cloud (recommended), the cloud app will not have your local `data/raw/*.csv` files.

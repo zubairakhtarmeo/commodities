@@ -230,6 +230,37 @@ def supabase_fetch_commodity_series(asset_path: str, limit: int = 600) -> pd.Dat
 
 
 @st.cache_data(ttl=600)
+def supabase_fetch_purchase_monthly_agg(limit: int = 50000) -> pd.DataFrame:
+    """Fetch purchase history aggregates from Supabase (Streamlit Cloud-friendly).
+
+    Expects a table named `purchases_monthly_agg` with columns similar to:
+    - operating_unit (text)
+    - commodity (text)
+    - month (date)
+    - lines (int)
+    - total_qty (numeric)
+    - total_qty_kg (numeric)
+    - total_amount (numeric)
+    - avg_unit_price (numeric)
+    """
+    try:
+        rows = supabase_rest_select(
+            table="purchases_monthly_agg",
+            select="operating_unit,commodity,month,lines,total_qty,total_qty_kg,total_amount,avg_unit_price",
+            order="month.asc",
+            limit=int(limit),
+        )
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        if "month" in df.columns:
+            df["month"] = pd.to_datetime(df["month"], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=600)
 def _load_purchase_monthly_agg() -> pd.DataFrame:
     """Load cleaned Oracle purchase monthly aggregates (local file, optional).
 
@@ -241,10 +272,14 @@ def _load_purchase_monthly_agg() -> pd.DataFrame:
     try:
         p = Path("data") / "processed" / "purchases_clean" / "purchases_monthly_agg.csv"
         if not p.exists():
-            return pd.DataFrame()
+            # Streamlit Cloud: local purchase files are typically not deployed (often gitignored)
+            sb = supabase_fetch_purchase_monthly_agg()
+            return sb if isinstance(sb, pd.DataFrame) else pd.DataFrame()
         df = pd.read_csv(p)
         if df.empty:
-            return df
+            # If local file exists but is empty, attempt cloud fallback
+            sb = supabase_fetch_purchase_monthly_agg()
+            return sb if isinstance(sb, pd.DataFrame) and not sb.empty else df
         if "month" in df.columns:
             df["month"] = pd.to_datetime(df["month"], errors="coerce")
         return df
@@ -261,31 +296,13 @@ def render_quarterly_purchasing_forecast(*, key_prefix: str = "purch_forecast") 
     st.markdown("### 📦 Quarterly Purchasing Forecast")
     st.caption("🔮 Predicted procurement volumes · Based on historical trends from mid-2024 onwards")
 
-    with st.expander("Upload purchase history (optional)", expanded=False):
-        st.caption(
-            "On Streamlit Cloud, internal purchase files are typically not deployed (they are gitignored). "
-            "Upload `purchases_monthly_agg.csv` to enable this forecast."
-        )
-        uploaded = st.file_uploader(
-            "Purchase history CSV",
-            type=["csv"],
-            key=f"{key_prefix}_purch_upload",
-            help="Expected columns include at least `month` plus `total_qty_kg` (or `total_qty`) and `commodity`.",
-        )
-
     try:
         purch_df = _load_purchase_monthly_agg()
-
-        if uploaded is not None:
-            try:
-                upload_df = pd.read_csv(uploaded)
-                if isinstance(upload_df, pd.DataFrame) and not upload_df.empty:
-                    purch_df = upload_df
-            except Exception:
-                st.warning("Could not read uploaded CSV. Please verify the file format.")
-
         if not (isinstance(purch_df, pd.DataFrame) and (not purch_df.empty) and "month" in purch_df.columns):
-            st.info("No purchase history available. Upload procurement data to enable forecasting.")
+            if supabase_is_configured():
+                st.info("No purchase history available in this deployment. Configure/seed Supabase table `purchases_monthly_agg` to enable forecasting.")
+            else:
+                st.info("No purchase history available in this deployment. Configure Supabase to enable forecasting.")
             return
 
         qty_col = (
@@ -3063,48 +3080,21 @@ def render_integrated_strategy_engine(
         # Internal defaults (kept conservative; do not expose as UI knobs)
         forecast_sig = 3.0
 
-        # Optional assumptions (only used when there is no purchase history)
-        with st.expander("Assumptions (optional — used when no purchase history)", expanded=False):
-            st.caption("These assumptions help estimate impact-based strategies (e.g., Natural Gas → electricity costs).")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                assumed_monthly_production_tonnes = st.number_input(
-                    "Assumed monthly production (tonnes)",
-                    min_value=0,
-                    max_value=500000,
-                    value=10000,
-                    step=500,
-                    key=f"{key_prefix}_assumed_prod_tonnes",
-                )
-            with c2:
-                assumed_kwh_per_tonne = st.number_input(
-                    "Assumed energy intensity (kWh/tonne)",
-                    min_value=0,
-                    max_value=50000,
-                    value=500,
-                    step=50,
-                    key=f"{key_prefix}_assumed_kwh_per_tonne",
-                )
-            with c3:
-                assumed_elec_impact_per_mmbtu = st.number_input(
-                    "Gas→electricity pass-through (PKR/kWh per 1 MMBTU move)",
-                    min_value=0.0,
-                    max_value=50.0,
-                    value=0.5,
-                    step=0.1,
-                    format="%.2f",
-                    key=f"{key_prefix}_assumed_gas_to_elec",
-                )
+        # Automatic assumptions (only used when there is no purchase history). Override via Streamlit secrets/env.
+        def _num_secret(name: str, default: float) -> float:
+            try:
+                raw = _get_streamlit_secret(name)
+                v = float(raw) if raw is not None and str(raw).strip() != "" else float(default)
+                if not np.isfinite(v):
+                    return float(default)
+                return v
+            except Exception:
+                return float(default)
 
-            assumed_total_kwh_monthly = st.number_input(
-                "Optional: override monthly electricity usage (kWh)",
-                min_value=0,
-                max_value=2_000_000_000,
-                value=0,
-                step=100_000,
-                key=f"{key_prefix}_assumed_total_kwh_monthly",
-                help="If set > 0, this overrides production×intensity.",
-            )
+        assumed_monthly_production_tonnes = max(0.0, _num_secret("ASSUMED_MONTHLY_PRODUCTION_TONNES", 10000.0))
+        assumed_kwh_per_tonne = max(0.0, _num_secret("ASSUMED_KWH_PER_TONNE", 500.0))
+        assumed_elec_impact_per_mmbtu = max(0.0, _num_secret("ASSUMED_ELEC_IMPACT_PKR_PER_KWH_PER_MMBTU", 0.5))
+        assumed_total_kwh_monthly = max(0.0, _num_secret("ASSUMED_TOTAL_KWH_MONTHLY", 0.0))
 
         def _priority_badge(v: str) -> tuple[str, str]:
             vv = str(v)
