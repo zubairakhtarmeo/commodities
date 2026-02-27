@@ -5729,32 +5729,35 @@ def render_overview_tab(commodities_data: dict, title: str):
     except Exception as e:
         st.warning(f"Unable to generate purchasing forecast: {str(e)}")
 
-    # Procurement & Options Strategist — moved here from Summary
-    st.markdown("---")
-    st.markdown("### 🧠 Procurement & Options Strategist")
-    st.caption("Unified guidance: procurement execution schedule plus option structures using history and forecast distribution.")
+    # Procurement & Options Strategist — keep code, but hide by default (can be heavy / assumptions may be WIP)
+    show_cp_flag = str(_get_streamlit_secret("SHOW_PROCUREMENT_OPTIONS_STRATEGIST") or "").strip().lower()
+    show_cp = show_cp_flag in {"1", "true", "yes", "y", "on"}
+    if show_cp:
+        st.markdown("---")
+        st.markdown("### 🧠 Procurement & Options Strategist")
+        st.caption("Unified guidance: procurement execution schedule plus option structures using history and forecast distribution.")
 
-    usd_pkr_rate = None
-    try:
-        live = fetch_usd_pkr_rate()
-        if live and live.get("current_price"):
-            usd_pkr_rate = float(live["current_price"])
-    except Exception:
         usd_pkr_rate = None
+        try:
+            live = fetch_usd_pkr_rate()
+            if live and live.get("current_price"):
+                usd_pkr_rate = float(live["current_price"])
+        except Exception:
+            usd_pkr_rate = None
 
-    commodity_payloads, _all_summary = build_summary_commodity_payloads(
-        show_local_in_usd=True,
-        usd_pkr_rate=usd_pkr_rate,
-    )
-    render_call_put_hedge_advisor(
-        expander_title="Procurement & Options Strategist",
-        expanded=True,
-        key_prefix="ai_cp",
-        commodity_payloads=commodity_payloads,
-        variant="full",
-        use_expander=False,
-        show_portfolio_view=False,
-    )
+        commodity_payloads, _all_summary = build_summary_commodity_payloads(
+            show_local_in_usd=True,
+            usd_pkr_rate=usd_pkr_rate,
+        )
+        render_call_put_hedge_advisor(
+            expander_title="Procurement & Options Strategist",
+            expanded=True,
+            key_prefix="ai_cp",
+            commodity_payloads=commodity_payloads,
+            variant="full",
+            use_expander=False,
+            show_portfolio_view=False,
+        )
 
     return
 
@@ -6872,15 +6875,6 @@ def render_executive_summary():
 
     st.markdown("---")
     render_quarterly_purchasing_forecast(key_prefix="summary_quarterly")
-
-    # Integrated strategist (Forecast + Carry/Parity + Risk filter)
-    st.markdown("---")
-    render_integrated_strategy_engine(
-        expander_title="📌 Independent Strategist (Auto)",
-        expanded=True,
-        key_prefix="summary_institutional",
-        commodity_payloads=commodity_payloads,
-    )
     
     # === OVERALL SUMMARY - Key insights across all commodities ===
     if len(all_summary) > 0:
