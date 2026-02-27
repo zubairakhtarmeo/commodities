@@ -125,7 +125,7 @@ def _try_push_to_supabase(
                 "unit": "",
                 "model_name": str(model_name),
                 "frequency": "monthly",
-                "horizon": f"{horizon}m",
+                "horizon": "30d",  # normalise: monthly data always stored as "30d"
             }
         )
 
@@ -153,7 +153,7 @@ def _try_push_to_supabase(
             print(f"[supabase] Upload error: {exc}")
             return
 
-    print(f"[supabase] Pushed {total} prediction rows for asset={asset_id} model={model_name} horizon={horizon}m")
+    print(f"[supabase] Pushed {total} prediction rows for asset={asset_id} model={model_name} horizon=30d")
 
 
 def main() -> int:

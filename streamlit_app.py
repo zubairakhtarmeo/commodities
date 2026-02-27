@@ -205,6 +205,8 @@ def _auto_sync_predictions_to_supabase() -> None:
         if name.startswith("predictions_"):
             mid = name[len("predictions_"):].replace(".csv", "")
             model_name = mid.split("_h", 1)[0] if "_h" in mid else mid
+        # Always write "30d" — monthly commodity predictions; keeps horizon consistent
+        # with the UI dropdown and supabase_fetch_prediction_history default
         return model_name or "default", "30d", "monthly"
 
     total = 0
@@ -242,7 +244,7 @@ def _auto_sync_predictions_to_supabase() -> None:
                     "unit": "",
                     "model_name": str(model_name),
                     "frequency": str(frequency),
-                    "horizon": str(horizon),
+                    "horizon": "30d",  # normalise: monthly data always stored as "30d"
                 }
                 for _, r in df.iterrows()
             ]
@@ -319,13 +321,19 @@ def _auto_fill_actuals_in_supabase() -> None:
     for asset, recs in by_asset.items():
         try:
             # commodity_prices.asset_path is like "cotton/cotton_usd_monthly"
-            # match by case-insensitive substring of asset name
+            # Map artifact folder names to commodity_prices asset_path patterns
+            _ASSET_PATH_MAP = {
+                "EURUSD": "eurusd",
+                "REAL_ASSET": "cotton",  # default real-asset is cotton
+                "GENERIC_ASSET": "cotton",
+            }
+            search_term = _ASSET_PATH_MAP.get(asset.upper(), asset.lower())
             price_resp = requests.get(
                 _supabase_rest_url(base_url, "commodity_prices"),
                 headers=_supabase_headers(key),
                 params={
                     "select": "timestamp,value",
-                    "asset_path": f"ilike.*{asset.lower()}*",
+                    "asset_path": f"ilike.*{search_term}*",
                     "order": "timestamp.asc",
                     "limit": "600",
                 },
@@ -835,15 +843,35 @@ def render_ai_predictions_page():
             st.info("No prediction records found in Supabase yet.")
             st.caption("Tip: run `python scripts/push_prediction_record.py ...` (or seed in bulk) to populate `prediction_records`.")
         else:
-            colA, colB, colC = st.columns([2, 1, 1])
+            colA, colB, colC, colD = st.columns([2, 2, 1, 1])
             with colA:
                 asset = st.selectbox("Asset", assets, index=0)
-            with colB:
-                days = st.number_input("Days", min_value=7, max_value=365, value=30, step=1)
-            with colC:
-                horizon = st.selectbox("Horizon", ["1d", "24h", "7d", "30d"], index=0)
 
-            df = supabase_fetch_prediction_history(asset=asset, days=int(days), horizon=str(horizon))
+            # Fetch real model_names and horizons stored for this asset — no hardcoded guesses
+            meta_rows = supabase_rest_select(
+                table="prediction_records",
+                select="model_name,horizon",
+                eq_filters={"asset": asset},
+                limit=5000,
+            )
+            available_models = sorted({r.get("model_name") for r in (meta_rows or []) if r.get("model_name")})
+            available_horizons = sorted({r.get("horizon") for r in (meta_rows or []) if r.get("horizon")})
+            if not available_models:
+                available_models = ["linear_ridge"]
+            if not available_horizons:
+                available_horizons = ["30d"]
+
+            with colB:
+                model_name = st.selectbox("Model", available_models, index=0)
+            with colC:
+                horizon = st.selectbox("Horizon", available_horizons, index=0)
+            with colD:
+                # Data is monthly — label as Months, multiply for correct limit
+                months = st.number_input("Months", min_value=1, max_value=60, value=12, step=1)
+
+            df = supabase_fetch_prediction_history(
+                asset=asset, days=int(months) * 30, model_name=str(model_name), horizon=str(horizon)
+            )
             if df.empty:
                 st.info("No data for this asset/horizon yet.")
             else:
