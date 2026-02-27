@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime
 from contextlib import nullcontext
+import hashlib
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -320,17 +321,21 @@ def _auto_sync_predictions_to_supabase() -> None:
                     if not current_price or current_price <= 0:
                         continue
 
-                    # Generate 12 monthly forward horizons (same formula used in load_predictions)
-                    start = pd.Timestamp.today().replace(day=1)
-                    month_dates = pd.date_range(start=start, periods=12, freq="MS")
+                    # Generate 12 monthly forward forecasts using SAME function as Price Forecast chart.
+                    # load_predictions() is now deterministic (fixed seed per asset+date),
+                    # so the values saved here exactly match the bars on the dashboard chart.
+                    preds = load_predictions(asset_path)
+                    month_starts = pd.date_range(
+                        start=pd.Timestamp.today().replace(day=1), periods=12, freq="MS"
+                    )
+                    horizon_labels = get_month_horizons(12)  # ["February 2026", ...]
 
-                    for i, month_start in enumerate(month_dates, start=1):
-                        # Last day of target month = target_date
+                    for i, (month_start, horizon_label) in enumerate(zip(month_starts, horizon_labels), start=1):
                         target_dt = (month_start + pd.offsets.MonthEnd(0)).date()
-                        # Use a deterministic forecast: simple trend extrapolation (no random noise)
-                        # This ensures stable predictions rather than new random values each refresh
-                        trend_factor = 1.0  # neutral: no trend assumption, let actual data reveal error
-                        predicted = round(current_price * trend_factor, 6)
+                        pred_data = preds.get(horizon_label, {})
+                        if not pred_data:
+                            continue
+                        predicted = round(float(pred_data["price"]), 6)
 
                         forward_rows.append({
                             "asset": str(name),
@@ -902,6 +907,127 @@ def render_quarterly_purchasing_forecast(*, key_prefix: str = "purch_forecast") 
         st.warning(f"Unable to generate purchasing forecast: {str(e)}")
 
 
+def _render_commodity_prediction_chart(name: str, info: dict, months: int = 18) -> None:
+    """Render a single Predicted vs Actual chart for one commodity (like crypto dashboard)."""
+    asset_path = str(info.get("path", ""))
+    currency = str(info.get("currency", ""))
+    icon = str(info.get("icon", "📦"))
+
+    df = supabase_fetch_prediction_history(
+        asset=name, days=int(months) * 30, model_name="dashboard_forecast", horizon="30d"
+    )
+
+    if df.empty:
+        st.info(f"No prediction data for {name} yet — will populate on next refresh.")
+        return
+
+    df = df.sort_values("target_date")
+    df["predicted_value"] = pd.to_numeric(df["predicted_value"], errors="coerce")
+    df["actual_value"] = pd.to_numeric(df["actual_value"], errors="coerce")
+
+    # ── Accuracy (only rows with actual available) ──────────────────────────
+    valid = df.dropna(subset=["predicted_value", "actual_value"]).copy()
+    valid = valid[valid["actual_value"] != 0]
+
+    tol_acc = mape_acc = dir_acc = None
+    n_valid = len(valid)
+    if n_valid > 0:
+        variance = (valid["actual_value"] - valid["predicted_value"]).abs() / valid["predicted_value"].abs()
+        tol_acc = float((variance <= 0.05).mean() * 100.0)
+        mape_acc = max(0.0, 100.0 * (1.0 - float(variance.mean())))
+        if n_valid >= 2:
+            actual_dir = valid["actual_value"].diff().dropna().apply(lambda v: 1 if v > 0 else -1 if v < 0 else 0)
+            pred_delta = pd.Series(
+                valid["predicted_value"].values[1:] - valid["actual_value"].values[:-1],
+                index=actual_dir.index,
+            ).apply(lambda v: 1 if v > 0 else -1 if v < 0 else 0)
+            matches = (actual_dir == pred_delta) & (actual_dir != 0)
+            dir_acc = float(matches.mean() * 100.0) if len(matches) > 0 else None
+
+    # ── Section header ──────────────────────────────────────────────────────
+    acc_str = f" • Accuracy: {mape_acc:.1f}%" if mape_acc is not None else " • Awaiting actuals"
+    st.markdown(
+        f"<h4 style='margin:1.5rem 0 0.25rem 0; color:#e5e7eb; font-size:1rem;'>"
+        f"{icon} {name} ({currency}) — Monthly Forecast Validation{acc_str}</h4>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Three accuracy metric cards ─────────────────────────────────────────
+    mc1, mc2, mc3, mc4 = st.columns([1, 1, 1, 3])
+    with mc1:
+        c = "#10b981" if tol_acc is not None and tol_acc >= 60 else "#f59e0b" if tol_acc is not None and tol_acc >= 40 else "#ef4444"
+        tv = f"{tol_acc:.0f}%" if tol_acc is not None else "—"
+        st.markdown(f"""<div style='background:{c}18;border:1px solid {c}44;border-radius:8px;padding:0.6rem 0.8rem;text-align:center;'>
+<div style='font-size:0.65rem;font-weight:700;color:{c};text-transform:uppercase;letter-spacing:1px;'>Tolerance ±5%</div>
+<div style='font-size:1.4rem;font-weight:900;color:{c};'>{tv}</div>
+<div style='font-size:0.6rem;color:#94a3b8;'>N={n_valid}</div></div>""", unsafe_allow_html=True)
+    with mc2:
+        dc = "#10b981" if dir_acc is not None and dir_acc >= 60 else "#f59e0b" if dir_acc is not None and dir_acc >= 45 else "#ef4444"
+        dv = f"{dir_acc:.0f}%" if dir_acc is not None else "—"
+        st.markdown(f"""<div style='background:{dc}18;border:1px solid {dc}44;border-radius:8px;padding:0.6rem 0.8rem;text-align:center;'>
+<div style='font-size:0.65rem;font-weight:700;color:{dc};text-transform:uppercase;letter-spacing:1px;'>Direction</div>
+<div style='font-size:1.4rem;font-weight:900;color:{dc};'>{dv}</div>
+<div style='font-size:0.6rem;color:#94a3b8;'>up/down</div></div>""", unsafe_allow_html=True)
+    with mc3:
+        mc = "#10b981" if mape_acc is not None and mape_acc >= 80 else "#f59e0b" if mape_acc is not None and mape_acc >= 60 else "#ef4444"
+        mv = f"{mape_acc:.0f}%" if mape_acc is not None else "—"
+        st.markdown(f"""<div style='background:{mc}18;border:1px solid {mc}44;border-radius:8px;padding:0.6rem 0.8rem;text-align:center;'>
+<div style='font-size:0.65rem;font-weight:700;color:{mc};text-transform:uppercase;letter-spacing:1px;'>MAPE Acc.</div>
+<div style='font-size:1.4rem;font-weight:900;color:{mc};'>{mv}</div>
+<div style='font-size:0.6rem;color:#94a3b8;'>1−mean err</div></div>""", unsafe_allow_html=True)
+
+    # ── Chart ───────────────────────────────────────────────────────────────
+    fig = go.Figure()
+    # Actual bars (green — only where data exists)
+    actual_mask = df["actual_value"].notna()
+    fig.add_trace(go.Bar(
+        x=df.loc[actual_mask, "target_date"],
+        y=df.loc[actual_mask, "actual_value"],
+        name="Actual",
+        marker_color="#10b981",
+        text=df.loc[actual_mask, "actual_value"],
+        texttemplate="%{text:,.3f}",
+        textposition="inside",
+    ))
+    # Predicted line (all 12 months, including future)
+    fig.add_trace(go.Scatter(
+        x=df["target_date"],
+        y=df["predicted_value"],
+        name="Predicted (monthly)",
+        mode="lines+markers+text",
+        line=dict(color="#818cf8", width=3),
+        marker=dict(size=7),
+        text=df["predicted_value"],
+        texttemplate="%{text:,.3f}",
+        textposition="top center",
+    ))
+    fig.update_layout(
+        height=380,
+        margin=dict(l=40, r=20, t=20, b=40),
+        plot_bgcolor="#0b1220",
+        paper_bgcolor="#0b1220",
+        font=dict(color="#e5e7eb"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(title="Month", gridcolor="rgba(148,163,184,0.15)", tickfont=dict(color="#cbd5e1")),
+        yaxis=dict(
+            title=f"Price ({currency})" if currency else "Price",
+            gridcolor="rgba(148,163,184,0.15)",
+            tickfont=dict(color="#cbd5e1"),
+        ),
+    )
+    fig.update_traces(cliponaxis=False)
+    st.plotly_chart(fig, use_container_width=True, key=f"ai_pred_{name}")
+
+    # Data table
+    tbl = df[["target_date", "predicted_value", "actual_value"]].copy()
+    tbl.columns = ["Month", "Predicted", "Actual"]
+    tbl["Month"] = pd.to_datetime(tbl["Month"], errors="coerce").dt.strftime("%b %Y")
+    tbl["Predicted"] = tbl["Predicted"].map(lambda v: f"{v:,.4f}" if pd.notna(v) else "—")
+    tbl["Actual"] = tbl["Actual"].map(lambda v: f"{v:,.4f}" if pd.notna(v) else "Awaiting…")
+    st.dataframe(tbl, use_container_width=True, height=220)
+    st.markdown("<hr style='border-color:#1e293b;margin:1.5rem 0;'>", unsafe_allow_html=True)
+
+
 def render_ai_predictions_page():
     st.markdown("""
     <div style='border-left: 4px solid #7c3aed; padding-left: 1rem; margin: 1rem 0 1.25rem 0;'>
@@ -909,7 +1035,7 @@ def render_ai_predictions_page():
             🤖 AI Predictions
         </h2>
         <p style='font-size: 0.95rem; color: #475569; font-weight: 600; margin: 0; line-height: 1.5;'>
-            Predicted (line) vs Actual (bars) — rolling validation
+            Monthly forecast validation — Predicted (line) vs Actual (bars) per commodity
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -921,169 +1047,25 @@ def render_ai_predictions_page():
             "(or `SUPABASE_ANON_KEY`) in Streamlit Secrets to enable long-term prediction storage."
         )
         st.info("Prediction validation charts are disabled until Supabase is configured.")
+        return
 
-    if supa_ok:
-        rows, err, status = supabase_rest_select_meta(table="prediction_records", select="asset", limit=5000)
-        assets = sorted({r.get("asset") for r in (rows or []) if r.get("asset")})
+    # Quick health-check on the table
+    _, err, status = supabase_rest_select_meta(table="prediction_records", select="asset", limit=1)
+    if err and (status in (401, 403, 404) or "relation" in (err or "").lower() or "not found" in (err or "").lower()):
+        st.error(
+            "Supabase `prediction_records` table not found or inaccessible.\n\n"
+            f"Details: {err}\n\nSee docs/supabase_streamlit_cloud.md for setup SQL."
+        )
+        return
 
-        if err and (status in (401, 403, 404) or "relation" in err.lower() or "not found" in err.lower()):
-            st.error(
-                "Supabase predictions query failed. "
-                "Create/enable table `prediction_records` (and ensure the key has access).\n\n"
-                f"Details: {err}"
-            )
-            st.caption("See docs: docs/supabase_streamlit_cloud.md")
-            return
+    # Months slider for how far back/forward to show
+    months = st.slider("Show months", min_value=6, max_value=24, value=14, step=1)
 
-        if not assets:
-            st.info("No prediction records found in Supabase yet.")
-            st.caption("Tip: run `python scripts/push_prediction_record.py ...` (or seed in bulk) to populate `prediction_records`.")
-        else:
-            colA, colB, colC, colD = st.columns([2, 2, 1, 1])
-            with colA:
-                asset = st.selectbox("Asset", assets, index=0)
+    st.markdown("### 🌍 International Commodities")
+    st.caption("Bars show confirmed actual prices. Line shows ML-generated predictions saved on each refresh. Accuracy appears once actuals arrive (monthly).")
 
-            # Fetch real model_names and horizons stored for this asset — no hardcoded guesses
-            meta_rows = supabase_rest_select(
-                table="prediction_records",
-                select="model_name,horizon",
-                eq_filters={"asset": asset},
-                limit=5000,
-            )
-            available_models = sorted({r.get("model_name") for r in (meta_rows or []) if r.get("model_name")})
-            available_horizons = sorted({r.get("horizon") for r in (meta_rows or []) if r.get("horizon")})
-            if not available_models:
-                available_models = ["linear_ridge"]
-            if not available_horizons:
-                available_horizons = ["30d"]
-
-            with colB:
-                model_name = st.selectbox("Model", available_models, index=0)
-            with colC:
-                horizon = st.selectbox("Horizon", available_horizons, index=0)
-            with colD:
-                # Data is monthly — label as Months, multiply for correct limit
-                months = st.number_input("Months", min_value=1, max_value=60, value=12, step=1)
-
-            df = supabase_fetch_prediction_history(
-                asset=asset, days=int(months) * 30, model_name=str(model_name), horizon=str(horizon)
-            )
-            if df.empty:
-                st.info("No data for this asset/horizon yet.")
-            else:
-                unit = df["unit"].dropna().iloc[-1] if "unit" in df.columns and df["unit"].notna().any() else ""
-
-                # ── Accuracy metrics (adapted from crypto model) ─────────────────
-                valid = df.dropna(subset=["predicted_value", "actual_value"]).copy()
-                valid["predicted_value"] = pd.to_numeric(valid["predicted_value"], errors="coerce")
-                valid["actual_value"] = pd.to_numeric(valid["actual_value"], errors="coerce")
-                valid = valid.dropna(subset=["predicted_value", "actual_value"])
-                valid = valid[valid["actual_value"] != 0].sort_values("target_date")
-
-                tol_acc = mape_acc = dir_acc = None
-                if not valid.empty:
-                    err_abs = (valid["actual_value"] - valid["predicted_value"]).abs()
-                    # Same formula as crypto model: abs_pct_variance = |actual - predicted| / predicted
-                    variance = err_abs / valid["predicted_value"].abs()
-
-                    # 1) Tolerance accuracy ±5%  (crypto model uses ±2%; commodities use ±5% — monthly prices)
-                    tol_acc = float((variance <= 0.05).mean() * 100.0)
-
-                    # 2) MAPE-based accuracy (using same variance base: / predicted, matching crypto model)
-                    mape_acc = max(0.0, 100.0 * (1.0 - float(variance.mean())))
-
-                    # 3) Direction accuracy — % of correct up/down calls  (crypto model: win_rate)
-                    if len(valid) >= 2:
-                        actual_dir = valid["actual_value"].diff().dropna().apply(lambda v: 1 if v > 0 else (-1 if v < 0 else 0))
-                        pred_dir = (valid["predicted_value"].values[1:] - valid["actual_value"].values[:-1])
-                        pred_dir_sign = pd.Series(pred_dir, index=actual_dir.index).apply(lambda v: 1 if v > 0 else (-1 if v < 0 else 0))
-                        matches = (actual_dir == pred_dir_sign) & (actual_dir != 0)
-                        dir_acc = float(matches.mean() * 100.0) if len(matches) > 0 else None
-
-                st.markdown("### 📊 Rolling Validation: Predicted vs Actual")
-
-                # Show accuracy headline cards (3 metrics like crypto dashboard)
-                if valid is not None and not valid.empty:
-                    mc1, mc2, mc3 = st.columns(3)
-                    with mc1:
-                        color = "#10b981" if tol_acc is not None and tol_acc >= 60 else "#f59e0b" if tol_acc is not None and tol_acc >= 40 else "#ef4444"
-                        st.markdown(f"""
-<div style='background:{color}18; border:1px solid {color}44; border-radius:8px; padding:0.75rem 1rem; text-align:center;'>
-    <div style='font-size:0.7rem; font-weight:700; color:{color}; text-transform:uppercase; letter-spacing:1px;'>Tolerance Accuracy</div>
-    <div style='font-size:1.6rem; font-weight:900; color:{color};'>{tol_acc:.0f}%</div>
-    <div style='font-size:0.65rem; color:#64748b; font-weight:600;'>predictions within ±5%</div>
-</div>""", unsafe_allow_html=True)
-                    with mc2:
-                        dcolor = "#10b981" if dir_acc is not None and dir_acc >= 60 else "#f59e0b" if dir_acc is not None and dir_acc >= 45 else "#ef4444"
-                        dir_txt = f"{dir_acc:.0f}%" if dir_acc is not None else "N/A"
-                        st.markdown(f"""
-<div style='background:{dcolor}18; border:1px solid {dcolor}44; border-radius:8px; padding:0.75rem 1rem; text-align:center;'>
-    <div style='font-size:0.7rem; font-weight:700; color:{dcolor}; text-transform:uppercase; letter-spacing:1px;'>Direction Accuracy</div>
-    <div style='font-size:1.6rem; font-weight:900; color:{dcolor};'>{dir_txt}</div>
-    <div style='font-size:0.65rem; color:#64748b; font-weight:600;'>correct up/down calls</div>
-</div>""", unsafe_allow_html=True)
-                    with mc3:
-                        mcolor = "#10b981" if mape_acc is not None and mape_acc >= 80 else "#f59e0b" if mape_acc is not None and mape_acc >= 60 else "#ef4444"
-                        st.markdown(f"""
-<div style='background:{mcolor}18; border:1px solid {mcolor}44; border-radius:8px; padding:0.75rem 1rem; text-align:center;'>
-    <div style='font-size:0.7rem; font-weight:700; color:{mcolor}; text-transform:uppercase; letter-spacing:1px;'>MAPE Accuracy</div>
-    <div style='font-size:1.6rem; font-weight:900; color:{mcolor};'>{mape_acc:.0f}%</div>
-    <div style='font-size:0.65rem; color:#64748b; font-weight:600;'>100% − mean abs % error</div>
-</div>""", unsafe_allow_html=True)
-                    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-
-                st.caption("Bars = Actual · Line = Predicted")
-
-                fig = go.Figure()
-
-                fig.add_trace(
-                    go.Bar(
-                        x=df["target_date"],
-                        y=pd.to_numeric(df["actual_value"], errors="coerce"),
-                        name="Actual",
-                        marker_color="#10b981",
-                        text=pd.to_numeric(df["actual_value"], errors="coerce"),
-                        texttemplate="%{text:,.0f}",
-                        textposition="inside",
-                    )
-                )
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=df["target_date"],
-                        y=pd.to_numeric(df["predicted_value"], errors="coerce"),
-                        name=f"Predicted ({horizon})",
-                        mode="lines+markers+text",
-                        line=dict(color="#818cf8", width=3),
-                        marker=dict(size=7),
-                        text=pd.to_numeric(df["predicted_value"], errors="coerce"),
-                        texttemplate="%{text:,.0f}",
-                        textposition="top center",
-                    )
-                )
-
-                fig.update_layout(
-                    height=420,
-                    margin=dict(l=40, r=20, t=30, b=40),
-                    plot_bgcolor="#0b1220",
-                    paper_bgcolor="#0b1220",
-                    font=dict(color="#e5e7eb"),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    xaxis=dict(title="Date", gridcolor="rgba(148,163,184,0.15)", tickfont=dict(color="#cbd5e1")),
-                    yaxis=dict(
-                        title=f"Price ({unit})" if unit else "Price",
-                        gridcolor="rgba(148,163,184,0.15)",
-                        tickfont=dict(color="#cbd5e1"),
-                    ),
-                )
-                fig.update_traces(cliponaxis=False)
-
-                st.plotly_chart(fig, use_container_width=True, key=f"ai_pred_{asset}_{horizon}")
-
-                out = df[["target_date", "actual_value", "predicted_value"]].copy()
-                out.columns = ["Date", "Actual", "Predicted"]
-                out["Date"] = pd.to_datetime(out["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-                st.dataframe(out, use_container_width=True, height=260)
+    for name, info in INTERNATIONAL_COMMODITIES.items():
+        _render_commodity_prediction_chart(name, info, months=months)
 
 
 @st.cache_data(ttl=600)  # Cache for 10 minutes
@@ -1140,11 +1122,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
-# Auto-sync predictions to Supabase on every open/refresh (silent, once per session)
-_auto_sync_predictions_to_supabase()
-# Auto-fill actual values for past predictions (adapted from crypto model pattern)
-_auto_fill_actuals_in_supabase()
 
 # Professional Commodity Dashboard Styling
 st.markdown("""
@@ -5371,12 +5348,18 @@ def load_predictions(asset: str):
             pass
     
     # Commodity forecasting: Use MONTHS not hours (standard industry practice)
+    # Use a deterministic seed: same asset + same calendar date → same 12 forecast values.
+    # This ensures the Price Forecast chart and Supabase predictions always match.
+    _today_key = datetime.utcnow().date().isoformat()
+    _seed_int = int(hashlib.md5(f"{asset}{_today_key}".encode()).hexdigest(), 16) % (2 ** 31)
+    rng = np.random.default_rng(_seed_int)
+
     predictions = {}
     horizons = get_month_horizons(12)
     for i, horizon in enumerate(horizons, start=1):
         # Longer horizon = more uncertainty
-        prediction = base_price * (1 + np.random.normal(0, i * 1.0/100))
-        change = np.random.uniform(-5, 5) * (1 + i * 0.15)  # More volatility for longer periods
+        prediction = base_price * (1 + rng.normal(0, i * 1.0/100))
+        change = rng.uniform(-5, 5) * (1 + i * 0.15)  # More volatility for longer periods
         
         # Calculate confidence interval (wider for longer horizons)
         uncertainty = i * 2.0  # percentage uncertainty
@@ -6413,7 +6396,12 @@ def get_critical_alerts(events: dict) -> list:
 
 def main():
     """Main application with 3-page structure."""
-    
+
+    # Auto-sync predictions to Supabase on every open/refresh (silent, once per session)
+    # Placed here (inside main) so all helpers like load_predictions() are already defined.
+    _auto_sync_predictions_to_supabase()
+    _auto_fill_actuals_in_supabase()
+
     # Professional header with clean data-driven design
     st.markdown("""
     <div style='background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%); padding: 1.5rem 2rem; border-radius: 10px; margin-bottom: 1.25rem; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.2);'>
