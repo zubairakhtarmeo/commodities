@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
+import requests
 
 from forecasting.config import load_config
 from forecasting.data import build_series_registry
@@ -83,6 +87,75 @@ def _collect_walk_forward_predictions(*, cfg, ds, base_times: pd.DatetimeIndex, 
     return pd.DataFrame([r.__dict__ for r in rows]).sort_values("target_time")
 
 
+def _try_push_to_supabase(
+    *,
+    preds: pd.DataFrame,
+    asset_id: str,
+    model_name: str,
+    horizon: int,
+    chunk: int = 5000,
+) -> None:
+    """Push predictions to Supabase prediction_records (silently skipped if not configured)."""
+
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    if not url or not key:
+        print("[supabase] Skipped: SUPABASE_URL / key not set in environment.")
+        return
+
+    base_url = str(url).rstrip("/")
+    key = str(key).strip()
+    endpoint = f"{base_url}/rest/v1/prediction_records"
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+
+    rows = []
+    for _, r in preds.iterrows():
+        rows.append(
+            {
+                "asset": str(asset_id),
+                "as_of_date": pd.Timestamp(r["asof"]).date().isoformat(),
+                "target_date": pd.Timestamp(r["target_time"]).date().isoformat(),
+                "predicted_value": float(r["y_pred"]),
+                "actual_value": float(r["y_true"]) if pd.notna(r.get("y_true")) else None,
+                "unit": "",
+                "model_name": str(model_name),
+                "frequency": "monthly",
+                "horizon": f"{horizon}m",
+            }
+        )
+
+    if not rows:
+        print("[supabase] No rows to push.")
+        return
+
+    total = 0
+    for i in range(0, len(rows), chunk):
+        batch = rows[i : i + chunk]
+        try:
+            resp = requests.post(
+                endpoint,
+                headers=headers,
+                params={"on_conflict": "asset,as_of_date,target_date,model_name,horizon"},
+                data=json.dumps(batch),
+                timeout=90,
+            )
+            if resp.ok:
+                total += len(batch)
+            else:
+                print(f"[supabase] Upload failed (batch {i}): HTTP {resp.status_code} {resp.text[:300]}")
+                return
+        except Exception as exc:
+            print(f"[supabase] Upload error: {exc}")
+            return
+
+    print(f"[supabase] Pushed {total} prediction rows for asset={asset_id} model={model_name} horizon={horizon}m")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Report metrics/importances and plot forecast-vs-actual for a trained real asset run.")
     ap.add_argument("--config", required=True, help="Path to YAML config")
@@ -151,6 +224,14 @@ def main() -> int:
     preds_out = art_dir / f"predictions_{args.model_name}_h{args.horizon}.csv"
     preds.to_csv(preds_out, index=False)
     print(f"Wrote predictions: {preds_out}")
+
+    # ── Auto-push to Supabase (if creds are configured) ────────────────────────
+    _try_push_to_supabase(
+        preds=preds,
+        asset_id=args.asset_id,
+        model_name=args.model_name,
+        horizon=args.horizon,
+    )
 
     return 0
 
