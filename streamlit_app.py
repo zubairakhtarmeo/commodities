@@ -859,12 +859,13 @@ def render_ai_predictions_page():
                 tol_acc = mape_acc = dir_acc = None
                 if not valid.empty:
                     err_abs = (valid["actual_value"] - valid["predicted_value"]).abs()
-                    variance = err_abs / valid["actual_value"].abs()
+                    # Same formula as crypto model: abs_pct_variance = |actual - predicted| / predicted
+                    variance = err_abs / valid["predicted_value"].abs()
 
-                    # 1) Tolerance accuracy ±5%  (crypto model uses ±2%; commodities need ±5%)
+                    # 1) Tolerance accuracy ±5%  (crypto model uses ±2%; commodities use ±5% — monthly prices)
                     tol_acc = float((variance <= 0.05).mean() * 100.0)
 
-                    # 2) MAPE-based accuracy
+                    # 2) MAPE-based accuracy (using same variance base: / predicted, matching crypto model)
                     mape_acc = max(0.0, 100.0 * (1.0 - float(variance.mean())))
 
                     # 3) Direction accuracy — % of correct up/down calls  (crypto model: win_rate)
