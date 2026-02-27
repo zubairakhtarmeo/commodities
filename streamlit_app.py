@@ -172,6 +172,101 @@ def supabase_is_configured() -> bool:
     return get_supabase_config() is not None
 
 
+def _auto_sync_predictions_to_supabase() -> None:
+    """Silently push all artifact prediction CSVs to Supabase once per session.
+
+    Called at app startup so that every time someone opens or refreshes the
+    dashboard the latest local predictions are synced to Supabase.
+    Runs only once per browser session to avoid repeatedly hitting the API.
+    Skipped entirely if Supabase is not configured.
+    """
+
+    if st.session_state.get("_predictions_synced"):
+        return
+    st.session_state["_predictions_synced"] = True  # mark immediately to prevent double-run
+
+    cfg = get_supabase_config()
+    if cfg is None:
+        return  # Supabase not configured – nothing to do
+
+    base_url, key = cfg
+    endpoint = f"{base_url}/rest/v1/prediction_records"
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+
+    def _infer_meta(pred_file: Path) -> tuple[str, str, str]:
+        """(model_name, horizon, frequency) from filename."""
+        name = pred_file.name
+        model_name = "default"
+        if name.startswith("predictions_"):
+            mid = name[len("predictions_"):].replace(".csv", "")
+            model_name = mid.split("_h", 1)[0] if "_h" in mid else mid
+        return model_name or "default", "30d", "monthly"
+
+    total = 0
+    try:
+        for pred_file in ARTIFACTS_DIR.rglob("predictions_*.csv"):
+            if not pred_file.is_file():
+                continue
+            asset = pred_file.parent.name
+            model_name, horizon, frequency = _infer_meta(pred_file)
+
+            try:
+                df = pd.read_csv(pred_file)
+            except Exception:
+                continue
+
+            if not {"asof", "target_time", "y_pred"}.issubset(set(df.columns)):
+                continue
+
+            df["asof"] = pd.to_datetime(df["asof"], errors="coerce")
+            df["target_time"] = pd.to_datetime(df["target_time"], errors="coerce")
+            df["y_pred"] = pd.to_numeric(df["y_pred"], errors="coerce")
+            if "y_true" in df.columns:
+                df["y_true"] = pd.to_numeric(df["y_true"], errors="coerce")
+            df = df.dropna(subset=["asof", "target_time", "y_pred"])
+            if df.empty:
+                continue
+
+            rows = [
+                {
+                    "asset": str(asset),
+                    "as_of_date": pd.Timestamp(r["asof"]).date().isoformat(),
+                    "target_date": pd.Timestamp(r["target_time"]).date().isoformat(),
+                    "predicted_value": float(r["y_pred"]),
+                    "actual_value": float(r["y_true"]) if ("y_true" in df.columns and pd.notna(r.get("y_true"))) else None,
+                    "unit": "",
+                    "model_name": str(model_name),
+                    "frequency": str(frequency),
+                    "horizon": str(horizon),
+                }
+                for _, r in df.iterrows()
+            ]
+
+            # Upload in chunks of 5000 rows
+            chunk_size = 5000
+            for i in range(0, len(rows), chunk_size):
+                batch = rows[i : i + chunk_size]
+                try:
+                    resp = requests.post(
+                        endpoint,
+                        headers=headers,
+                        params={"on_conflict": "asset,as_of_date,target_date,model_name,horizon"},
+                        data=json.dumps(batch),
+                        timeout=30,
+                    )
+                    if resp.ok:
+                        total += len(batch)
+                except Exception:
+                    pass  # silent – never disrupt the dashboard
+    except Exception:
+        pass  # never crash the app due to sync failures
+
+
 def supabase_upsert_prediction_record(
     *,
     asset: str,
@@ -734,6 +829,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Auto-sync predictions to Supabase on every open/refresh (silent, once per session)
+_auto_sync_predictions_to_supabase()
 
 # Professional Commodity Dashboard Styling
 st.markdown("""
