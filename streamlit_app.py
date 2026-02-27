@@ -267,6 +267,112 @@ def _auto_sync_predictions_to_supabase() -> None:
         pass  # never crash the app due to sync failures
 
 
+def _auto_fill_actuals_in_supabase() -> None:
+    """Fill actual_value for prediction_records where target_date has passed.
+
+    Adapted from crypto model's _update_24h_validation pattern:
+    1. Fetch records where actual_value IS NULL and target_date <= today
+    2. Look up real commodity price from commodity_prices table
+       (backward PAD lookup: nearest price at or before target_date, ≤45 days back)
+    3. PATCH the record with found actual_value
+
+    Runs once per session, silently — never disrupts the dashboard.
+    """
+    if st.session_state.get("_actuals_filled"):
+        return
+    st.session_state["_actuals_filled"] = True
+
+    cfg = get_supabase_config()
+    if cfg is None:
+        return
+
+    base_url, key = cfg
+    today_str = datetime.utcnow().date().isoformat()
+
+    try:
+        # Step 1: records with NULL actual where target_date has already passed
+        resp = requests.get(
+            _supabase_rest_url(base_url, "prediction_records"),
+            headers=_supabase_headers(key),
+            params={
+                "select": "id,asset,target_date,predicted_value",
+                "actual_value": "is.null",
+                "target_date": f"lte.{today_str}",
+                "limit": "10000",
+            },
+            timeout=30,
+        )
+        if not resp.ok:
+            return
+        records = resp.json()
+        if not isinstance(records, list) or not records:
+            return
+    except Exception:
+        return
+
+    # Step 2: group by asset to fetch price series once per asset
+    from collections import defaultdict
+    by_asset: dict[str, list[dict]] = defaultdict(list)
+    for rec in records:
+        by_asset[str(rec.get("asset", ""))].append(rec)
+
+    for asset, recs in by_asset.items():
+        try:
+            # commodity_prices.asset_path is like "cotton/cotton_usd_monthly"
+            # match by case-insensitive substring of asset name
+            price_resp = requests.get(
+                _supabase_rest_url(base_url, "commodity_prices"),
+                headers=_supabase_headers(key),
+                params={
+                    "select": "timestamp,value",
+                    "asset_path": f"ilike.*{asset.lower()}*",
+                    "order": "timestamp.asc",
+                    "limit": "600",
+                },
+                timeout=30,
+            )
+            if not price_resp.ok:
+                continue
+            price_rows = price_resp.json()
+            if not isinstance(price_rows, list) or not price_rows:
+                continue
+        except Exception:
+            continue
+
+        price_df = pd.DataFrame(price_rows)
+        if price_df.empty or "timestamp" not in price_df.columns:
+            continue
+        price_df["timestamp"] = pd.to_datetime(price_df["timestamp"], errors="coerce")
+        price_df["value"] = pd.to_numeric(price_df["value"], errors="coerce")
+        price_df = price_df.dropna(subset=["timestamp", "value"]).sort_values("timestamp")
+
+        for rec in recs:
+            try:
+                target_dt = pd.to_datetime(rec["target_date"])
+                # Backward PAD lookup — nearest price at or before target_date within 45 days
+                candidates = price_df[price_df["timestamp"] <= target_dt]
+                if candidates.empty:
+                    continue
+                nearest = candidates.iloc[-1]
+                if (target_dt - nearest["timestamp"]).days > 45:
+                    continue  # price data too stale to be reliable
+                actual = float(nearest["value"])
+            except Exception:
+                continue
+
+            # Step 3: PATCH actual_value back into Supabase
+            try:
+                requests.patch(
+                    _supabase_rest_url(base_url, "prediction_records"),
+                    headers=_supabase_headers(key),
+                    params={"id": f"eq.{rec['id']}"},
+                    data=json.dumps({"actual_value": actual}),
+                    timeout=15,
+                )
+            except Exception:
+                pass  # silent
+
+
 def supabase_upsert_prediction_record(
     *,
     asset: str,
@@ -313,6 +419,14 @@ def supabase_upsert_prediction_record(
     )
 
 
+_PRED_CACHE_DIR = Path("data/cache")
+
+
+def _pred_cache_path(asset: str, model_name: str, horizon: str) -> Path:
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{asset}_{model_name}_{horizon}")
+    return _PRED_CACHE_DIR / f"predictions_{safe}.json"
+
+
 def supabase_fetch_prediction_history(
     *,
     asset: str,
@@ -320,25 +434,53 @@ def supabase_fetch_prediction_history(
     model_name: str = "default",
     horizon: str = "1d",
 ) -> pd.DataFrame:
-    """Fetch prediction history for charting validation (predicted vs actual)."""
+    """Fetch prediction history for charting validation (predicted vs actual).
+
+    Adapted from crypto model dual-layer pattern:
+    - Primary source: Supabase prediction_records table
+    - Fallback: local JSON cache (data/cache/predictions_*.json)
+    - On successful Supabase fetch, cache is updated for offline resilience
+    """
+    cache_path = _pred_cache_path(asset, model_name, horizon)
+
+    def _from_cache() -> pd.DataFrame:
+        try:
+            if cache_path.exists():
+                saved = json.loads(cache_path.read_text(encoding="utf-8"))
+                df = pd.DataFrame(saved)
+                if not df.empty:
+                    df["target_date"] = pd.to_datetime(df["target_date"], errors="coerce")
+                    return df.tail(int(days))
+        except Exception:
+            pass
+        return pd.DataFrame()
+
     try:
         rows = supabase_rest_select(
             table="prediction_records",
-            select="asset,as_of_date,target_date,predicted_value, actual_value,unit,model_name,frequency,horizon",
+            select="asset,as_of_date,target_date,predicted_value,actual_value,unit,model_name,frequency,horizon",
             eq_filters={"asset": asset, "model_name": model_name, "horizon": horizon},
             order="target_date.desc",
             limit=int(days) * 3,
         )
         df = pd.DataFrame(rows)
         if df.empty:
-            return df
-        # Keep last N unique target dates
+            return _from_cache()  # fallback to local cache when Supabase returns nothing
         df["target_date"] = pd.to_datetime(df["target_date"], errors="coerce")
         df = df.dropna(subset=["target_date"]).sort_values("target_date")
         df = df.drop_duplicates(subset=["target_date"], keep="last")
-        return df.tail(int(days))
+        result = df.tail(int(days))
+        # Save to cache for next time (same pattern as crypto model)
+        try:
+            _PRED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                result.to_json(orient="records", date_format="iso"), encoding="utf-8"
+            )
+        except Exception:
+            pass
+        return result
     except Exception:
-        return pd.DataFrame()
+        return _from_cache()
 
 
 @st.cache_data(ttl=300)
@@ -707,20 +849,64 @@ def render_ai_predictions_page():
             else:
                 unit = df["unit"].dropna().iloc[-1] if "unit" in df.columns and df["unit"].notna().any() else ""
 
-                # Accuracy (simple): 100 * (1 - MAPE)
+                # ── Accuracy metrics (adapted from crypto model) ─────────────────
                 valid = df.dropna(subset=["predicted_value", "actual_value"]).copy()
-                acc_txt = ""
-                if not valid.empty:
-                    actual = pd.to_numeric(valid["actual_value"], errors="coerce")
-                    pred = pd.to_numeric(valid["predicted_value"], errors="coerce")
-                    mask = (actual.notna()) & (pred.notna()) & (actual != 0)
-                    if mask.any():
-                        mape = float((abs(pred[mask] - actual[mask]) / abs(actual[mask])).mean())
-                        accuracy = max(0.0, 100.0 * (1.0 - mape))
-                        acc_txt = f" · Accuracy: {accuracy:.1f}%"
+                valid["predicted_value"] = pd.to_numeric(valid["predicted_value"], errors="coerce")
+                valid["actual_value"] = pd.to_numeric(valid["actual_value"], errors="coerce")
+                valid = valid.dropna(subset=["predicted_value", "actual_value"])
+                valid = valid[valid["actual_value"] != 0].sort_values("target_date")
 
-                title = f"Rolling Validation: Predicted vs Actual{acc_txt}"
-                st.markdown(f"### {title}")
+                tol_acc = mape_acc = dir_acc = None
+                if not valid.empty:
+                    err_abs = (valid["actual_value"] - valid["predicted_value"]).abs()
+                    variance = err_abs / valid["actual_value"].abs()
+
+                    # 1) Tolerance accuracy ±5%  (crypto model uses ±2%; commodities need ±5%)
+                    tol_acc = float((variance <= 0.05).mean() * 100.0)
+
+                    # 2) MAPE-based accuracy
+                    mape_acc = max(0.0, 100.0 * (1.0 - float(variance.mean())))
+
+                    # 3) Direction accuracy — % of correct up/down calls  (crypto model: win_rate)
+                    if len(valid) >= 2:
+                        actual_dir = valid["actual_value"].diff().dropna().apply(lambda v: 1 if v > 0 else (-1 if v < 0 else 0))
+                        pred_dir = (valid["predicted_value"].values[1:] - valid["actual_value"].values[:-1])
+                        pred_dir_sign = pd.Series(pred_dir, index=actual_dir.index).apply(lambda v: 1 if v > 0 else (-1 if v < 0 else 0))
+                        matches = (actual_dir == pred_dir_sign) & (actual_dir != 0)
+                        dir_acc = float(matches.mean() * 100.0) if len(matches) > 0 else None
+
+                st.markdown("### 📊 Rolling Validation: Predicted vs Actual")
+
+                # Show accuracy headline cards (3 metrics like crypto dashboard)
+                if valid is not None and not valid.empty:
+                    mc1, mc2, mc3 = st.columns(3)
+                    with mc1:
+                        color = "#10b981" if tol_acc is not None and tol_acc >= 60 else "#f59e0b" if tol_acc is not None and tol_acc >= 40 else "#ef4444"
+                        st.markdown(f"""
+<div style='background:{color}18; border:1px solid {color}44; border-radius:8px; padding:0.75rem 1rem; text-align:center;'>
+    <div style='font-size:0.7rem; font-weight:700; color:{color}; text-transform:uppercase; letter-spacing:1px;'>Tolerance Accuracy</div>
+    <div style='font-size:1.6rem; font-weight:900; color:{color};'>{tol_acc:.0f}%</div>
+    <div style='font-size:0.65rem; color:#64748b; font-weight:600;'>predictions within ±5%</div>
+</div>""", unsafe_allow_html=True)
+                    with mc2:
+                        dcolor = "#10b981" if dir_acc is not None and dir_acc >= 60 else "#f59e0b" if dir_acc is not None and dir_acc >= 45 else "#ef4444"
+                        dir_txt = f"{dir_acc:.0f}%" if dir_acc is not None else "N/A"
+                        st.markdown(f"""
+<div style='background:{dcolor}18; border:1px solid {dcolor}44; border-radius:8px; padding:0.75rem 1rem; text-align:center;'>
+    <div style='font-size:0.7rem; font-weight:700; color:{dcolor}; text-transform:uppercase; letter-spacing:1px;'>Direction Accuracy</div>
+    <div style='font-size:1.6rem; font-weight:900; color:{dcolor};'>{dir_txt}</div>
+    <div style='font-size:0.65rem; color:#64748b; font-weight:600;'>correct up/down calls</div>
+</div>""", unsafe_allow_html=True)
+                    with mc3:
+                        mcolor = "#10b981" if mape_acc is not None and mape_acc >= 80 else "#f59e0b" if mape_acc is not None and mape_acc >= 60 else "#ef4444"
+                        st.markdown(f"""
+<div style='background:{mcolor}18; border:1px solid {mcolor}44; border-radius:8px; padding:0.75rem 1rem; text-align:center;'>
+    <div style='font-size:0.7rem; font-weight:700; color:{mcolor}; text-transform:uppercase; letter-spacing:1px;'>MAPE Accuracy</div>
+    <div style='font-size:1.6rem; font-weight:900; color:{mcolor};'>{mape_acc:.0f}%</div>
+    <div style='font-size:0.65rem; color:#64748b; font-weight:600;'>100% − mean abs % error</div>
+</div>""", unsafe_allow_html=True)
+                    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
                 st.caption("Bars = Actual · Line = Predicted")
 
                 fig = go.Figure()
@@ -832,6 +1018,8 @@ st.set_page_config(
 
 # Auto-sync predictions to Supabase on every open/refresh (silent, once per session)
 _auto_sync_predictions_to_supabase()
+# Auto-fill actual values for past predictions (adapted from crypto model pattern)
+_auto_fill_actuals_in_supabase()
 
 # Professional Commodity Dashboard Styling
 st.markdown("""
