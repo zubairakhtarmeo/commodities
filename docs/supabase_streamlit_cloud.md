@@ -107,6 +107,11 @@ This Streamlit app *reads* from Supabase. You should push predictions daily from
 - GitHub Actions
 - any internal server
 
+### Quick seed (optional)
+If you want the **AI Predictions** page to show charts immediately (demo / validation), you can bulk upload the included artifact validation CSVs:
+
+- `python scripts/push_predictions_from_artifacts_to_supabase.py`
+
 Minimum fields to upsert:
 - `asset`
 - `as_of_date`

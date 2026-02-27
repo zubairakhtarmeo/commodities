@@ -62,6 +62,52 @@ def _supabase_rest_url(base_url: str, table: str) -> str:
     return f"{base_url}/rest/v1/{table}"
 
 
+def supabase_rest_select_meta(
+    *,
+    table: str,
+    select: str,
+    eq_filters: dict[str, str] | None = None,
+    order: str | None = None,
+    limit: int | None = None,
+) -> tuple[list[dict], str | None, int | None]:
+    """Supabase select that returns (rows, error_message, http_status).
+
+    This is intended for UI diagnostics. Callers can show a helpful error
+    when the table is missing, RLS blocks access, or a key is wrong.
+    """
+
+    cfg = get_supabase_config()
+    if cfg is None:
+        return ([], "Supabase is not configured (missing SUPABASE_URL / key)", None)
+
+    base_url, key = cfg
+    params: dict[str, str] = {"select": select}
+    if eq_filters:
+        for k, v in eq_filters.items():
+            params[k] = f"eq.{v}"
+    if order:
+        params["order"] = order
+    if limit is not None:
+        params["limit"] = str(int(limit))
+
+    try:
+        resp = requests.get(
+            _supabase_rest_url(base_url, table),
+            headers=_supabase_headers(key),
+            params=params,
+            timeout=30,
+        )
+        if not resp.ok:
+            msg = (resp.text or "").strip()
+            msg = msg[:500] + ("…" if len(msg) > 500 else "")
+            return ([], f"HTTP {resp.status_code}: {msg}" if msg else f"HTTP {resp.status_code}", int(resp.status_code))
+        data = resp.json()
+        rows = data if isinstance(data, list) else []
+        return (rows, None, int(resp.status_code))
+    except Exception as e:
+        return ([], f"Request failed: {e}", None)
+
+
 def supabase_rest_select(
     *,
     table: str,
@@ -300,7 +346,24 @@ def render_quarterly_purchasing_forecast(*, key_prefix: str = "purch_forecast") 
         purch_df = _load_purchase_monthly_agg()
         if not (isinstance(purch_df, pd.DataFrame) and (not purch_df.empty) and "month" in purch_df.columns):
             if supabase_is_configured():
-                st.info("No purchase history available in this deployment. Configure/seed Supabase table `purchases_monthly_agg` to enable forecasting.")
+                # Distinguish "empty" vs "table missing / blocked" for faster cloud setup.
+                _, err, status = supabase_rest_select_meta(
+                    table="purchases_monthly_agg",
+                    select="month",
+                    order="month.desc",
+                    limit=1,
+                )
+                if err and (status in (401, 403, 404) or "relation" in err.lower() or "not found" in err.lower()):
+                    st.error(
+                        "Supabase purchase-history query failed. "
+                        "Create/enable table `purchases_monthly_agg` (and ensure the key has access).\n\n"
+                        f"Details: {err}"
+                    )
+                else:
+                    st.info(
+                        "No purchase history available in this deployment. "
+                        "Configure/seed Supabase table `purchases_monthly_agg` to enable forecasting."
+                    )
             else:
                 st.info("No purchase history available in this deployment. Configure Supabase to enable forecasting.")
             return
@@ -519,16 +582,21 @@ def render_ai_predictions_page():
         st.info("Prediction validation charts are disabled until Supabase is configured.")
 
     if supa_ok:
-        assets: list[str] = []
-        try:
-            rows = supabase_rest_select(table="prediction_records", select="asset", limit=5000)
-            assets = sorted({r.get("asset") for r in (rows or []) if r.get("asset")})
-        except Exception:
-            assets = []
+        rows, err, status = supabase_rest_select_meta(table="prediction_records", select="asset", limit=5000)
+        assets = sorted({r.get("asset") for r in (rows or []) if r.get("asset")})
+
+        if err and (status in (401, 403, 404) or "relation" in err.lower() or "not found" in err.lower()):
+            st.error(
+                "Supabase predictions query failed. "
+                "Create/enable table `prediction_records` (and ensure the key has access).\n\n"
+                f"Details: {err}"
+            )
+            st.caption("See docs: docs/supabase_streamlit_cloud.md")
+            return
 
         if not assets:
             st.info("No prediction records found in Supabase yet.")
-            st.caption("Tip: push daily predictions from your pipeline into `prediction_records`.")
+            st.caption("Tip: run `python scripts/push_prediction_record.py ...` (or seed in bulk) to populate `prediction_records`.")
         else:
             colA, colB, colC = st.columns([2, 1, 1])
             with colA:
