@@ -1068,15 +1068,31 @@ def render_ai_predictions_page():
         _render_commodity_prediction_chart(name, info, months=months)
 
 
-@st.cache_data(ttl=600)  # Cache for 10 minutes
+def _cache_buster_for_events_latest() -> float:
+    """Return mtime of the latest events file (0 if missing)."""
+    try:
+        events_file = EVENTS_DIR / "events_latest.json"
+        if events_file.exists():
+            return float(events_file.stat().st_mtime)
+    except Exception:
+        pass
+    return 0.0
+
+
 def load_latest_events() -> dict:
     """Load latest market events and news."""
+    events_mtime = _cache_buster_for_events_latest()
+    return _load_latest_events_cached(events_mtime)
+
+
+@st.cache_data(ttl=600)  # Cache for 10 minutes
+def _load_latest_events_cached(_events_mtime: float) -> dict:
     events_file = EVENTS_DIR / "events_latest.json"
     if events_file.exists():
         try:
-            with open(events_file, 'r', encoding='utf-8') as f:
+            with open(events_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except Exception:
             pass
     return {"news": {}, "weather": [], "geopolitical": []}
 
@@ -1581,9 +1597,29 @@ def fetch_wapda_electricity_rate() -> Optional[dict]:
         return None
 
 
-@st.cache_data
+def _cache_buster_for_raw_csv(asset_path: str) -> float:
+    """Return latest mtime for raw CSVs matching this asset_path."""
+    try:
+        csv_files = list(RAW_DATA_DIR.glob(f"{asset_path}*.csv"))
+        if not csv_files:
+            return 0.0
+        return float(max(p.stat().st_mtime for p in csv_files if p.exists()))
+    except Exception:
+        return 0.0
+
+
 def load_commodity_data(asset_path: str, currency: str):
-    """Load commodity price data with full dataframe."""
+    """Load commodity price data with full dataframe.
+
+    Wrapper around cached loader that invalidates cache when source CSV updates.
+    """
+
+    return _load_commodity_data_cached(asset_path, currency, _cache_buster_for_raw_csv(asset_path))
+
+
+@st.cache_data(ttl=600)
+def _load_commodity_data_cached(asset_path: str, currency: str, _raw_mtime: float):
+    """Cached commodity loader. `_raw_mtime` exists only to bust cache on file changes."""
     ton_assets_to_kg = (
         "polyester/polyester_usd_monthly",
         "viscose/viscose_usd_monthly",
@@ -5288,9 +5324,248 @@ def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictio
         st.dataframe(styled_df, use_container_width=True, hide_index=True, height=440)
 
 
-@st.cache_data
+def _cache_buster_for_artifact_predictions(asset: str) -> float:
+    """Return latest mtime for artifact prediction CSVs for this asset."""
+    try:
+        pred_files = list(ARTIFACTS_DIR.glob(f"{asset}/predictions_*.csv"))
+        if not pred_files:
+            return 0.0
+        return float(max(p.stat().st_mtime for p in pred_files if p.exists()))
+    except Exception:
+        return 0.0
+
+
+def _infer_news_key_from_asset(asset: str) -> str | None:
+    """Map an asset path to a news bucket from events_latest.json."""
+    a = str(asset).lower()
+    if "cotton" in a:
+        return "cotton"
+    if "polyester" in a:
+        return "polyester"
+    if "natural_gas" in a or "henry_hub" in a:
+        return "gas"
+    if "crude" in a or "brent" in a or "oil" in a:
+        return "oil"
+    if "usd_pkr" in a or "pakistan" in a:
+        return "pakistan"
+    return None
+
+
+def _compute_news_overlay(asset: str, events: dict) -> dict:
+    """Compute a lightweight news/geopolitical overlay for forecasts.
+
+    This is intentionally heuristic (no paid APIs / no heavy NLP).
+    It adjusts forecast mean (bias), volatility, and confidence based on
+    the last few collected RSS headlines for the relevant commodity.
+    """
+
+    news_key = _infer_news_key_from_asset(asset)
+    if not news_key:
+        return {
+            "commodity_key": None,
+            "signature": "none",
+            "score": 0.0,
+            "bias_pct": 0.0,
+            "vol_mult": 1.0,
+            "confidence_penalty": 0.0,
+            "applied": False,
+            "summary": "",
+        }
+
+    items = (events or {}).get("news", {}).get(news_key) or []
+    if not isinstance(items, list) or len(items) == 0:
+        return {
+            "commodity_key": news_key,
+            "signature": "none",
+            "score": 0.0,
+            "bias_pct": 0.0,
+            "vol_mult": 1.0,
+            "confidence_penalty": 0.0,
+            "applied": False,
+            "summary": "",
+        }
+
+    now = pd.Timestamp.now(tz="UTC")
+
+    category_weights = {
+        "geopolitics": 2.0,
+        "supply": 1.6,
+        "policy": 1.1,
+        "weather": 1.0,
+        "demand": 0.9,
+        "general": 0.35,
+    }
+
+    pos_keywords = [
+        "surge",
+        "spike",
+        "shortage",
+        "disruption",
+        "ban",
+        "war",
+        "sanction",
+        "embargo",
+        "attack",
+        "strike",
+        "missile",
+        "hormuz",
+        "red sea",
+        "opec",
+        "pipeline",
+        "refinery",
+        "lng",
+    ]
+    neg_keywords = [
+        "slowdown",
+        "recession",
+        "oversupply",
+        "record output",
+        "increase production",
+        "inventory build",
+        "demand slump",
+    ]
+
+    risk_score = 0.0
+    direction_signal = 0.0
+    category_counts: dict[str, int] = {}
+    signature_parts: list[str] = []
+
+    for item in items[:12]:
+        title = str(item.get("title", "") or "")
+        desc = str(item.get("description", "") or "")
+        cat = str(item.get("category", "general") or "general").lower()
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+
+        ts_raw = item.get("timestamp") or item.get("published") or item.get("collected_at")
+        ts = pd.to_datetime(ts_raw, errors="coerce", utc=True)
+        if pd.isna(ts):
+            recency_w = 0.6
+        else:
+            days_ago = max(0.0, float((now - ts).total_seconds()) / 86400.0)
+            if days_ago <= 3:
+                recency_w = 1.0
+            elif days_ago <= 7:
+                recency_w = 0.75
+            elif days_ago <= 14:
+                recency_w = 0.45
+            else:
+                recency_w = 0.25
+
+        text = (title + " " + desc).lower()
+
+        base_w = float(category_weights.get(cat, category_weights["general"]))
+        extra = 0.0
+        if any(k in text for k in ["war", "conflict", "sanction", "embargo", "attack", "strike", "missile", "hormuz"]):
+            extra += 1.0
+        if any(k in text for k in ["shortage", "disruption", "shutdown", "port", "shipping", "tanker", "pipeline", "refinery"]):
+            extra += 0.6
+
+        risk_score += recency_w * (base_w + extra)
+
+        pos = any(k in text for k in pos_keywords)
+        neg = any(k in text for k in neg_keywords)
+        if pos and not neg:
+            direction_signal += recency_w
+        elif neg and not pos:
+            direction_signal -= recency_w
+
+        signature_parts.append(f"{ts_raw}|{title}|{cat}")
+
+    risk_score = float(min(10.0, risk_score))
+
+    if abs(direction_signal) < 0.6:
+        direction = 0
+    else:
+        direction = 1 if direction_signal > 0 else -1
+
+    if news_key in ("oil", "gas"):
+        max_bias = 7.0 if news_key == "oil" else 9.0
+        bias_per_score = 0.6 if news_key == "oil" else 0.7
+    else:
+        max_bias = 4.5
+        bias_per_score = 0.45
+
+    bias_pct = float(direction) * float(min(max_bias, risk_score * bias_per_score))
+    vol_mult = 1.0 + min(0.6, risk_score * 0.06)  # cap at 1.6x
+    confidence_penalty = min(20.0, risk_score * 1.6)  # up to -20pts
+
+    drivers: list[str] = []
+    for k in ("geopolitics", "supply", "policy", "weather", "demand"):
+        n = int(category_counts.get(k, 0) or 0)
+        if n:
+            drivers.append(f"{n} {k}")
+
+    if direction > 0:
+        direction_label = "upside"
+    elif direction < 0:
+        direction_label = "downside"
+    else:
+        direction_label = "neutral"
+
+    drivers_text = (" · drivers: " + ", ".join(drivers[:3])) if drivers else ""
+    summary = f"{direction_label} bias · score {risk_score:.1f}/10" + drivers_text
+
+    sig_src = "||".join(sorted(signature_parts))
+    signature = hashlib.md5(sig_src.encode("utf-8")).hexdigest() if sig_src else "none"
+
+    applied = bool(risk_score >= 1.0 and (abs(bias_pct) > 0 or vol_mult > 1.0))
+
+    return {
+        "commodity_key": news_key,
+        "signature": signature,
+        "score": risk_score,
+        "bias_pct": bias_pct,
+        "vol_mult": float(vol_mult),
+        "confidence_penalty": float(confidence_penalty),
+        "applied": applied,
+        "summary": summary if applied else "",
+    }
+
+
 def load_predictions(asset: str):
-    """Generate predictions for commodity (12 monthly horizons)."""
+    """Generate predictions for commodity (12 monthly horizons).
+
+    Wrapper around cached forecaster that invalidates cache daily and when
+    underlying raw data or artifact files change.
+    """
+
+    today_key = datetime.utcnow().date().isoformat()
+    raw_mtime = _cache_buster_for_raw_csv(asset)
+    pred_mtime = _cache_buster_for_artifact_predictions(asset)
+    events = load_latest_events()
+    overlay = _compute_news_overlay(asset, events)
+    return _load_predictions_cached(
+        asset,
+        today_key,
+        raw_mtime,
+        pred_mtime,
+        str(overlay.get("signature", "none")),
+        float(overlay.get("score", 0.0) or 0.0),
+        float(overlay.get("bias_pct", 0.0) or 0.0),
+        float(overlay.get("vol_mult", 1.0) or 1.0),
+        float(overlay.get("confidence_penalty", 0.0) or 0.0),
+        bool(overlay.get("applied", False)),
+        str(overlay.get("summary", "")),
+        str(overlay.get("commodity_key") or ""),
+    )
+
+
+@st.cache_data(ttl=600)
+def _load_predictions_cached(
+    asset: str,
+    _today_key: str,
+    _raw_mtime: float,
+    _pred_mtime: float,
+    _news_signature: str,
+    _news_score: float,
+    _news_bias_pct: float,
+    _news_vol_mult: float,
+    _news_conf_penalty: float,
+    _news_applied: bool,
+    _news_summary: str,
+    _news_key: str,
+):
+    """Cached forecaster. Cache is busted by `_today_key`, file mtimes, and news signature."""
     pred_files = list(ARTIFACTS_DIR.glob(f"{asset}/predictions_*.csv"))
     base_price = 1500
     
@@ -5347,25 +5622,39 @@ def load_predictions(asset: str):
         except Exception:
             pass
     
-    # Commodity forecasting: Use MONTHS not hours (standard industry practice)
-    # Use a deterministic seed: same asset + same calendar date → same 12 forecast values.
-    # This ensures the Price Forecast chart and Supabase predictions always match.
-    _today_key = datetime.utcnow().date().isoformat()
-    _seed_int = int(hashlib.md5(f"{asset}{_today_key}".encode()).hexdigest(), 16) % (2 ** 31)
+    # Commodity forecasting (monthly): deterministic seed that also responds to the latest
+    # commodity-specific news signature. This keeps forecasts stable within a given
+    # information set, but they will update when new headlines are collected.
+    seed_material = f"{asset}|{_today_key}|{_news_signature}|{_news_bias_pct:.3f}|{_news_vol_mult:.3f}"
+    _seed_int = int(hashlib.md5(seed_material.encode()).hexdigest(), 16) % (2 ** 31)
     rng = np.random.default_rng(_seed_int)
 
     predictions = {}
     horizons = get_month_horizons(12)
+    base_price_safe = float(base_price) if float(base_price) > 0 else 1.0
+    vol_mult = float(_news_vol_mult) if float(_news_vol_mult) > 0 else 1.0
+    bias_pct = float(_news_bias_pct)
+    conf_penalty = float(_news_conf_penalty)
+
+    def _bias_scale(month_idx: int) -> float:
+        if month_idx <= 3:
+            return 1.0
+        if month_idx <= 6:
+            return 0.65
+        return 0.35
+
     for i, horizon in enumerate(horizons, start=1):
         # Longer horizon = more uncertainty
-        prediction = base_price * (1 + rng.normal(0, i * 1.0/100))
-        change = rng.uniform(-5, 5) * (1 + i * 0.15)  # More volatility for longer periods
+        sigma = (i * 1.0 / 100.0) * vol_mult
+        mu = (bias_pct * _bias_scale(i)) / 100.0
+        prediction = base_price_safe * (1 + rng.normal(mu, sigma))
+        change = ((prediction - base_price_safe) / base_price_safe) * 100.0
         
         # Calculate confidence interval (wider for longer horizons)
-        uncertainty = i * 2.0  # percentage uncertainty
+        uncertainty = i * 2.0 * vol_mult  # percentage uncertainty
         lower_bound = prediction * (1 - uncertainty/100)
         upper_bound = prediction * (1 + uncertainty/100)
-        confidence = max(60, 95 - i * 2)  # Decrease confidence for longer periods
+        confidence = max(55, min(95, (95 - i * 2) - conf_penalty))  # Decrease with horizon + news risk
         
         predictions[horizon] = {
             'price': prediction,
@@ -5376,6 +5665,18 @@ def load_predictions(asset: str):
             'confidence': confidence
         }
 
+    predictions["__meta__"] = {
+        "news_overlay": {
+            "applied": bool(_news_applied),
+            "commodity_key": str(_news_key),
+            "score": float(_news_score),
+            "bias_pct": float(_news_bias_pct),
+            "vol_mult": float(_news_vol_mult),
+            "confidence_penalty": float(_news_conf_penalty),
+            "summary": str(_news_summary),
+        }
+    }
+
     # Convert ton-based series to per-kg when the market UOM is kg
     ton_assets_to_kg = (
         "polyester/polyester_usd_monthly",
@@ -5384,8 +5685,10 @@ def load_predictions(asset: str):
         "viscose/viscose_pkr_monthly",
     )
     if any(k in str(asset) for k in ton_assets_to_kg):
-        for h in list(predictions.keys()):
-            p = predictions[h]
+        for h in get_prediction_horizons(predictions):
+            p = predictions.get(h)
+            if not p:
+                continue
             p['price'] = float(p['price']) / 1000.0
             p['lower'] = float(p['lower']) / 1000.0
             p['upper'] = float(p['upper']) / 1000.0
@@ -5811,6 +6114,14 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
     # Forecast Visualization - Bar Chart and Table
     st.markdown("#### 🔮 Price Forecast & Procurement Guidance")
     st.caption("📊 Directional guidance based on historical patterns · Confidence intervals shown")
+
+    overlay = None
+    try:
+        overlay = (predictions or {}).get("__meta__", {}).get("news_overlay")
+    except Exception:
+        overlay = None
+    if overlay and overlay.get("applied") and overlay.get("summary"):
+        st.caption(f"News/geopolitical overlay applied: {overlay.get('summary')}")
     
     col1, col2 = st.columns([2, 1])
     
