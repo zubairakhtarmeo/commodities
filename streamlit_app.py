@@ -6612,6 +6612,10 @@ def _summary_apply_local_usd_conversion(*, local_payload: dict | None, usd_pkr_r
     if not usd_pkr_rate or usd_pkr_rate <= 0:
         return
 
+    # Requested: keep Cotton (Local) in PKR, not USD.
+    if "cotton" in str(local_payload.get("name", "")).lower():
+        return
+
     base_scale = 1.0 / float(usd_pkr_rate)
     cur = str(local_payload["info"].get("currency", ""))
 
@@ -7178,7 +7182,7 @@ def render_executive_summary():
     """Executive Summary - Commodity-by-commodity comparison (International vs Local)."""
     # Team request: show Local column in USD (USDT-equivalent) on Summary page.
     show_local_in_usd = True
-    local_ccy_label = "USD" if show_local_in_usd else "PKR"
+    local_ccy_label = "USD (Cotton shown in PKR)" if show_local_in_usd else "PKR"
 
     st.markdown(f"""
     <div style='border-left: 4px solid #2563eb; padding-left: 1rem; margin: 1rem 0 1.25rem 0;'>
@@ -7256,7 +7260,9 @@ def render_executive_summary():
             "implied_from_gas": "derived from Natural Gas USD vs PKR",
             "default": "default",
         }.get(usd_pkr_source, usd_pkr_source)
-        st.caption(f"Local column shown in USD using USD/PKR = {usd_pkr_rate:,.2f} ({label}).")
+        st.caption(
+            f"Local column shown in USD using USD/PKR = {usd_pkr_rate:,.2f} ({label}). Cotton remains in PKR."
+        )
     
     # Helper function to render commodity chart and table
     def render_empty_card(message: str):
@@ -7507,8 +7513,10 @@ def render_executive_summary():
         _summary_force_usd_per_kg(int_payload)
         _summary_force_usd_per_kg(local_payload)
 
-        # Convert Local column display to USD (USDT-equivalent) for Summary page
-        if show_local_in_usd and local_payload and usd_pkr_rate and usd_pkr_rate > 0:
+        # Convert Local column display to USD (USDT-equivalent) for Summary page.
+        # Exception: keep Cotton (Local) in PKR as requested.
+        is_local_cotton = bool(local_payload and "cotton" in str(local_payload.get("name", "")).lower())
+        if show_local_in_usd and (not is_local_cotton) and local_payload and usd_pkr_rate and usd_pkr_rate > 0:
             base_scale = 1.0 / float(usd_pkr_rate)
             cur = str(local_payload["info"].get("currency", ""))
 
@@ -7593,17 +7601,34 @@ def render_executive_summary():
 
         with col_local:
             if item["local_name"]:
-                st.markdown("""
-                <div style='background: linear-gradient(135deg, #047857 0%, #059669 100%); 
-                            padding: 0.75rem; 
-                            border-radius: 6px; 
-                            margin-bottom: 1rem;
-                            text-align: center;'>
-                    <p style='color: white; font-size: 0.95rem; font-weight: 800; margin: 0;'>
-                        🇵🇰 PAKISTAN LOCAL (USD)
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
+                local_payload = item.get("local_payload")
+                local_cfg = LOCAL_COMMODITIES.get(item["local_name"], {}) if item.get("local_name") else {}
+                local_cur = ""
+                try:
+                    local_cur = str(
+                        (local_payload or {}).get("display_currency")
+                        or (local_payload or {}).get("info", {}).get("currency")
+                        or local_cfg.get("currency")
+                        or ""
+                    )
+                except Exception:
+                    local_cur = str(local_cfg.get("currency") or "")
+
+                local_ccy = "PKR" if "PKR" in local_cur.upper() else "USD"
+                st.markdown(
+                    f"""
+                    <div style='background: linear-gradient(135deg, #047857 0%, #059669 100%); 
+                                padding: 0.75rem; 
+                                border-radius: 6px; 
+                                margin-bottom: 1rem;
+                                text-align: center;'>
+                        <p style='color: white; font-size: 0.95rem; font-weight: 800; margin: 0;'>
+                            🇵🇰 PAKISTAN LOCAL ({local_ccy})
+                        </p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
                 render_commodity_chart(item["local_payload"], "Local")
             else:
