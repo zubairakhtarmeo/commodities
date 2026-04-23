@@ -38,6 +38,264 @@ def _styler_apply_elementwise(styler, func, subset=None):
     return styler.applymap(func, subset=subset)
 
 
+@st.cache_data(ttl=600)
+def _load_purchases_cotton_lines() -> pd.DataFrame:
+    """Load cotton purchase lines (local file) for country-wise cotton analytics."""
+    p = Path("data") / "processed" / "purchases_clean" / "purchases_cotton.csv"
+    if not p.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(p)
+        if "grn_date" in df.columns:
+            df["grn_date"] = pd.to_datetime(df["grn_date"], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _normalize_cotton_name(name: str) -> str:
+    s = str(name or "").upper().strip()
+    # Focus on the descriptor after ">>" when present
+    if ">>" in s:
+        s = s.split(">>", 1)[1].strip()
+    s = (
+        s.replace("_", " ")
+        .replace("/", " ")
+        .replace("\\", " ")
+        .replace("(", " ")
+        .replace(")", " ")
+        .replace("[", " ")
+        .replace("]", " ")
+        .replace(",", " ")
+        .replace(".", " ")
+        .replace("  ", " ")
+    )
+    return " ".join(s.split())
+
+
+def _cotton_country_from_name(raw_name: str) -> str | None:
+    """Map cotton type/description -> country group (best-effort)."""
+    s = _normalize_cotton_name(raw_name)
+    if not s:
+        return None
+
+    # Most specific first (avoid overlaps like "AFRICA" vs "IVORY COAST")
+    if "GIZA" in s:
+        return "Egypt"
+    if "IVORY" in s or "COTE D IVOIRE" in s:
+        return "Ivory Coast"
+    if "WEST AFR" in s or "WESTAFR" in s or "W AFR" in s:
+        return "West Africa"
+
+    if "TURKMEN" in s:
+        return "Turkmenistan"
+    if "TAJIK" in s:
+        return "Tajikistan"
+    if "AFGHAN" in s:
+        return "Afghanistan"
+    if "MOZAMBI" in s:
+        return "Mozambique"
+    if "UGANDA" in s:
+        return "Uganda"
+    if "GREEK" in s or "GREECE" in s:
+        return "Greece"
+
+    if "SUDAN" in s:
+        return "Sudan"
+    if "TANZ" in s:
+        return "Tanzania"
+    if "MEX" in s or "MEXICO" in s:
+        return "Mexico"
+
+    if "TURK" in s:
+        return "Turkey"
+    if "ARGENT" in s:
+        return "Argentina"
+    if "BRAZIL" in s or "BRAZILIAN" in s:
+        return "Brazil"
+
+    if "USA" in s or "MEMPHIS" in s or "SJV" in s or "PIMA" in s or "EMOT" in s or "US " in f" {s} ":
+        return "USA"
+    if "PAK" in s or "PAKISTAN" in s or "BALOCH" in s or "BALOCHI" in s:
+        return "Pakistan"
+
+    # Fall back to None: caller can drop or group as Other
+    return None
+
+
+def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pkr_rate: float | None, key_prefix: str) -> None:
+    """Executive Summary (Cotton only): Country-wise cotton prices from procurement lines."""
+    df = _load_purchases_cotton_lines()
+    if df is None or df.empty:
+        st.info("🌍 Country-wise Cotton Prices: purchase-line data not available in this deployment.")
+        return
+
+    # Use existing FX logic from the Summary page; keep this section USD by default.
+    fx = float(usd_pkr_rate) if usd_pkr_rate and usd_pkr_rate > 0 else 280.0
+
+    unit_col = "unit_price" if "unit_price" in df.columns else ("rate" if "rate" in df.columns else None)
+    if not unit_col:
+        st.info("🌍 Country-wise Cotton Prices: missing price column in purchase data.")
+        return
+
+    work = df.copy()
+    work["country"] = work.get("description", "").map(_cotton_country_from_name)
+    work[unit_col] = pd.to_numeric(work[unit_col], errors="coerce")
+    work = work.dropna(subset=["country", unit_col])
+    work = work[work[unit_col] > 0]
+
+    if "grn_date" in work.columns:
+        work["month"] = pd.to_datetime(work["grn_date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+    else:
+        work["month"] = pd.NaT
+
+    # Compute current (latest month) and prior-month averages per country in PKR/kg, then convert to USD/lb.
+    monthly = (
+        work.dropna(subset=["month"])
+        .groupby(["country", "month"], as_index=False)[unit_col]
+        .mean()
+        .rename(columns={unit_col: "avg_pkr_per_kg"})
+        .sort_values(["country", "month"])
+    )
+    if monthly.empty:
+        st.info("🌍 Country-wise Cotton Prices: not enough dated purchase lines to compute trends.")
+        return
+
+    # Latest month per country
+    latest = monthly.groupby("country", as_index=False).tail(1).rename(columns={"month": "latest_month"})
+    prev = monthly.groupby("country", as_index=False).nth(-2).reset_index(drop=True).rename(
+        columns={"month": "prev_month", "avg_pkr_per_kg": "prev_avg_pkr_per_kg"}
+    )
+    merged = latest.merge(prev[["country", "prev_month", "prev_avg_pkr_per_kg"]], on="country", how="left")
+
+    # Convert PKR/kg -> USD/lb
+    kg_to_lb = 2.20462262185
+    merged["avg_usd_per_lb"] = merged["avg_pkr_per_kg"] / fx / kg_to_lb
+    merged["trend_pct"] = np.where(
+        merged["prev_avg_pkr_per_kg"].notna() & (merged["prev_avg_pkr_per_kg"] > 0),
+        (merged["avg_pkr_per_kg"] - merged["prev_avg_pkr_per_kg"]) / merged["prev_avg_pkr_per_kg"] * 100.0,
+        np.nan,
+    )
+
+    # Forecast alignment: reuse existing Cotton (International) ML prediction as a multiplier.
+    mult = 1.0
+    try:
+        if cotton_int_payload and cotton_int_payload.get("predictions") and cotton_int_payload.get("current_price"):
+            scale = float(cotton_int_payload.get("display_scale", 1.0) or 1.0)
+            cur_int = float(cotton_int_payload["current_price"]) * scale
+            pred_1m = get_prediction_by_index(cotton_int_payload["predictions"], 1) or {}
+            pred_int = float(pred_1m.get("price", cur_int)) * scale
+            if cur_int > 0 and pred_int > 0:
+                mult = pred_int / cur_int
+    except Exception:
+        mult = 1.0
+
+    merged["forecast_usd_per_lb"] = merged["avg_usd_per_lb"] * float(mult)
+
+    # ---- UI (Cotton-only, modular) ----
+    st.markdown(
+        """
+        <div style='background: linear-gradient(135deg, #0b1220 0%, #1f2937 100%);
+                    padding: 0.75rem 1rem;
+                    border-radius: 8px;
+                    margin: 0.75rem 0 0.75rem 0;'>
+            <h4 style='color: #e5e7eb; font-size: 1.05rem; font-weight: 900; margin: 0; letter-spacing: 0.2px;'>
+                🌍 Country-wise Cotton Prices
+            </h4>
+            <p style='color: #cbd5e1; font-size: 0.85rem; font-weight: 650; margin: 0.25rem 0 0 0;'>
+                Aggregated from purchase-line cotton types, mapped to countries, shown in USD/lb.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Bar chart: Country vs current avg price
+    chart_df = merged[["country", "avg_usd_per_lb"]].dropna().sort_values("avg_usd_per_lb", ascending=False)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=chart_df["country"],
+            y=chart_df["avg_usd_per_lb"],
+            marker_color="#2563eb",
+            text=chart_df["avg_usd_per_lb"],
+            texttemplate="%{text:.3f}",
+            textposition="outside",
+            textfont=dict(size=10, family="IBM Plex Mono", color="#0f172a"),
+            showlegend=False,
+        )
+    )
+    fig.update_layout(
+        height=320,
+        margin=dict(l=40, r=20, t=10, b=70),
+        plot_bgcolor="#fafafa",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(tickfont=dict(size=10, family="Inter", color="#0f172a", weight=700), tickangle=-25, showgrid=False),
+        yaxis=dict(
+            title=dict(text="<b>USD/lb</b>", font=dict(size=11, family="Inter", weight=800, color="#1e40af")),
+            tickfont=dict(size=10, family="IBM Plex Mono", color="#334155", weight=600),
+            gridcolor="#e2e8f0",
+            showgrid=True,
+            showline=True,
+            linewidth=2,
+            linecolor="#cbd5e1",
+        ),
+    )
+    fig.update_traces(cliponaxis=False)
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_country_cotton_bar")
+
+    # Table: Country | Avg Price | Trend | Forecast
+    def _trend_label(v):
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return ""
+        arrow = "↑" if v >= 0 else "↓"
+        return f"{arrow} {abs(float(v)):.1f}%"
+
+    table = pd.DataFrame(
+        {
+            "Country": merged["country"],
+            "Avg Price (USD/lb)": merged["avg_usd_per_lb"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else ""),
+            "Trend": merged["trend_pct"].map(_trend_label),
+            "Forecast (1M, USD/lb)": merged["forecast_usd_per_lb"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else ""),
+        }
+    ).sort_values("Avg Price (USD/lb)", ascending=False)
+
+    def _chg_style(val):
+        if not isinstance(val, str) or not val:
+            return ""
+        if "↑" in val:
+            return "background-color: #dcfce7; color: #166534; font-weight: 800;"
+        if "↓" in val:
+            return "background-color: #fee2e2; color: #991b1b; font-weight: 800;"
+        return ""
+
+    styled = (
+        table.style
+        .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
+        .set_properties(**{"text-align": "left"}, subset=["Country"])
+        .set_properties(**{"text-align": "right", "font-family": "IBM Plex Mono"}, subset=["Avg Price (USD/lb)", "Forecast (1M, USD/lb)"])
+        .pipe(lambda s: _styler_apply_elementwise(s, _chg_style, subset=["Trend"]))
+        .set_table_styles(
+            [
+                {
+                    "selector": "thead th",
+                    "props": [
+                        ("background-color", "#0b1220"),
+                        ("color", "#e5e7eb"),
+                        ("font-weight", "900"),
+                        ("text-transform", "uppercase"),
+                        ("letter-spacing", "0.08em"),
+                        ("font-size", "0.75rem"),
+                        ("padding", "10px 12px"),
+                    ],
+                },
+                {"selector": "tbody tr:hover", "props": [("background-color", "#eff6ff")]},
+            ]
+        )
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
+
+
 def _get_streamlit_secret(key: str) -> Optional[str]:
     """Read a secret from Streamlit secrets or environment variables."""
     import os
@@ -7645,6 +7903,14 @@ def render_executive_summary():
                 render_empty_card("No Local Market Data")
 
         st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
+
+        # Cotton-only enhancement: Country-wise cotton prices (modular, does not alter existing charts)
+        if str(item.get("int_name", "")).strip().lower() == "cotton":
+            _render_countrywise_cotton_prices(
+                cotton_int_payload=item.get("int_payload"),
+                usd_pkr_rate=usd_pkr_rate,
+                key_prefix="summary_cotton",
+            )
 
     # Replace forecast tables with Pakistan-market forecasts (requested by team lead)
     st.markdown("---")
