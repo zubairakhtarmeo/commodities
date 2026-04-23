@@ -19,6 +19,9 @@ import importlib.util
 # Add scripts directory to path for imports
 sys.path.append(str(Path(__file__).parent / "scripts"))
 
+if not hasattr(pd.io.formats.style.Styler, "applymap") and hasattr(pd.io.formats.style.Styler, "map"):
+    pd.io.formats.style.Styler.applymap = pd.io.formats.style.Styler.map
+
 ARTIFACTS_DIR = Path("artifacts")
 RAW_DATA_DIR = Path("data/raw")
 EVENTS_DIR = Path("data/events")
@@ -26,6 +29,13 @@ EVENTS_DIR = Path("data/events")
 # API Configuration
 USD_PKR_API = "https://open.er-api.com/v6/latest/USD"  # Free, no API key needed
 BACKUP_USD_PKR_API = "https://api.exchangerate-api.com/v4/latest/USD"
+
+
+def _styler_apply_elementwise(styler, func, subset=None):
+    """Compat wrapper for pandas Styler elementwise styling across versions."""
+    if hasattr(styler, "map"):
+        return styler.map(func, subset=subset)
+    return styler.applymap(func, subset=subset)
 
 
 def _get_streamlit_secret(key: str) -> Optional[str]:
@@ -871,7 +881,7 @@ def render_quarterly_purchasing_forecast(*, key_prefix: str = "purch_forecast") 
                 return ""
 
             styled_summary = (
-                summary_df.style.applymap(color_forecast_change, subset=["Change"])
+                _styler_apply_elementwise(summary_df.style, color_forecast_change, subset=["Change"])
                 .set_properties(
                     **{"text-align": "right", "font-size": "0.9rem"},
                     subset=["Avg Historical", "Avg Forecast", "Change"],
@@ -5301,7 +5311,7 @@ def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictio
                     return ''
             return ''
 
-        styled_df = forecast_df.style.applymap(color_change, subset=['Change']).set_properties(**{
+        styled_df = _styler_apply_elementwise(forecast_df.style, color_change, subset=['Change']).set_properties(**{
             'text-align': 'center',
             'font-size': '12px',
             'font-family': 'Arial, sans-serif',
@@ -6149,7 +6159,7 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
             return ''
         
         # Style the dataframe professionally
-        styled_df = forecast_df.style.applymap(color_change, subset=['Change']).set_properties(**{
+        styled_df = _styler_apply_elementwise(forecast_df.style, color_change, subset=['Change']).set_properties(**{
             'text-align': 'center',
             'font-size': '12px',
             'font-family': 'Arial, sans-serif',
@@ -6463,8 +6473,8 @@ def render_overview_tab(commodities_data: dict, title: str):
                                     pass
                             return ''
                         
-                        styled_summary = summary_df.style.applymap(
-                            color_forecast_change, subset=['Change']
+                        styled_summary = _styler_apply_elementwise(
+                            summary_df.style, color_forecast_change, subset=['Change']
                         ).set_properties(**{
                             'text-align': 'right',
                             'font-size': '0.9rem'
@@ -6847,7 +6857,7 @@ def main():
                     return ''
                 
                 # Style the dataframe professionally
-                styled_df = forecast_df.style.applymap(color_change, subset=['Change']).set_properties(**{
+                styled_df = _styler_apply_elementwise(forecast_df.style, color_change, subset=['Change']).set_properties(**{
                     'text-align': 'center',
                     'font-size': '12px',
                     'font-family': 'Arial, sans-serif',
@@ -6911,7 +6921,7 @@ def main():
                     return ''
                 
                 # Style the dataframe professionally
-                styled_df = forecast_df.style.applymap(color_change, subset=['Change']).set_properties(**{
+                styled_df = _styler_apply_elementwise(forecast_df.style, color_change, subset=['Change']).set_properties(**{
                     'text-align': 'center',
                     'font-size': '12px',
                     'font-family': 'Arial, sans-serif',
@@ -7114,8 +7124,8 @@ def main():
                                         return 'background-color: #fed7aa; color: #9a3412; font-weight: bold'
                                 return ''
                             
-                            styled_summary = summary_df.style.applymap(
-                                color_forecast_change, subset=['Change']
+                            styled_summary = _styler_apply_elementwise(
+                                summary_df.style, color_forecast_change, subset=['Change']
                             ).set_properties(**{
                                 'text-align': 'right',
                                 'font-size': '0.9rem'
