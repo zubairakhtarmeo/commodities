@@ -11,3 +11,4 @@ streamlit>=1.31
 plotly>=5.18
 openpyxl>=3.1
 xlsxwriter>=3.1
+supabase>=2.3.0
