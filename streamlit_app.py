@@ -17,10 +17,16 @@ import sys
 import importlib.util
 
 # Add scripts directory to path for imports
-sys.path.append(str(Path(__file__).parent / "scripts"))
+sys.path.append(str(Path(__file__).parent / "src"))
 
-if not hasattr(pd.io.formats.style.Styler, "applymap") and hasattr(pd.io.formats.style.Styler, "map"):
-    pd.io.formats.style.Styler.applymap = pd.io.formats.style.Styler.map
+from processing.units import ton_to_kg, kg_to_ton_price, LB_PER_MAUND, KG_PER_TON
+
+try:
+    from pandas.io.formats.style import Styler
+    if not hasattr(Styler, "applymap") and hasattr(Styler, "map"):
+        Styler.applymap = Styler.map
+except ImportError:
+    pass
 
 ARTIFACTS_DIR = Path("artifacts")
 RAW_DATA_DIR = Path("data/raw")
@@ -701,9 +707,9 @@ def _auto_fill_actuals_in_supabase() -> None:
                 _supabase_rest_url(base_url, "commodity_prices"),
                 headers=_supabase_headers(key),
                 params={
-                    "select": "timestamp,value",
-                    "asset_path": f"ilike.*{search_term}*",
-                    "order": "timestamp.asc",
+                    "select": "date,value",
+                    "commodity": f"ilike.*{search_term}*",
+                    "order": "date.asc",
                     "limit": "600",
                 },
                 timeout=30,
@@ -717,9 +723,9 @@ def _auto_fill_actuals_in_supabase() -> None:
             continue
 
         price_df = pd.DataFrame(price_rows)
-        if price_df.empty or "timestamp" not in price_df.columns:
+        if price_df.empty or "date" not in price_df.columns:
             continue
-        price_df["timestamp"] = pd.to_datetime(price_df["timestamp"], errors="coerce")
+        price_df["timestamp"] = pd.to_datetime(price_df["date"], errors="coerce")
         price_df["value"] = pd.to_numeric(price_df["value"], errors="coerce")
         price_df = price_df.dropna(subset=["timestamp", "value"]).sort_values("timestamp")
 
@@ -865,23 +871,28 @@ def supabase_fetch_commodity_series(asset_path: str, limit: int = 600) -> pd.Dat
     """Fetch commodity time series from Supabase if available.
 
     Expects a table named `commodity_prices` with columns:
-    - asset_path (text)
-    - timestamp (date or timestamptz)
+    - commodity (text)
+    - date (date or timestamptz)
     - value (numeric)
     Optional: currency (text), source (text)
     """
     try:
+        # derive commodity name from asset path
+        # typically: "cotton/cotton_usd_monthly" -> "cotton_usd"
+        commodity_key = str(asset_path).split("/")[-1].replace("_monthly_clean", "").replace("_monthly", "")
+        
         rows = supabase_rest_select(
             table="commodity_prices",
-            select="timestamp,value",
-            eq_filters={"asset_path": asset_path},
-            order="timestamp.asc",
+            select="date,value",
+            eq_filters={"commodity": commodity_key},
+            order="date.asc",
             limit=int(limit),
         )
         df = pd.DataFrame(rows)
         if df.empty:
             return df
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        # map back to common timestamp column for the app to consume
+        df["timestamp"] = pd.to_datetime(df["date"], errors="coerce")
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
         df = df.dropna(subset=["timestamp", "value"]).sort_values("timestamp")
         return df
@@ -1035,7 +1046,7 @@ def render_quarterly_purchasing_forecast(*, key_prefix: str = "purch_forecast") 
             forecast_df = None
             combined_df = pivot_df
 
-        display_df = combined_df / 1000.0  # kg -> tonnes
+        display_df = ton_to_kg_qty(combined_df)
         display_df.index = display_df.index.astype(str)
 
         col1, col2 = st.columns([3, 2])
@@ -1920,7 +1931,7 @@ def _load_commodity_data_cached(asset_path: str, currency: str, _raw_mtime: floa
             if value_col and len(df) > 0:
                 # If the configured unit is per-kg but the underlying series is per-ton, convert values.
                 if want_per_kg and any(k in str(asset_path) for k in ton_assets_to_kg):
-                    df[value_col] = pd.to_numeric(df[value_col], errors="coerce") / 1000.0
+                    df[value_col] = ton_to_kg(pd.to_numeric(df[value_col], errors="coerce"))
 
                 latest_price = float(df[value_col].iloc[-1])
                 prev_price = float(df[value_col].iloc[-2]) if len(df) > 1 else latest_price
@@ -1947,7 +1958,7 @@ def _load_commodity_data_cached(asset_path: str, currency: str, _raw_mtime: floa
     if sb_df is not None and not sb_df.empty:
         if want_per_kg and any(k in str(asset_path) for k in ton_assets_to_kg):
             sb_df = sb_df.copy()
-            sb_df["value"] = pd.to_numeric(sb_df["value"], errors="coerce") / 1000.0
+            sb_df["value"] = ton_to_kg(pd.to_numeric(sb_df["value"], errors="coerce"))
         latest_price = float(sb_df["value"].iloc[-1])
         prev_price = float(sb_df["value"].iloc[-2]) if len(sb_df) > 1 else latest_price
         price_change = ((latest_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0.0
@@ -2670,9 +2681,9 @@ def render_call_put_hedge_advisor(
             except Exception:
                 return "—"
             if q >= 10000:
-                return f"{q/1000.0:,.0f} t"
+                return f"{kg_to_ton(q):,.0f} t"
             if q >= 1000:
-                return f"{q/1000.0:,.1f} t"
+                return f"{kg_to_ton(q):,.1f} t"
             return f"{q:,.0f} kg"
 
         # Purchase history sizing (with intelligent fallbacks for non-purchased commodities)
@@ -4110,9 +4121,9 @@ def render_integrated_strategy_engine(
             except Exception:
                 return "—"
             if q >= 10000:
-                return f"{q/1000.0:,.0f} t"
+                return f"{kg_to_ton(q):,.0f} t"
             if q >= 1000:
-                return f"{q/1000.0:,.1f} t"
+                return f"{kg_to_ton(q):,.1f} t"
             return f"{q:,.0f} kg"
 
         purchase_ctx: dict[str, dict] = {}
@@ -5550,6 +5561,19 @@ def _render_pakistan_forecast_chart_table(*, title: str, caption: str, predictio
     col1, col2 = st.columns([2, 1])
     with col1:
         st.plotly_chart(create_forecast_bar_chart(predictions, currency), use_container_width=True, key=f"{key_prefix}_chart")
+        
+        if not predictions:
+            st.warning("⚠️ No ML forecast available.")
+        else:
+             demo_mode = st.session_state.get("demo_mode_forecast", False)
+             source = "Demo" if demo_mode else "ML"
+             model_name = "Unknown"
+             for h in predictions:
+                 if predictions[h].get("model"):
+                     model_name = predictions[h]["model"]
+                     break
+             st.caption(f"Forecast Source: {source} | Model: {model_name}")
+             
     with col2:
         forecast_df = create_forecast_table(predictions, currency)
 
@@ -5790,12 +5814,40 @@ def _compute_news_overlay(asset: str, events: dict) -> dict:
     }
 
 
+def check_data_freshness(supabase_client):
+    """Returns dict of {commodity: days_since_update}"""
+    if not supabase_client:
+        return {}
+        
+    try:
+        result = supabase_client.table("commodity_prices")\
+            .select("commodity, created_at")\
+            .order("created_at", desc=True)\
+            .execute()
+
+        freshness = {}
+        seen = set()
+        for row in result.data:
+            c = row["commodity"]
+            if c not in seen:
+                days = (
+                    pd.Timestamp.now(tz="UTC") -
+                    pd.to_datetime(row["created_at"])
+                ).days
+                freshness[c] = days
+                seen.add(c)
+        return freshness
+    except Exception:
+        return {}
+
 def load_predictions(asset: str):
     """Generate predictions for commodity (12 monthly horizons).
 
     Wrapper around cached forecaster that invalidates cache daily and when
     underlying raw data or artifact files change.
     """
+
+    demo_mode = st.session_state.get("demo_mode_forecast", False)
 
     today_key = datetime.utcnow().date().isoformat()
     raw_mtime = _cache_buster_for_raw_csv(asset)
@@ -5815,6 +5867,7 @@ def load_predictions(asset: str):
         bool(overlay.get("applied", False)),
         str(overlay.get("summary", "")),
         str(overlay.get("commodity_key") or ""),
+        bool(demo_mode),
     )
 
 
@@ -5832,8 +5885,61 @@ def _load_predictions_cached(
     _news_applied: bool,
     _news_summary: str,
     _news_key: str,
+    _demo_mode: bool = False,
 ):
     """Cached forecaster. Cache is busted by `_today_key`, file mtimes, and news signature."""
+
+    if not _demo_mode:
+        cfg = get_supabase_config()
+        if cfg:
+            base_url, key = cfg
+            endpoint = f"{base_url}/rest/v1/prediction_records"
+            headers = _supabase_headers(key)
+            commodity_key = str(asset).split("/")[-1].replace("_monthly_clean", "").replace("_monthly", "")
+            try:
+                resp = requests.get(
+                    endpoint,
+                    headers=headers,
+                    params={
+                        "commodity": f"eq.{commodity_key}",
+                        "order": "target_date.asc",
+                    },
+                    timeout=10
+                )
+                if resp.ok:
+                    data = resp.json()
+                    if data:
+                        predictions = {}
+                        horizons_list = get_month_horizons(12)
+                        for row in data:
+                            dt = pd.to_datetime(row["target_date"])
+                            lbl = dt.strftime("%B %Y")
+                            # We keep the original logic 'price', 'lower', 'upper'
+                            predictions[lbl] = {
+                                "price": float(row["predicted_value"]),
+                                "lower": float(row.get("lower_bound") or row["predicted_value"]),
+                                "upper": float(row.get("upper_bound") or row["predicted_value"]),
+                                "model": row.get("model_name"),
+                            }
+                        
+                        # Pad missing months linearly/forward fill so Streamlit charts don't break indexing
+                        if predictions:
+                            filled = {}
+                            last_known = None
+                            for h in horizons_list:
+                                if h in predictions:
+                                    last_known = predictions[h]
+                                    filled[h] = last_known
+                                elif last_known is not None:
+                                    filled[h] = last_known
+                                else:
+                                    # Base case if the very first month is missing
+                                    filled[h] = list(predictions.values())[0] if predictions else {}
+                            return filled
+            except Exception:
+                pass
+        return {} # Empty dict triggers standard 'No data yet' behavior in UI
+
     pred_files = list(ARTIFACTS_DIR.glob(f"{asset}/predictions_*.csv"))
     base_price = 1500
     
@@ -5957,9 +6063,9 @@ def _load_predictions_cached(
             p = predictions.get(h)
             if not p:
                 continue
-            p['price'] = float(p['price']) / 1000.0
-            p['lower'] = float(p['lower']) / 1000.0
-            p['upper'] = float(p['upper']) / 1000.0
+            p['price'] = ton_to_kg(float(p['price']))
+            p['lower'] = ton_to_kg(float(p['lower']))
+            p['upper'] = ton_to_kg(float(p['upper']))
 
     return predictions
 
@@ -6622,7 +6728,7 @@ def render_overview_tab(commodities_data: dict, title: str):
                         combined_df = pivot_df
                     
                     # Convert to tonnes and format
-                    display_df = combined_df / 1000.0  # kg to tonnes
+                    display_df = ton_to_kg_qty(combined_df)
                     display_df.index = display_df.index.astype(str)
                     
                     # Create visualization
@@ -6863,7 +6969,7 @@ def _summary_force_usd_per_kg(p: dict | None) -> None:
 
     # If current unit is /ton, convert to /kg
     if "/ton" in cur_lower:
-        uom_scale *= 1.0 / 1000.0
+        uom_scale *= 1.0 / KG_PER_TON
         cur = cur.replace("/ton", "/kg").replace("/TON", "/kg").replace("/Ton", "/kg")
 
     # Ensure USD prefix (for Summary consistency)
@@ -6895,14 +7001,14 @@ def _summary_apply_local_usd_conversion(*, local_payload: dict | None, usd_pkr_r
     cur_lower = cur.lower()
 
     if "cotton" in str(local_payload.get("name", "")).lower() and "/maund" in cur_lower:
-        maund_lb = 40.0 * 2.20462262185
+        maund_lb = LB_PER_MAUND
         uom_scale = 1.0 / maund_lb
         cur_uom = cur_uom.replace("/maund", "/lb").replace("/MAUND", "/lb").replace("/Maund", "/lb")
     elif (
         "polyester" in str(local_payload.get("name", "")).lower()
         or "viscose" in str(local_payload.get("name", "")).lower()
     ) and "/ton" in cur_lower:
-        uom_scale = 1.0 / 1000.0
+        uom_scale = 1.0 / KG_PER_TON
         cur_uom = cur_uom.replace("/ton", "/kg").replace("/TON", "/kg").replace("/Ton", "/kg")
 
     cur_usd = cur_uom.replace("PKR", "USD", 1) if "PKR" in cur_uom else f"USD ({cur_uom})"
@@ -6979,6 +7085,29 @@ def get_critical_alerts(events: dict) -> list:
 
 def main():
     """Main application with 3-page structure."""
+
+    with st.sidebar:
+        st.title("Settings")
+        st.session_state["demo_mode_forecast"] = st.toggle("Demo Forecast Mode", value=False)
+        
+        cfg = get_supabase_config()
+        if cfg:
+            import toml
+            from supabase import create_client
+            # Minimal client init
+            base_url, key = cfg
+            supa_client = create_client(base_url, key)
+            with st.expander("🔄 Data Freshness", expanded=False):
+                freshness = check_data_freshness(supa_client)
+                if not freshness:
+                    st.info("No data yet.")
+                for commodity, days in freshness.items():
+                    if days <= 7:
+                        st.success(f"{commodity}: {days}d ago")
+                    elif days <= 30:
+                        st.warning(f"{commodity}: {days}d ago")
+                    else:
+                        st.error(f"{commodity}: {days}d ago — STALE")
 
     # Auto-sync predictions to Supabase on every open/refresh (silent, once per session)
     # Placed here (inside main) so all helpers like load_predictions() are already defined.
@@ -7272,7 +7401,7 @@ def main():
                             combined_df = pivot_df
                         
                         # Convert to tonnes and format
-                        display_df = combined_df / 1000.0  # kg to tonnes
+                        display_df = ton_to_kg_qty(combined_df)
                         display_df.index = display_df.index.astype(str)
                         
                         # Create visualization
@@ -7659,6 +7788,22 @@ def render_executive_summary():
 
         st.plotly_chart(fig, use_container_width=True, key=f"chart_{market_type}_{payload['name'].replace(' ', '_')}")
 
+        if not payload.get("predictions"):
+             st.warning("⚠️ No ML forecast available.")
+        else:
+             demo_mode = st.session_state.get("demo_mode_forecast", False)
+             source = "Demo" if demo_mode else "ML"
+             
+             # Fetch the model from the first available prediction
+             model_name = "Unknown"
+             for h in horizons:
+                 pred = payload["predictions"].get(h)
+                 if pred and pred.get("model"):
+                     model_name = pred["model"]
+                     break
+                     
+             st.caption(f"Forecast Source: {source} | Model: {model_name}")
+
     def render_commodity_table(payload, market_type: str):
         if payload is None:
             render_empty_card("No data available")
@@ -7768,7 +7913,7 @@ def render_executive_summary():
 
             # If current unit is /ton, convert to /kg
             if "/ton" in cur_lower:
-                uom_scale *= 1.0 / 1000.0
+                uom_scale *= 1.0 / KG_PER_TON
                 cur = cur.replace("/ton", "/kg").replace("/TON", "/kg").replace("/Ton", "/kg")
 
             # Ensure USD prefix (for Summary consistency)
@@ -7797,11 +7942,11 @@ def render_executive_summary():
 
             # Cotton special-case: maund -> lb
             if "cotton" in str(local_payload.get("name", "")).lower() and "/maund" in cur_lower:
-                maund_lb = 40.0 * 2.20462262185
+                maund_lb = LB_PER_MAUND
                 uom_scale = 1.0 / maund_lb
                 cur_uom = cur_uom.replace("/maund", "/lb").replace("/MAUND", "/lb").replace("/Maund", "/lb")
             elif ("polyester" in str(local_payload.get("name", "")).lower() or "viscose" in str(local_payload.get("name", "")).lower()) and "/ton" in cur_lower:
-                uom_scale = 1.0 / 1000.0
+                uom_scale = 1.0 / KG_PER_TON
                 cur_uom = cur_uom.replace("/ton", "/kg").replace("/TON", "/kg").replace("/Ton", "/kg")
 
             # Preserve unit after '/', only replace the currency prefix.

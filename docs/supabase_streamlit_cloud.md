@@ -19,6 +19,8 @@ create table if not exists prediction_records (
   as_of_date date not null,
   target_date date not null,
   predicted_value numeric not null,
+  lower_bound numeric null,
+  upper_bound numeric null,
   actual_value numeric null,
   unit text null,
   model_name text not null default 'default',

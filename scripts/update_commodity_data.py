@@ -2,6 +2,8 @@
 Live Commodity Data Updater
 Safely fetches and updates commodity prices from free APIs
 """
+import os
+import sys
 import pandas as pd
 import requests
 import time
@@ -16,8 +18,54 @@ BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data" / "raw"
 BACKUP_DIR = BASE_DIR / "data" / "backups"
 
+# Ensure repo src/ is importable for shared processing utilities
+sys.path.insert(0, str(BASE_DIR / "src"))
+
+from processing.units import (
+    LB_PER_MAUND,
+    KG_PER_TON,
+    get_unit,
+    lb_to_maund,
+    rmb_to_usd,
+    ton_to_kg,
+    usd_to_pkr,
+)
+from processing.validation import validate_dataframe
+
+# Viscose source selection:
+# - "sunsirs": fetch real daily RMB/ton series and aggregate to monthly
+# - "supabase": load last known real monthly values from Supabase (no extrapolation)
+# - "manual": raise an explicit error (manual upload required)
+VISCOSE_SOURCE = "manual"  # "sunsirs" | "supabase" | "manual"
+
 # Ensure backup directory exists
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+class DataSourceUnavailableError(RuntimeError):
+    pass
+
+
+def _validate_or_raise(df: pd.DataFrame, *, commodity_key: str, expected_unit: str) -> None:
+    """Validate a dataframe and raise on hard failures.
+
+    Logs warnings to console; errors raise RuntimeError.
+    """
+    if df is None or df.empty:
+        raise DataSourceUnavailableError(f"{commodity_key}: no data returned ({expected_unit})")
+
+    if "timestamp" not in df.columns:
+        raise RuntimeError(f"{commodity_key}: missing timestamp column")
+
+    tmp = df.copy()
+    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+    tmp = tmp.dropna(subset=["timestamp"]).set_index("timestamp").sort_index()
+
+    res = validate_dataframe(tmp, commodity_key, expected_unit)
+    for w in res.warnings:
+        print(f"⚠️  {w}")
+    if not res.passed:
+        raise RuntimeError("; ".join(res.errors))
 
 
 def backup_file(file_path):
@@ -72,11 +120,10 @@ def fetch_cotton_pkr(cotton_usd_df, usd_pkr_rate):
         print("✗ No USD data available")
         return None
     
-    # Conversion factors
-    LB_TO_MAUND = 37.3242  # 1 maund = 37.3242 lbs
+    # Standard maund conversion: 1 maund = 40 kg = 88.1849 lb (see processing.units.LB_PER_MAUND)
     
     df = cotton_usd_df.copy()
-    df['price_pkr'] = df['price_usd'] * usd_pkr_rate * LB_TO_MAUND
+    df['price_pkr'] = lb_to_maund(usd_to_pkr(df['price_usd'], usd_pkr_rate))
     df = df[['timestamp', 'price_pkr']]
     
     print(f"✓ Converted {len(df)} records to PKR")
@@ -306,57 +353,15 @@ def fetch_viscose_prices():
     """
     print("\n📊 Fetching Viscose Staple Fiber (VSF) data...")
     
-    try:
-        # Viscose prices from China market indicators (approximation based on historical trends)
-        # Since free APIs are limited, we'll create a reasonable price series based on:
-        # - Historical average: ~$1,400-1,600/ton
-        # - Recent trends: Supply chain fluctuations
-        
-        # Generate monthly data from 2020 to current
-        dates = pd.date_range(start='2020-01-01', end='2026-01-01', freq='MS')
-        
-        # Base price with trends and seasonality
-        base_price = 1500  # USD/ton baseline
-        prices = []
-        
-        for i, date in enumerate(dates):
-            # Add trend (slight increase over time)
-            trend = i * 1.5
-            
-            # Add seasonality (cyclical pattern)
-            seasonal = 50 * np.sin(i * np.pi / 6)
-            
-            # Add some volatility
-            volatility = np.random.normal(0, 30)
-            
-            # Market events adjustments
-            if date >= pd.Timestamp('2021-01-01') and date < pd.Timestamp('2022-01-01'):
-                event_adj = 150  # Post-COVID supply chain issues
-            elif date >= pd.Timestamp('2022-01-01') and date < pd.Timestamp('2023-06-01'):
-                event_adj = 100  # Continued supply pressure
-            elif date >= pd.Timestamp('2023-06-01') and date < pd.Timestamp('2024-01-01'):
-                event_adj = 50  # Gradual normalization
-            else:
-                event_adj = 0
-            
-            price = base_price + trend + seasonal + volatility + event_adj
-            prices.append(max(1000, price))  # Floor at $1000/ton
-        
-        df = pd.DataFrame({
-            'timestamp': dates,
-            'price_usd': prices
-        })
-        
-        print(f"✓ Generated {len(df)} records (market-based approximation)")
-        print(f"  Latest: {df['timestamp'].iloc[-1].strftime('%Y-%m-%d')} = ${df['price_usd'].iloc[-1]:,.2f}/ton")
-        print(f"  Note: Based on historical market patterns and industry trends")
-        
-        return df
-        
-    except Exception as e:
-        print(f"✗ Error: {e}")
-        return None
-
+    if VISCOSE_SOURCE == "manual":
+        # Missing data; user prompt says option C is raise clear error
+        raise DataSourceUnavailableError("Viscose data must be updated manually. Synthetic data generation is disabled.")
+    elif VISCOSE_SOURCE == "sunsirs":
+        raise NotImplementedError("SunSirs connector not implemented yet.")
+    elif VISCOSE_SOURCE == "supabase":
+        raise NotImplementedError("Supabase connector not implemented yet.")
+    else:
+        raise ValueError(f"Unknown VISCOSE_SOURCE: {VISCOSE_SOURCE}")
 
 def fetch_viscose_pkr(viscose_usd_df, usd_pkr_rate):
     """Convert Viscose prices to PKR per kg (local market standard)."""
@@ -367,11 +372,8 @@ def fetch_viscose_pkr(viscose_usd_df, usd_pkr_rate):
         return None
     
     # Conversion: USD/ton to PKR/kg
-    # 1 ton = 1000 kg
-    KG_PER_TON = 1000
-    
     df = viscose_usd_df.copy()
-    df['price_pkr'] = (df['price_usd'] / KG_PER_TON) * usd_pkr_rate
+    df['price_pkr'] = usd_to_pkr(ton_to_kg(df['price_usd']), usd_pkr_rate)
     df = df[['timestamp', 'price_pkr']]
     
     print(f"✓ Converted {len(df)} records to PKR")
