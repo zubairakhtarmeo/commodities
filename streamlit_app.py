@@ -6702,7 +6702,12 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
             return ''
         
         # Style the dataframe professionally
-        styled_df = _styler_apply_elementwise(forecast_df.style, color_change, subset=['Change']).set_properties(**{
+        _base_styler = (
+            _styler_apply_elementwise(forecast_df.style, color_change, subset=['Change'])
+            if 'Change' in forecast_df.columns
+            else forecast_df.style
+        )
+        styled_df = _base_styler.set_properties(**{
             'text-align': 'center',
             'font-size': '12px',
             'font-family': 'Arial, sans-serif',
