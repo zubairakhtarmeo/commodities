@@ -6398,6 +6398,146 @@ def render_pending_data_card(name: str, info: dict):
     """, unsafe_allow_html=True)
 
 
+# Maps tab name → (db_commodity_key, is_futures) for procurement signals.
+# Viscose is intentionally excluded (no prediction data).
+_INTL_SIGNAL_MAP: dict[str, tuple[str, bool]] = {
+    "Cotton": ("cotton_usd", False),
+    "Polyester": ("polyester_usd", True),
+    "Natural Gas": ("natural_gas_usd", False),
+    "Crude Oil": ("crude_oil_usd", False),
+}
+
+_LOCAL_SIGNAL_MAP: dict[str, tuple[str, bool]] = {
+    "Cotton (Local)": ("cotton_pkr", False),
+    "Polyester (Local)": ("polyester_pkr", True),
+    "Natural Gas": ("natural_gas_pkr", False),
+    "Crude Oil": ("crude_oil_pkr", False),
+}
+
+
+def render_procurement_signal(commodity_key: str, is_futures: bool = False) -> None:
+    """Render procurement signal section for a commodity after its forecast chart."""
+    from src.signals.price_signals import (
+        compute_mom_change,
+        compute_forecast_signal,
+        get_procurement_signal,
+    )
+
+    cfg = get_supabase_config()
+
+    st.divider()
+    st.subheader("📊 Procurement Signal")
+
+    mom = compute_mom_change(commodity_key, cfg)
+    current_value = mom["current_value"] if mom else None
+    forecast = compute_forecast_signal(commodity_key, 3, cfg, current_value)
+    signal_label, signal_explanation = get_procurement_signal(mom, forecast)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        price_label = "Futures Price" if is_futures else "Spot Price (MoM)"
+        if mom:
+            arrow = "📈" if mom["direction"] == "up" else (
+                "📉" if mom["direction"] == "down" else "➡️"
+            )
+            st.metric(
+                label=price_label,
+                value=f"{mom['current_value']:.4f} {mom['unit']}",
+                delta=f"{mom['change_pct']:+.2f}% {arrow}",
+            )
+            st.caption(f"vs {mom['previous_date']}")
+        else:
+            st.metric(label=price_label, value="N/A")
+            st.caption("Insufficient price history")
+
+    with col2:
+        if forecast:
+            arrow = "📈" if forecast["direction"] == "up" else (
+                "📉" if forecast["direction"] == "down" else "➡️"
+            )
+            st.metric(
+                label="3-Month Forecast",
+                value=f"{forecast['forecast_value']:.4f}",
+                delta=f"{forecast['forecast_change_pct']:+.2f}% {arrow}",
+            )
+            st.caption(
+                f"Model: {forecast['model_name']} | Target: {forecast['target_date']}"
+            )
+        else:
+            st.metric(label="3-Month Forecast", value="N/A")
+            st.caption("No ML forecast available")
+
+    with col3:
+        if signal_label == "BUY NOW":
+            st.error(f"🔴 {signal_label}")
+        elif signal_label == "WAIT":
+            st.success(f"🟢 {signal_label}")
+        elif signal_label == "MONITOR":
+            st.warning(f"🟡 {signal_label}")
+        else:
+            st.info(f"ℹ️ {signal_label}")
+        st.caption(signal_explanation)
+
+
+def render_executive_signals_table() -> None:
+    """Procurement signals summary table for Executive Summary page."""
+    from src.signals.price_signals import (
+        compute_mom_change,
+        compute_forecast_signal,
+        get_procurement_signal,
+    )
+
+    cfg = get_supabase_config()
+
+    st.subheader("🎯 Procurement Signals Summary")
+
+    _SIGNAL_COMMODITIES = [
+        {"key": "cotton_usd",      "label": "Cotton (Intl)",  "futures": False},
+        {"key": "crude_oil_usd",   "label": "Crude Oil",      "futures": False},
+        {"key": "natural_gas_usd", "label": "Natural Gas",    "futures": False},
+        {"key": "polyester_usd",   "label": "Polyester",      "futures": True},
+    ]
+
+    rows = []
+    for c in _SIGNAL_COMMODITIES:
+        mom = compute_mom_change(c["key"], cfg)
+        current_val = mom["current_value"] if mom else None
+        forecast = compute_forecast_signal(c["key"], 3, cfg, current_val)
+        signal_label, _ = get_procurement_signal(mom, forecast)
+        price_type = "Futures" if c["futures"] else "Spot"
+        rows.append({
+            "Commodity": c["label"],
+            "Price Type": price_type,
+            "Current Value": (
+                f"{mom['current_value']:.4f} {mom['unit']}" if mom else "N/A"
+            ),
+            "MoM Change": (f"{mom['change_pct']:+.2f}%" if mom else "N/A"),
+            "3M Forecast Δ": (
+                f"{forecast['forecast_change_pct']:+.2f}%" if forecast else "N/A"
+            ),
+            "Signal": signal_label,
+        })
+
+    df = pd.DataFrame(rows)
+
+    def _color_signal(val):
+        if val == "BUY NOW":
+            return "background-color: #fee2e2; color: #991b1b"
+        elif val == "WAIT":
+            return "background-color: #dcfce7; color: #166534"
+        elif val == "MONITOR":
+            return "background-color: #fef9c3; color: #854d0e"
+        return ""
+
+    styled = df.style.applymap(_color_signal, subset=["Signal"])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.caption(
+        "Signals based on month-over-month price trend + "
+        "3-month ML forecast. Updated on each page load."
+    )
+
+
 def render_market_page(commodities_config: dict, page_title: str, page_description: str):
     """Generic market page renderer - works for both international and local."""
     st.markdown(f"""
@@ -6636,6 +6776,16 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
             mime="text/csv",
             use_container_width=True
         )
+
+    # Procurement signal section (Phase 6)
+    _sig_map = (
+        _LOCAL_SIGNAL_MAP
+        if "PKR" in str(metadata.get("currency", "")).upper()
+        else _INTL_SIGNAL_MAP
+    )
+    if name in _sig_map:
+        _db_key, _is_futures = _sig_map[name]
+        render_procurement_signal(_db_key, _is_futures)
 
 
 def render_overview_tab(commodities_data: dict, title: str):
@@ -8210,6 +8360,9 @@ def render_executive_summary():
             </div>
             """, unsafe_allow_html=True)
     
+    st.markdown("---")
+    render_executive_signals_table()
+
     st.markdown("---")
     st.markdown(f"""
     <p style='font-size: 0.85rem; color: #64748b; font-weight: 600; text-align: center; margin: 1rem 0;'>
