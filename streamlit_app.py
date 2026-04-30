@@ -880,7 +880,10 @@ def supabase_fetch_commodity_series(asset_path: str, limit: int = 600) -> pd.Dat
         # derive commodity name from asset path
         # typically: "cotton/cotton_usd_monthly" -> "cotton_usd"
         commodity_key = str(asset_path).split("/")[-1].replace("_monthly_clean", "").replace("_monthly", "")
-        
+        # Paths like "crude_oil_brent_usd_monthly_clean" derive "crude_oil_brent_usd" but DB stores "crude_oil_usd"
+        _db_key_map = {"crude_oil_brent_usd": "crude_oil_usd", "crude_oil_brent_pkr": "crude_oil_pkr"}
+        commodity_key = _db_key_map.get(commodity_key, commodity_key)
+
         rows = supabase_rest_select(
             table="commodity_prices",
             select="date,value",
@@ -5896,6 +5899,9 @@ def _load_predictions_cached(
             endpoint = f"{base_url}/rest/v1/prediction_records"
             headers = _supabase_headers(key)
             commodity_key = str(asset).split("/")[-1].replace("_monthly_clean", "").replace("_monthly", "")
+            # Paths like "crude_oil_brent_usd_monthly_clean" derive "crude_oil_brent_usd" but DB stores "crude_oil_usd"
+            _db_key_map = {"crude_oil_brent_usd": "crude_oil_usd", "crude_oil_brent_pkr": "crude_oil_pkr"}
+            commodity_key = _db_key_map.get(commodity_key, commodity_key)
             try:
                 resp = requests.get(
                     endpoint,
@@ -6063,11 +6069,10 @@ def _load_predictions_cached(
         }
     }
 
-    # Convert ton-based series to per-kg when the market UOM is kg
+    # Convert ton-based series to per-kg when the market UOM is kg.
+    # Polyester excluded: prediction_records stores values already in per-kg units.
     ton_assets_to_kg = (
-        "polyester/polyester_usd_monthly",
         "viscose/viscose_usd_monthly",
-        "polyester/polyester_pkr_monthly",
         "viscose/viscose_pkr_monthly",
     )
     if any(k in str(asset) for k in ton_assets_to_kg):
@@ -8221,7 +8226,8 @@ def render_executive_summary():
                 except Exception:
                     local_cur = str(local_cfg.get("currency") or "")
 
-                local_ccy = "PKR" if "PKR" in local_cur.upper() else "USD"
+                # Use original config currency, not display_currency (which may have been converted to USD)
+                local_ccy = "PKR" if "PKR" in str(local_cfg.get("currency") or "").upper() else "USD"
                 st.markdown(
                     f"""
                     <div style='background: linear-gradient(135deg, #047857 0%, #059669 100%); 
