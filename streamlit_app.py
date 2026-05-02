@@ -6543,6 +6543,263 @@ def render_executive_signals_table() -> None:
     )
 
 
+def _fetch_cotton_country_data(supabase_cfg: tuple) -> tuple:
+    """Fetch country cotton prices and predictions from Supabase.
+
+    Returns (hist_df, pred_df) — either may be None if unavailable.
+    """
+    url, key = supabase_cfg
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    try:
+        r1 = requests.get(
+            f"{url}/rest/v1/cotton_country_prices",
+            headers=headers,
+            params={
+                "select": "date,country,price_usd_per_lb,price_pkr_per_maund,source",
+                "order": "date.desc",
+                "limit": "2000",
+            },
+            timeout=30,
+        )
+        hist_df = pd.DataFrame(r1.json()) if r1.ok and r1.json() else None
+
+        r2 = requests.get(
+            f"{url}/rest/v1/cotton_country_predictions",
+            headers=headers,
+            params={
+                "select": "*",
+                "order": "created_at.desc",
+                "limit": "500",
+            },
+            timeout=30,
+        )
+        pred_df = pd.DataFrame(r2.json()) if r2.ok and r2.json() else None
+
+        return hist_df, pred_df
+    except Exception as e:
+        print(f"[country_cotton] fetch error: {e}")
+        return None, None
+
+
+def render_country_cotton_section(supabase_cfg: tuple) -> None:
+    """Render country-wise cotton prices + ML forecasts.
+
+    Called after existing cotton tab content — never modifies existing sections.
+    """
+    st.markdown("---")
+    st.markdown("### 🌍 Country-wise Cotton Prices & Forecasts")
+    st.caption(
+        "Live prices and ML forecasts per country of origin. "
+        "Upload data/raw/cotton/cotton_country_prices.csv to populate."
+    )
+
+    hist_df, pred_df = _fetch_cotton_country_data(supabase_cfg)
+
+    if hist_df is None or hist_df.empty:
+        st.info(
+            "ℹ️ No country-wise cotton price data found in database.\n\n"
+            "**To enable this section:**\n"
+            "1. Create a CSV: `data/raw/cotton/cotton_country_prices.csv`\n"
+            "2. Format: `date, country, price_usd_per_lb, source`\n"
+            "3. Run: `python scripts/ingest_cotton_countries.py`\n"
+            "4. Run: `python scripts/run_cotton_country_forecasts.py`"
+        )
+        return
+
+    has_sample = (
+        "source" in hist_df.columns and (hist_df["source"] == "sample").any()
+    )
+
+    currency = st.radio(
+        "Display currency",
+        ["USD/lb", "PKR/maund"],
+        horizontal=True,
+        key="country_cotton_currency",
+    )
+    use_pkr = currency == "PKR/maund"
+    price_col = "price_pkr_per_maund" if use_pkr else "price_usd_per_lb"
+
+    hist_df["date"] = pd.to_datetime(hist_df["date"])
+    for col in ["price_usd_per_lb", "price_pkr_per_maund"]:
+        if col in hist_df.columns:
+            hist_df[col] = pd.to_numeric(hist_df[col], errors="coerce")
+
+    latest = hist_df.sort_values("date").groupby("country").last().reset_index()
+
+    tab_overview, tab_trend, tab_forecast = st.tabs(
+        ["📊 Current Prices", "📈 Price Trends", "🔮 Forecasts"]
+    )
+
+    with tab_overview:
+        col1, col2 = st.columns([3, 2])
+
+        with col1:
+            chart_df = latest.dropna(subset=[price_col]).sort_values(price_col, ascending=True)
+            fig = px.bar(
+                chart_df,
+                x=price_col,
+                y="country",
+                orientation="h",
+                title=f"Current Cotton Price by Country ({currency})",
+                labels={price_col: f"Price ({currency})", "country": "Country of Origin"},
+                color=price_col,
+                color_continuous_scale="Blues",
+            )
+            fig.update_layout(
+                height=max(300, len(latest) * 38),
+                showlegend=False,
+                plot_bgcolor="white",
+                coloraxis_showscale=False,
+                margin=dict(l=130, r=20, t=40, b=40),
+            )
+            st.plotly_chart(fig, use_container_width=True, key="cc_overview_bar")
+            if has_sample:
+                st.caption("⚠️ Data shown is sample/placeholder. Update with real supplier prices.")
+
+        with col2:
+            display_df = latest[["country", price_col, "date"]].copy()
+            display_df.columns = ["Country", f"Price ({currency})", "As of"]
+            display_df[f"Price ({currency})"] = display_df[f"Price ({currency})"].round(4)
+            display_df["As of"] = display_df["As of"].dt.strftime("%Y-%m")
+            st.dataframe(
+                display_df.dropna().sort_values(f"Price ({currency})", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with tab_trend:
+        if len(hist_df) < 2:
+            st.info("Need more historical data to show trends.")
+        else:
+            countries_available = sorted(hist_df["country"].unique())
+            selected = st.multiselect(
+                "Select countries to compare",
+                options=countries_available,
+                default=countries_available[:5] if len(countries_available) >= 5 else countries_available,
+                key="country_cotton_trend_select",
+            )
+            if selected:
+                filtered = hist_df[hist_df["country"].isin(selected)].dropna(subset=[price_col])
+                fig = px.line(
+                    filtered,
+                    x="date",
+                    y=price_col,
+                    color="country",
+                    title=f"Cotton Price Trends by Country ({currency})",
+                    labels={price_col: f"Price ({currency})", "date": "Month", "country": "Country"},
+                )
+                fig.update_layout(height=400, plot_bgcolor="white", hovermode="x unified")
+                st.plotly_chart(fig, use_container_width=True, key="cc_trend_line")
+                if has_sample:
+                    st.caption("⚠️ Data shown is sample/placeholder. Update with real supplier prices.")
+
+    with tab_forecast:
+        if pred_df is None or pred_df.empty:
+            st.warning(
+                "⚠️ No forecasts generated yet.\n\n"
+                "Run: `python scripts/run_cotton_country_forecasts.py`"
+            )
+        else:
+            pred_df["created_at"] = pd.to_datetime(pred_df["created_at"])
+            for col in ["predicted_usd_per_lb", "lower_bound", "upper_bound"]:
+                if col in pred_df.columns:
+                    pred_df[col] = pd.to_numeric(pred_df[col], errors="coerce")
+
+            latest_preds = (
+                pred_df.sort_values("created_at")
+                .groupby(["country", "horizon_months"])
+                .last()
+                .reset_index()
+            )
+
+            pivot = latest_preds.pivot(
+                index="country", columns="horizon_months", values="predicted_usd_per_lb"
+            ).reset_index()
+            pivot.columns.name = None
+
+            current_prices = latest.set_index("country")["price_usd_per_lb"]
+            pivot["Current (USD/lb)"] = pivot["country"].map(current_prices).round(4)
+
+            col_rename = {h: f"{h}M Forecast" for h in HORIZONS if h in pivot.columns}
+            pivot = pivot.rename(columns=col_rename).rename(columns={"country": "Country"})
+            for col in pivot.columns:
+                if col != "Country":
+                    pivot[col] = pd.to_numeric(pivot[col], errors="coerce").round(4)
+
+            st.markdown("**Price Forecasts by Country (USD/lb)**")
+            st.dataframe(pivot, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            countries_with_preds = sorted(latest_preds["country"].unique())
+            selected_country = st.selectbox(
+                "View detailed forecast for:",
+                options=countries_with_preds,
+                key="country_cotton_forecast_select",
+            )
+
+            if selected_country:
+                country_hist = hist_df[hist_df["country"] == selected_country].sort_values("date")
+                country_pred = latest_preds[latest_preds["country"] == selected_country].sort_values(
+                    "horizon_months"
+                )
+
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(
+                        x=country_hist["date"],
+                        y=country_hist["price_usd_per_lb"],
+                        name="Historical",
+                        line=dict(color="#2563eb", width=2),
+                    )
+                )
+
+                if not country_pred.empty:
+                    target_dates = pd.to_datetime(country_pred["target_date"])
+                    fig.add_trace(
+                        go.Scatter(
+                            x=target_dates,
+                            y=country_pred["predicted_usd_per_lb"],
+                            name="ML Forecast",
+                            mode="markers+lines",
+                            line=dict(color="#f59e0b", width=2, dash="dash"),
+                            marker=dict(size=8),
+                        )
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=target_dates.tolist() + target_dates.tolist()[::-1],
+                            y=country_pred["upper_bound"].tolist()
+                            + country_pred["lower_bound"].tolist()[::-1],
+                            fill="toself",
+                            fillcolor="rgba(245,158,11,0.15)",
+                            line=dict(color="rgba(0,0,0,0)"),
+                            name="Confidence Range",
+                        )
+                    )
+
+                fig.update_layout(
+                    title=f"{selected_country} Cotton — Historical + Forecast (USD/lb)",
+                    xaxis_title="Date",
+                    yaxis_title="Price (USD/lb)",
+                    height=420,
+                    plot_bgcolor="white",
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig, use_container_width=True, key="cc_forecast_detail")
+                if has_sample:
+                    st.caption("⚠️ Data shown is sample/placeholder. Update with real supplier prices.")
+
+            st.caption(
+                "Forecasts generated by Ridge regression on historical purchase price data. "
+                "Minimum 6 months of data required per country. "
+                "Update monthly after new prices are uploaded."
+            )
+
+
+# Forecast horizons used in the country cotton pivot table
+HORIZONS = [1, 3, 6]
+
+
 def render_market_page(commodities_config: dict, page_title: str, page_description: str):
     """Generic market page renderer - works for both international and local."""
     st.markdown(f"""
@@ -6796,6 +7053,12 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
     if name in _sig_map:
         _db_key, _is_futures = _sig_map[name]
         render_procurement_signal(_db_key, _is_futures)
+
+    # Country-wise cotton prices section (International Cotton tab only)
+    if name == "Cotton" and "PKR" not in str(metadata.get("currency", "")).upper():
+        _cfg = get_supabase_config()
+        if _cfg:
+            render_country_cotton_section(_cfg)
 
 
 def render_overview_tab(commodities_data: dict, title: str):
