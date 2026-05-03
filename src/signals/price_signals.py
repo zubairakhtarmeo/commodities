@@ -91,7 +91,7 @@ def compute_forecast_signal(
 ) -> dict | None:
     """
     Compute expected % change from current price to ML forecast.
-    Uses linear_ridge preferentially, falls back to baseline_last_value.
+    Fetches by commodity + horizon only — works with any model stored in DB.
 
     Returns dict or None if no forecast available.
     {
@@ -111,50 +111,46 @@ def compute_forecast_signal(
         "Authorization": f"Bearer {key}",
     }
     try:
-        for model in ["linear_ridge", "baseline_last_value"]:
-            params = {
-                "select": "*",
-                "commodity": f"eq.{commodity_key}",
-                "model_name": f"eq.{model}",
-                "horizon_months": f"eq.{horizon_months}",
-                "is_demo": "eq.false",
-                "order": "created_at.desc",
-                "limit": "1",
-            }
-            resp = requests.get(
-                f"{url}/rest/v1/prediction_records",
-                headers=headers,
-                params=params,
-                timeout=30,
-            )
-            if not resp.ok:
-                continue
-            rows = resp.json()
-            if isinstance(rows, list) and rows:
-                row = rows[0]
-                forecast_val = float(row["predicted_value"])
+        params = {
+            "select": "*",
+            "commodity": f"eq.{commodity_key}",
+            "horizon_months": f"eq.{horizon_months}",
+            "is_demo": "eq.false",
+            "order": "created_at.desc",
+            "limit": "1",
+        }
+        resp = requests.get(
+            f"{url}/rest/v1/prediction_records",
+            headers=headers,
+            params=params,
+            timeout=30,
+        )
+        if not resp.ok or not isinstance(resp.json(), list) or not resp.json():
+            return None
 
-                if current_value and current_value > 0:
-                    change_pct = ((forecast_val - current_value) / current_value) * 100
-                else:
-                    change_pct = 0.0
+        row = resp.json()[0]
+        forecast_val = float(row["predicted_value"])
 
-                if change_pct > 0.5:
-                    direction = "up"
-                elif change_pct < -0.5:
-                    direction = "down"
-                else:
-                    direction = "flat"
+        if current_value and current_value > 0:
+            change_pct = ((forecast_val - current_value) / current_value) * 100
+        else:
+            change_pct = 0.0
 
-                return {
-                    "forecast_change_pct": round(change_pct, 2),
-                    "direction": direction,
-                    "forecast_value": forecast_val,
-                    "model_name": row["model_name"],
-                    "target_date": row["target_date"],
-                    "horizon_months": horizon_months,
-                }
-        return None
+        if change_pct > 0.5:
+            direction = "up"
+        elif change_pct < -0.5:
+            direction = "down"
+        else:
+            direction = "flat"
+
+        return {
+            "forecast_change_pct": round(change_pct, 2),
+            "direction": direction,
+            "forecast_value": forecast_val,
+            "model_name": row["model_name"],
+            "target_date": row["target_date"],
+            "horizon_months": horizon_months,
+        }
     except Exception as e:
         print(f"[signals] compute_forecast_signal error for {commodity_key}: {e}")
         return None
