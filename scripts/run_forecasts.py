@@ -245,6 +245,63 @@ def recursive_forecast(
     return predictions
 
 
+# ── Model validation ─────────────────────────────────────────────────────────
+
+def _build_feature_vector(window: list[float], target_dt: pd.Timestamp) -> np.ndarray:
+    """Build a single feature row from a rolling window + target date."""
+    w = np.array(window)
+    n = len(w)
+    lag_1 = w[-1]
+    lag_3 = w[-3] if n >= 3 else w[0]
+    lag_6 = w[-6] if n >= 6 else w[0]
+    roll3 = float(np.mean(w[-3:])) if n >= 3 else lag_1
+    roll6 = float(np.mean(w[-6:])) if n >= 6 else lag_1
+    std3  = float(np.std(w[-3:], ddof=1)) if n >= 3 else 0.0
+    prev1 = w[-2] if n >= 2 else lag_1
+    prev3 = w[-4] if n >= 4 else lag_1
+    pct1  = (lag_1 - prev1) / prev1 if prev1 != 0 else 0.0
+    pct3  = (lag_1 - prev3) / prev3 if prev3 != 0 else 0.0
+    tr3   = lag_1 - prev3
+    return np.array([[lag_1, lag_3, lag_6,
+                      roll3, roll6, std3,
+                      pct1, pct3, tr3,
+                      target_dt.month, (target_dt.month - 1) // 3 + 1]])
+
+
+def walk_forward_mae(
+    model,
+    scaler: StandardScaler | None,
+    train_series: pd.Series,
+    val_series: pd.Series,
+    is_baseline: bool = False,
+) -> float:
+    """
+    Walk-forward 1-step MAE on val_series.
+
+    At each validation step we use the actual observed value (not the
+    prediction) as the next window entry — this is standard held-out
+    evaluation, not recursive extrapolation.
+    """
+    window = list(train_series.values)
+    if len(window) < 6:
+        return float("inf")
+
+    errors = []
+    for dt, actual in val_series.items():
+        if is_baseline:
+            pred = window[-1]  # last known value
+        else:
+            x = _build_feature_vector(window, dt)
+            if scaler is not None:
+                x = scaler.transform(x)
+            pred = max(0.0, float(model.predict(x)[0]))
+
+        errors.append(abs(pred - actual))
+        window.append(actual)  # advance with real observation
+
+    return float(np.mean(errors)) if errors else float("inf")
+
+
 # ── Push to Supabase ──────────────────────────────────────────────────────────
 
 def push_predictions(supabase, records: list[dict]) -> bool:
@@ -258,13 +315,19 @@ def push_predictions(supabase, records: list[dict]) -> bool:
 
 # ── Per-commodity forecasting ─────────────────────────────────────────────────
 
+VAL_MONTHS = 6  # hold-out window for model selection
+
+
 def forecast_commodity(
     supabase,
     commodity: str,
     as_of: pd.Timestamp,
     pkr_rate: float,
 ) -> str:
-    """Train models and generate USD + PKR predictions for one commodity."""
+    """
+    Select the best model via walk-forward MAE on the last VAL_MONTHS months,
+    retrain on the full series, then push only the winner's predictions.
+    """
     logging.info(f"\n📊 {commodity}")
 
     series = fetch_series(supabase, commodity)
@@ -274,92 +337,113 @@ def forecast_commodity(
         logging.info(f"  {msg}")
         return msg
 
-    df_feat = build_features(series)
-    if len(df_feat) < 10:
-        msg = f"⚠️ skipped (only {len(df_feat)} samples after feature build)"
+    # ── Split train / validation ──────────────────────────────────────────────
+    train_series = series.iloc[:-VAL_MONTHS]
+    val_series   = series.iloc[-VAL_MONTHS:]
+
+    df_train = build_features(train_series)
+    if len(df_train) < 8:
+        msg = f"⚠️ skipped (only {len(df_train)} train samples after feature build)"
         logging.info(f"  {msg}")
         return msg
 
-    X = df_feat[FEATURE_COLS].values
-    y = df_feat["value"].values
-
-    hist_std = float(series.std())
-    created_at = datetime.now(timezone.utc).isoformat()
-    pkr_commodity = commodity.replace("_usd", "_pkr")
+    X_train = df_train[FEATURE_COLS].values
+    y_train = df_train["value"].values
 
     model_specs = [
-        ("baseline_last_value", None,                        False),
-        ("linear_ridge",        Ridge(alpha=1.0),            True),
-        ("random_forest",       RandomForestRegressor(
-                                    n_estimators=100,
-                                    max_depth=5,
-                                    random_state=42,
-                                ), False),
+        ("baseline_last_value", None,                                                False),
+        ("linear_ridge",        Ridge(alpha=1.0),                                    True),
+        ("random_forest",       RandomForestRegressor(n_estimators=100, max_depth=5,
+                                                      random_state=42),              False),
     ]
 
-    all_records: list[dict] = []
-
+    # ── Evaluate each model on validation set ─────────────────────────────────
+    maes: dict[str, float] = {}
     for model_name, model, use_scaler in model_specs:
         try:
             if model_name == "baseline_last_value":
-                last_val = float(series.iloc[-1])
-                preds_usd = {h: last_val for h in HORIZONS}
+                mae = walk_forward_mae(None, None, train_series, val_series, is_baseline=True)
             else:
                 scaler = StandardScaler() if use_scaler else None
-                X_fit = scaler.fit_transform(X) if scaler else X
-                model.fit(X_fit, y)
-                preds_usd = recursive_forecast(model, scaler, series, HORIZONS, as_of)
-
-            logging.info(
-                f"  ✓ {model_name}: "
-                + "  ".join(f"h{h}={preds_usd[h]:.4f}" for h in HORIZONS)
-            )
-
-            for h in HORIZONS:
-                val     = preds_usd[h]
-                variance = hist_std * 0.5 * (1 + h / 12)
-                target  = (as_of + relativedelta(months=h)).strftime("%Y-%m-%d")
-
-                # USD record
-                all_records.append({
-                    "commodity":       commodity,
-                    "model_name":      model_name,
-                    "as_of_date":      as_of.strftime("%Y-%m-%d"),
-                    "horizon_months":  h,
-                    "target_date":     target,
-                    "predicted_value": round(val, 6),
-                    "lower_bound":     round(max(0.0, val - variance), 6),
-                    "upper_bound":     round(val + variance, 6),
-                    "unit":            "USD",
-                    "is_demo":         False,
-                    "created_at":      created_at,
-                })
-
-                # PKR record
-                val_pkr      = val * pkr_rate
-                var_pkr      = variance * pkr_rate
-                all_records.append({
-                    "commodity":       pkr_commodity,
-                    "model_name":      model_name,
-                    "as_of_date":      as_of.strftime("%Y-%m-%d"),
-                    "horizon_months":  h,
-                    "target_date":     target,
-                    "predicted_value": round(val_pkr, 2),
-                    "lower_bound":     round(max(0.0, val_pkr - var_pkr), 2),
-                    "upper_bound":     round(val_pkr + var_pkr, 2),
-                    "unit":            "PKR",
-                    "is_demo":         False,
-                    "created_at":      created_at,
-                })
-
+                X_fit  = scaler.fit_transform(X_train) if scaler else X_train
+                model.fit(X_fit, y_train)
+                mae = walk_forward_mae(model, scaler, train_series, val_series)
+            maes[model_name] = mae
+            logging.info(f"  MAE  {model_name}: {mae:.4f}")
         except Exception as e:
-            logging.warning(f"  ✗ {model_name} failed: {e}")
+            logging.warning(f"  ✗ {model_name} eval failed: {e}")
+            maes[model_name] = float("inf")
 
-    if not all_records:
-        return "⚠️ no records generated"
+    if not maes or all(v == float("inf") for v in maes.values()):
+        return "⚠️ all models failed evaluation"
 
-    ok = push_predictions(supabase, all_records)
-    status = f"✅ {len(all_records)} records pushed" if ok else "❌ push failed"
+    best_name = min(maes, key=lambda k: maes[k])
+    logging.info(f"  ★  best model: {best_name} (MAE={maes[best_name]:.4f})")
+
+    # ── Retrain winner on full series ─────────────────────────────────────────
+    df_full = build_features(series)
+    X_full  = df_full[FEATURE_COLS].values
+    y_full  = df_full["value"].values
+
+    if best_name == "baseline_last_value":
+        preds_usd = {h: float(series.iloc[-1]) for h in HORIZONS}
+    else:
+        # Reconstruct a fresh model instance (avoids contamination from val run)
+        best_spec = {s[0]: (s[1], s[2]) for s in model_specs}
+        fresh_model, use_scaler = best_spec[best_name]
+        scaler = StandardScaler() if use_scaler else None
+        X_fit  = scaler.fit_transform(X_full) if scaler else X_full
+        fresh_model.fit(X_fit, y_full)
+        preds_usd = recursive_forecast(fresh_model, scaler, series, HORIZONS, as_of)
+
+    logging.info(
+        f"  ✓ {best_name} (full retrain): "
+        + "  ".join(f"h{h}={preds_usd[h]:.4f}" for h in HORIZONS)
+    )
+
+    # ── Build records ─────────────────────────────────────────────────────────
+    hist_std     = float(series.std())
+    created_at   = datetime.now(timezone.utc).isoformat()
+    pkr_commodity = commodity.replace("_usd", "_pkr")
+    records: list[dict] = []
+
+    for h in HORIZONS:
+        val      = preds_usd[h]
+        variance = hist_std * 0.5 * (1 + h / 12)
+        target   = (as_of + relativedelta(months=h)).strftime("%Y-%m-%d")
+
+        records.append({
+            "commodity":       commodity,
+            "model_name":      best_name,
+            "as_of_date":      as_of.strftime("%Y-%m-%d"),
+            "horizon_months":  h,
+            "target_date":     target,
+            "predicted_value": round(val, 6),
+            "lower_bound":     round(max(0.0, val - variance), 6),
+            "upper_bound":     round(val + variance, 6),
+            "unit":            "USD",
+            "is_demo":         False,
+            "created_at":      created_at,
+        })
+
+        val_pkr = val * pkr_rate
+        var_pkr = variance * pkr_rate
+        records.append({
+            "commodity":       pkr_commodity,
+            "model_name":      best_name,
+            "as_of_date":      as_of.strftime("%Y-%m-%d"),
+            "horizon_months":  h,
+            "target_date":     target,
+            "predicted_value": round(val_pkr, 2),
+            "lower_bound":     round(max(0.0, val_pkr - var_pkr), 2),
+            "upper_bound":     round(val_pkr + var_pkr, 2),
+            "unit":            "PKR",
+            "is_demo":         False,
+            "created_at":      created_at,
+        })
+
+    ok = push_predictions(supabase, records)
+    status = f"✅ {len(records)} records pushed ({best_name})" if ok else "❌ push failed"
     logging.info(f"  {status}")
     return status
 
