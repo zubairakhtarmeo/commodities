@@ -5899,9 +5899,20 @@ def _load_predictions_cached(
             endpoint = f"{base_url}/rest/v1/prediction_records"
             headers = _supabase_headers(key)
             commodity_key = str(asset).split("/")[-1].replace("_monthly_clean", "").replace("_monthly", "")
-            # Paths like "crude_oil_brent_usd_monthly_clean" derive "crude_oil_brent_usd" but DB stores "crude_oil_usd"
-            _db_key_map = {"crude_oil_brent_usd": "crude_oil_usd", "crude_oil_brent_pkr": "crude_oil_pkr"}
+            # Normalize derived key to match what prediction_records stores
+            _db_key_map = {
+                # crude oil brent path quirk
+                "crude_oil_brent_usd": "crude_oil_usd",
+                "crude_oil_brent_pkr": "crude_oil_pkr",
+                # short names (safety net in case path format ever changes)
+                "cotton":      "cotton_usd",
+                "crude_oil":   "crude_oil_usd",
+                "natural_gas": "natural_gas_usd",
+                "polyester":   "polyester_usd",
+                "viscose":     "viscose_usd",
+            }
             commodity_key = _db_key_map.get(commodity_key, commodity_key)
+            print(f"[predictions] asset={asset!r}  →  db_key={commodity_key!r}")
             try:
                 resp = requests.get(
                     endpoint,
