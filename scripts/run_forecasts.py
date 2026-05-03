@@ -1,25 +1,41 @@
+"""
+Phase 6: Improved ML Forecasting Pipeline
+
+Changes from previous version:
+- Rich feature engineering: lags, rolling stats, momentum, trend, seasonality
+- Recursive multi-step forecasting (non-flat outputs)
+- Three models: baseline, Ridge, RandomForest
+- PKR predictions generated from USD × live FX rate
+- No complex abstractions — pure pandas + sklearn
+"""
 import os
 import sys
-import pandas as pd
-from datetime import datetime, timezone
-from pathlib import Path
 import warnings
 import logging
+import requests
+import pandas as pd
+import numpy as np
+from datetime import datetime, date, timezone
+from pathlib import Path
+from dateutil.relativedelta import relativedelta
+
+warnings.filterwarnings("ignore")
 
 BASE_DIR = Path(__file__).parent.parent
-
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
+    format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOG_DIR / f"forecasts_{datetime.today().strftime('%Y%m%d')}.log", encoding="utf-8")
-    ]
+        logging.FileHandler(
+            LOG_DIR / f"forecasts_{datetime.today().strftime('%Y%m%d')}.log",
+            encoding="utf-8",
+        ),
+    ],
 )
-
-warnings.filterwarnings('ignore')
 
 sys.path.insert(0, str(BASE_DIR / "src"))
 
@@ -33,11 +49,33 @@ try:
 except ImportError:
     toml = None
 
-from forecasting.features.builder import FeatureBuilder
-from forecasting.config import FeaturePackConfig, DatasetConfig, ModelSpec
-from forecasting.dataset.builder import build_supervised_dataset
-from forecasting.models.factory import build_model
+from sklearn.linear_model import Ridge
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
 
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+COMMODITIES_USD = [
+    "cotton_usd",
+    "crude_oil_usd",
+    "natural_gas_usd",
+    "polyester_usd",
+]
+
+HORIZONS = [1, 3, 6]
+MIN_ROWS = 24  # months of history required to train
+
+FEATURE_COLS = [
+    "lag_1", "lag_3", "lag_6",
+    "rolling_mean_3", "rolling_mean_6", "rolling_std_3",
+    "pct_change_1", "pct_change_3",
+    "trend_3",
+    "month", "quarter",
+]
+
+
+# ── Supabase ──────────────────────────────────────────────────────────────────
 
 def get_supabase_credentials():
     url = os.getenv("SUPABASE_URL")
@@ -65,128 +103,299 @@ def _get_supabase_client():
         return None
 
 
-COMMODITIES_TO_FORECAST = [
-    "cotton_usd",
-    "crude_oil_usd",
-    "natural_gas_usd",
-    "polyester_usd"
-]
+# ── FX rate ───────────────────────────────────────────────────────────────────
+
+def get_fx_rate(currency: str = "PKR") -> float:
+    """Fetch live USD → currency rate. Falls back to last-known value."""
+    try:
+        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=10)
+        rate = float(r.json()["rates"][currency])
+        logging.info(f"  FX: 1 USD = {rate:.2f} {currency}")
+        return rate
+    except Exception:
+        fallback = 278.5 if currency == "PKR" else 7.25
+        logging.warning(f"  ⚠️ FX fetch failed — using fallback {fallback} {currency}/USD")
+        return fallback
 
 
-def get_commodity_data(supabase, commodity: str) -> pd.DataFrame:
-    res = supabase.table("commodity_prices").select("date,value").eq("commodity", commodity).order("date").execute()
-    return pd.DataFrame(res.data)
+# ── Data fetching ─────────────────────────────────────────────────────────────
 
+def fetch_series(supabase, commodity: str) -> pd.Series | None:
+    """Fetch monthly price series from commodity_prices table."""
+    try:
+        res = (
+            supabase.table("commodity_prices")
+            .select("date,value")
+            .eq("commodity", commodity)
+            .order("date")
+            .execute()
+        )
+        if not res.data:
+            return None
+        df = pd.DataFrame(res.data)
+        df["date"] = pd.to_datetime(df["date"])
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        df = df.dropna().set_index("date").sort_index()
+        series = df["value"].resample("MS").mean().dropna()
+        return series
+    except Exception as e:
+        logging.warning(f"  ⚠️ Fetch error for {commodity}: {e}")
+        return None
+
+
+# ── Feature engineering ───────────────────────────────────────────────────────
+
+def build_features(series: pd.Series) -> pd.DataFrame:
+    """
+    Build a feature matrix from a monthly price series.
+
+    All lag/rolling features are shifted by 1 so they use only
+    information available *before* the target month (no leakage).
+    """
+    df = pd.DataFrame({"value": series})
+
+    # Lags (of the raw price, shifted so row t uses t-1, t-3, t-6)
+    df["lag_1"] = df["value"].shift(1)
+    df["lag_3"] = df["value"].shift(3)
+    df["lag_6"] = df["value"].shift(6)
+
+    # Rolling statistics on already-shifted lag_1 window
+    df["rolling_mean_3"] = df["lag_1"].rolling(3).mean()
+    df["rolling_mean_6"] = df["lag_1"].rolling(6).mean()
+    df["rolling_std_3"]  = df["lag_1"].rolling(3).std()
+
+    # Momentum: % change over 1 and 3 months (lagged by 1)
+    shifted = df["value"].shift(1)
+    df["pct_change_1"] = shifted.pct_change(1)
+    df["pct_change_3"] = shifted.pct_change(3)
+
+    # Trend: absolute change over 3 months (lagged)
+    df["trend_3"] = shifted - shifted.shift(3)
+
+    # Seasonality
+    df["month"]   = df.index.month
+    df["quarter"] = df.index.quarter
+
+    df = df.dropna()
+    return df
+
+
+# ── Recursive multi-step forecasting ─────────────────────────────────────────
+
+def recursive_forecast(
+    model,
+    scaler: StandardScaler | None,
+    series: pd.Series,
+    horizons: list[int],
+    as_of: pd.Timestamp,
+) -> dict[int, float]:
+    """
+    Step-by-step forecasting: each predicted value feeds back into the next step.
+    Avoids the flat-output problem caused by predicting all horizons from the
+    same static feature vector.
+
+    Returns {horizon_months: predicted_value}.
+    """
+    # Seed the rolling window with the last 12 known observations
+    window = list(series.values[-12:])
+    predictions: dict[int, float] = {}
+    current = as_of
+
+    for step in range(1, max(horizons) + 1):
+        next_dt = current + relativedelta(months=1)
+
+        w = np.array(window)
+        n = len(w)
+
+        # Compute features from the rolling window
+        lag_1 = w[-1]
+        lag_3 = w[-3] if n >= 3 else w[0]
+        lag_6 = w[-6] if n >= 6 else w[0]
+
+        roll3 = float(np.mean(w[-3:])) if n >= 3 else lag_1
+        roll6 = float(np.mean(w[-6:])) if n >= 6 else lag_1
+        std3  = float(np.std(w[-3:], ddof=1)) if n >= 3 else 0.0
+
+        prev1 = w[-2] if n >= 2 else lag_1
+        prev3 = w[-4] if n >= 4 else lag_1
+        pct1  = (lag_1 - prev1) / prev1 if prev1 != 0 else 0.0
+        pct3  = (lag_1 - prev3) / prev3 if prev3 != 0 else 0.0
+        tr3   = lag_1 - prev3
+
+        month   = next_dt.month
+        quarter = (next_dt.month - 1) // 3 + 1
+
+        x_new = np.array([[lag_1, lag_3, lag_6,
+                           roll3, roll6, std3,
+                           pct1, pct3, tr3,
+                           month, quarter]])
+
+        if scaler is not None:
+            x_new = scaler.transform(x_new)
+
+        pred = float(model.predict(x_new)[0])
+        pred = max(pred, 0.0)  # prices cannot be negative
+
+        if step in horizons:
+            predictions[step] = pred
+
+        window.append(pred)
+        current = next_dt
+
+    return predictions
+
+
+# ── Push to Supabase ──────────────────────────────────────────────────────────
+
+def push_predictions(supabase, records: list[dict]) -> bool:
+    try:
+        supabase.table("prediction_records").upsert(records).execute()
+        return True
+    except Exception as e:
+        logging.warning(f"  ✗ Supabase push failed: {e}")
+        return False
+
+
+# ── Per-commodity forecasting ─────────────────────────────────────────────────
+
+def forecast_commodity(
+    supabase,
+    commodity: str,
+    as_of: pd.Timestamp,
+    pkr_rate: float,
+) -> str:
+    """Train models and generate USD + PKR predictions for one commodity."""
+    logging.info(f"\n📊 {commodity}")
+
+    series = fetch_series(supabase, commodity)
+    if series is None or len(series) < MIN_ROWS:
+        n = len(series) if series is not None else 0
+        msg = f"⚠️ skipped ({n} rows, need {MIN_ROWS})"
+        logging.info(f"  {msg}")
+        return msg
+
+    df_feat = build_features(series)
+    if len(df_feat) < 10:
+        msg = f"⚠️ skipped (only {len(df_feat)} samples after feature build)"
+        logging.info(f"  {msg}")
+        return msg
+
+    X = df_feat[FEATURE_COLS].values
+    y = df_feat["value"].values
+
+    hist_std = float(series.std())
+    created_at = datetime.now(timezone.utc).isoformat()
+    pkr_commodity = commodity.replace("_usd", "_pkr")
+
+    model_specs = [
+        ("baseline_last_value", None,                        False),
+        ("linear_ridge",        Ridge(alpha=1.0),            True),
+        ("random_forest",       RandomForestRegressor(
+                                    n_estimators=100,
+                                    max_depth=5,
+                                    random_state=42,
+                                ), False),
+    ]
+
+    all_records: list[dict] = []
+
+    for model_name, model, use_scaler in model_specs:
+        try:
+            if model_name == "baseline_last_value":
+                last_val = float(series.iloc[-1])
+                preds_usd = {h: last_val for h in HORIZONS}
+            else:
+                scaler = StandardScaler() if use_scaler else None
+                X_fit = scaler.fit_transform(X) if scaler else X
+                model.fit(X_fit, y)
+                preds_usd = recursive_forecast(model, scaler, series, HORIZONS, as_of)
+
+            logging.info(
+                f"  ✓ {model_name}: "
+                + "  ".join(f"h{h}={preds_usd[h]:.4f}" for h in HORIZONS)
+            )
+
+            for h in HORIZONS:
+                val     = preds_usd[h]
+                variance = hist_std * 0.5 * (1 + h / 12)
+                target  = (as_of + relativedelta(months=h)).strftime("%Y-%m-%d")
+
+                # USD record
+                all_records.append({
+                    "commodity":       commodity,
+                    "model_name":      model_name,
+                    "as_of_date":      as_of.strftime("%Y-%m-%d"),
+                    "horizon_months":  h,
+                    "target_date":     target,
+                    "predicted_value": round(val, 6),
+                    "lower_bound":     round(max(0.0, val - variance), 6),
+                    "upper_bound":     round(val + variance, 6),
+                    "unit":            "USD",
+                    "is_demo":         False,
+                    "created_at":      created_at,
+                })
+
+                # PKR record
+                val_pkr      = val * pkr_rate
+                var_pkr      = variance * pkr_rate
+                all_records.append({
+                    "commodity":       pkr_commodity,
+                    "model_name":      model_name,
+                    "as_of_date":      as_of.strftime("%Y-%m-%d"),
+                    "horizon_months":  h,
+                    "target_date":     target,
+                    "predicted_value": round(val_pkr, 2),
+                    "lower_bound":     round(max(0.0, val_pkr - var_pkr), 2),
+                    "upper_bound":     round(val_pkr + var_pkr, 2),
+                    "unit":            "PKR",
+                    "is_demo":         False,
+                    "created_at":      created_at,
+                })
+
+        except Exception as e:
+            logging.warning(f"  ✗ {model_name} failed: {e}")
+
+    if not all_records:
+        return "⚠️ no records generated"
+
+    ok = push_predictions(supabase, all_records)
+    status = f"✅ {len(all_records)} records pushed" if ok else "❌ push failed"
+    logging.info(f"  {status}")
+    return status
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def run_ml_forecasts():
     logging.info("=" * 50)
-    logging.info("🚀 STARTING ML FORECASTING (PHASE 3)")
+    logging.info("🚀 STARTING ML FORECASTING (PHASE 6 — IMPROVED)")
     logging.info("=" * 50)
 
     supabase = _get_supabase_client()
     if supabase is None:
-        logging.error("❌ Supabase credentials missing or client failed to initialize. Cannot run forecasts.")
+        logging.error("❌ No Supabase connection — cannot run forecasts.")
         print("\n=== PIPELINE STATUS ===")
         print("Ingestion completed")
         print("Forecast completed (skipped — no Supabase connection)")
         return
 
-    forecast_results = {}
+    as_of    = pd.Timestamp(date.today().replace(day=1))
+    pkr_rate = get_fx_rate("PKR")
+    logging.info(f"As-of: {as_of.date()}  |  FX: {pkr_rate:.2f} PKR/USD")
 
-    for commodity in COMMODITIES_TO_FORECAST:
-        logging.info(f"\n📊 Processing {commodity}...")
+    results: dict[str, str] = {}
+    for commodity in COMMODITIES_USD:
         try:
-            df = get_commodity_data(supabase, commodity)
+            results[commodity] = forecast_commodity(supabase, commodity, as_of, pkr_rate)
         except Exception as e:
-            logging.warning(f"  ⚠️ Could not fetch data for {commodity}: {e}")
-            forecast_results[commodity] = f"❌ fetch failed: {e}"
-            continue
+            logging.error(f"  ❌ Unexpected error for {commodity}: {e}")
+            results[commodity] = f"❌ error: {e}"
 
-        if len(df) < 24:
-            logging.info(f"  ⚠️ Not enough data (needs >= 24, has {len(df)}). Skipping.")
-            forecast_results[commodity] = f"⚠️ skipped (only {len(df)} rows)"
-            continue
-
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values("date").set_index('date').resample('MS').mean().ffill().dropna()
-        df.rename(columns={'value': 'target'}, inplace=True)
-
-        packs = [
-            FeaturePackConfig(name="lags", params={"lags": [1, 2, 3, 6, 12]}),
-            FeaturePackConfig(name="rolling_stats", params={"windows": [3, 6, 12], "stats": ["mean", "std"], "min_periods": 3}),
-            FeaturePackConfig(name="volatility", params={"windows": [3, 6, 12], "min_periods": 3})
-        ]
-
-        try:
-            fb = FeatureBuilder.from_configs(packs)
-            X = fb.build(df)
-
-            horizons = [1, 3, 6]
-            d_cfg = DatasetConfig(horizon_steps=horizons, drop_na_target=True)
-            ds = build_supervised_dataset(features=X, target=df["target"], cfg=d_cfg)
-        except Exception as e:
-            logging.warning(f"  ✗ Feature building failed: {e}")
-            forecast_results[commodity] = f"❌ feature build failed: {e}"
-            continue
-
-        if len(ds.X) == 0:
-            logging.info(f"  ⚠️ 0 training samples after dataset construction. Need more historical data. Skipping.")
-            forecast_results[commodity] = "⚠️ skipped (0 training samples)"
-            continue
-
-        specs = [
-            ModelSpec(name="baseline_last_value", type="naive"),
-            ModelSpec(name="linear_ridge", type="ridge", params={"alpha": 1.0})
-        ]
-
-        predictions = []
-        for spec in specs:
-            try:
-                model = build_model(spec, horizon_count=len(horizons))
-                model.estimator.fit(ds.X, ds.y)
-
-                asof = df.index[-1]
-                x_pred = X.loc[[asof]]
-                y_pred = model.estimator.predict(x_pred)[0]
-
-                for i, h in enumerate(horizons):
-                    val = float(y_pred[i])
-                    val = max(val, 0.0)
-                    variance = val * 0.1 * (1 + h / 12)
-
-                    predictions.append({
-                        "commodity": commodity,
-                        "model_name": spec.name,
-                        "as_of_date": asof.strftime("%Y-%m-%d"),
-                        "horizon_months": h,
-                        "target_date": (asof + pd.DateOffset(months=h)).strftime("%Y-%m-%d"),
-                        "predicted_value": val,
-                        "lower_bound": max(0.0, val - variance),
-                        "upper_bound": val + variance,
-                        "unit": "USD",
-                        "is_demo": False
-                    })
-            except Exception as e:
-                logging.warning(f"  ✗ Model {spec.name} failed: {e}")
-
-        if predictions:
-            logging.info(f"  ✓ Models finished. Pushing {len(predictions)} forecasts to Supabase...")
-            try:
-                supabase.table("prediction_records").upsert(predictions).execute()
-                logging.info(f"  ✓ Pushed to Supabase ({commodity})")
-                forecast_results[commodity] = f"✅ {len(predictions)} forecasts pushed"
-            except Exception as e:
-                logging.warning(f"  ✗ Supabase push failed: {e}")
-                forecast_results[commodity] = f"❌ push failed: {e}"
-        else:
-            forecast_results[commodity] = "⚠️ no predictions generated"
-
-    logging.info(f"\n📊 Processing viscose_usd...")
-    logging.info("  ⚠️ Skipping Viscose as requested.")
-    forecast_results["viscose_usd"] = "⚠️ skipped (manual)"
+    logging.info("\n📊 viscose_usd: skipping (no data — manual upload required)")
+    results["viscose_usd"] = "⚠️ skipped (manual)"
 
     logging.info("\n=== FORECAST SUMMARY ===")
-    for k, v in forecast_results.items():
+    for k, v in results.items():
         logging.info(f"  {k}: {v}")
 
     logging.info("\n✅ ML Forecasting complete.")
