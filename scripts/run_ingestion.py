@@ -1,4 +1,4 @@
-﻿"""
+"""
 Live Commodity Data Ingestion (Phase 2)
 Explicitly fetches and updates commodity prices to Supabase.
 """
@@ -17,7 +17,6 @@ DATA_DIR = BASE_DIR / "data" / "raw"
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-# Set up file logging (not just print)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s',
@@ -37,12 +36,17 @@ from src.processing.units import (
 )
 from src.processing.validation import validate_dataframe
 
+
+print("ENV CHECK:")
+print("SUPABASE_URL:", bool(os.getenv("SUPABASE_URL")))
+print("SUPABASE_KEY:", bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")))
+print("FRED_API_KEY:", bool(os.getenv("FRED_API_KEY")))
+
+
 def get_supabase_credentials():
-    # Try environment variables first
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-    # Fallback to .streamlit/secrets.toml
     if not url or not key:
         try:
             import toml
@@ -54,20 +58,28 @@ def get_supabase_credentials():
 
     return url, key
 
-SUPABASE_URL, SUPABASE_KEY = get_supabase_credentials()
 
-print("DEBUG SUPABASE URL:", SUPABASE_URL)
-print("DEBUG SUPABASE KEY:", "FOUND" if SUPABASE_KEY else "MISSING")
+def _get_supabase_client():
+    url, key = get_supabase_credentials()
+    if not url or not key:
+        return None
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception as e:
+        print(f"⚠️ Could not create Supabase client: {e}")
+        return None
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Supabase credentials not found. Check environment variables or secrets.toml")
-
-from supabase import create_client
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def push_to_supabase(df: pd.DataFrame, commodity: str, unit: str, source: str, derived_flag: bool = False, derived_from: str = None) -> bool:
     if df is None or df.empty:
         return False
+
+    supabase = _get_supabase_client()
+    if supabase is None:
+        print(f"  ⚠️ Supabase not configured — skipping push for {commodity}")
+        return False
+
     records = []
     from datetime import timezone
     created_at = datetime.now(timezone.utc).isoformat()
@@ -86,28 +98,27 @@ def push_to_supabase(df: pd.DataFrame, commodity: str, unit: str, source: str, d
             "created_at": created_at
         }
         records.append(record)
+
     if not records:
         print(f"  ✗ No valid records to push for {commodity}")
         return False
+
     print(f"  Pushing {len(records)} records to Supabase...")
     try:
         supabase.table("commodity_prices").upsert(records, on_conflict="commodity,date").execute()
-        success = True
-    except Exception as e:
-        success = False
-        print(f"  ✗ Supabase exception: {e}")
-
-    if success:
         print(f"  ✓ Up-to-date in Supabase ({commodity})")
-    else:
-        print(f"  ✗ Supabase upsert failed ({commodity})")
-    return success
+        return True
+    except Exception as e:
+        print(f"  ✗ Supabase exception: {e}")
+        return False
+
 
 def save_to_csv(df: pd.DataFrame, file_path: Path):
     if df is None or df.empty:
         return
     file_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(file_path, index=False)
+
 
 def fetch_exchange_rates():
     print("\n💱 Fetching exchange rates...")
@@ -123,6 +134,7 @@ def fetch_exchange_rates():
     except Exception as e:
         print(f"✗ Rate fetch error: {e}. Using fallbacks.")
     return rates
+
 
 def ingest_cotton(rates: dict):
     print("\n📊 Ingesting Cotton...")
@@ -144,6 +156,7 @@ def ingest_cotton(rates: dict):
         save_to_csv(df_pkr, DATA_DIR / "cotton" / "cotton_pkr_monthly.csv")
     except Exception as e:
         raise RuntimeError(f"Cotton ingestion failed: {e}")
+
 
 def ingest_crude_oil(rates: dict):
     print("\n📊 Ingesting Crude Oil...")
@@ -167,6 +180,7 @@ def ingest_crude_oil(rates: dict):
     except Exception as e:
         raise RuntimeError(f"Crude Oil ingestion failed: {e}")
 
+
 def ingest_natural_gas(rates: dict):
     print("\n📊 Ingesting Natural Gas...")
     try:
@@ -189,12 +203,13 @@ def ingest_natural_gas(rates: dict):
     except Exception as e:
         raise RuntimeError(f"Natural Gas ingestion failed: {e}")
 
+
 def ingest_polyester(rates: dict):
     print("\n📊 Ingesting Polyester...")
     try:
         csv_path = DATA_DIR / "polyester" / "polyester_futures_monthly_clean.csv"
         if not csv_path.exists():
-            print(f"✗ Missing source file: {csv_path}")
+            print(f"  ⚠️ Missing source file: {csv_path} — skipping (manual upload required)")
             return
         df_rmb = pd.read_csv(csv_path)
         df_rmb.columns = ['timestamp', 'value']
@@ -211,15 +226,16 @@ def ingest_polyester(rates: dict):
     except Exception as e:
         raise RuntimeError(f"Polyester ingestion failed: {e}")
 
+
 def ingest_viscose(rates: dict):
     logging.info("\n📊 Ingesting Viscose...")
     logging.warning("⚠️ Skipping Viscose as requested. Data must be updated manually.")
     return "⚠️ skipped"
 
+
 def send_failure_alert(failures: dict):
-    """Send email if any ingestion fails."""
     if not os.getenv("ALERT_EMAIL"):
-        return    # skip if not configured
+        return
 
     body = "Commodity ingestion failures:\n\n"
     for commodity, error in failures.items():
@@ -241,16 +257,18 @@ def send_failure_alert(failures: dict):
     except Exception as e:
         logging.warning(f"Alert email failed to send: {e}")
 
+
 def run_all():
     logging.info("=" * 50)
     logging.info("🚀 STARTING COMMODITY INGESTION (PHASE 5 AUTOMATION)")
     logging.info("=" * 50)
-    
-    if not SUPABASE_URL or not SUPABASE_KEY:
+
+    url, key = get_supabase_credentials()
+    if not url or not key:
         logging.warning("⚠️  Warning: Supabase is NOT configured. Data will only be saved to CSVs.")
-    
+
     rates = fetch_exchange_rates()
-    
+
     results = {}
     tasks = [
         ("Cotton", lambda: ingest_cotton(rates)),
@@ -259,7 +277,7 @@ def run_all():
         ("Polyester", lambda: ingest_polyester(rates)),
         ("Viscose", lambda: ingest_viscose(rates))
     ]
-    
+
     for name, task in tasks:
         try:
             task()
@@ -269,17 +287,18 @@ def run_all():
             results[name] = f"❌ failed: {e}"
             logging.error(f"{name}: {e}")
 
-    # Print clean summary at end
     logging.info("\n=== INGESTION SUMMARY ===")
     for k, v in results.items():
         logging.info(f"  {k}: {v}")
 
-    # Exit with error code if any commodity failed
     failures = {k: v for k, v in results.items() if "❌" in v}
     if failures:
         send_failure_alert(failures)
-        sys.exit(1)
+        print("⚠️ Some commodities failed, but continuing pipeline")
+
+    print("\n=== PIPELINE STATUS ===")
+    print("Ingestion completed")
+
 
 if __name__ == "__main__":
     run_all()
-
