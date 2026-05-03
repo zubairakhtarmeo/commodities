@@ -7021,28 +7021,31 @@ def render_commodity_tab(name: str, metadata: dict, predictions: dict, icon: str
             'Recommendation': []
         }
         
-        horizons = get_prediction_horizons(predictions)
-        for horizon in horizons:
-            pred = predictions[horizon]
-            export_data['Forecast Period'].append(horizon)
-            export_data['Predicted Price'].append(pred['price'])
-            export_data['Change %'].append(pred['change'])
-            export_data['Lower Bound'].append(pred['lower'])
-            export_data['Upper Bound'].append(pred['upper'])
-            export_data['Confidence %'].append(pred['confidence'])
-            export_data['Recommendation'].append(pred['action'])
-        
-        forecast_export_df = pd.DataFrame(export_data)
-        
-        # Download button
-        csv_data = forecast_export_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📊 Download Excel",
-            data=csv_data,
-            file_name=f"{name.replace(' ', '_')}_predictions_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        if predictions:
+            horizons = get_prediction_horizons(predictions)
+            for horizon in horizons:
+                if horizon not in predictions:
+                    continue
+                pred = predictions[horizon]
+                export_data['Forecast Period'].append(horizon)
+                export_data['Predicted Price'].append(pred['price'])
+                export_data['Change %'].append(pred.get('change', 0))
+                export_data['Lower Bound'].append(pred.get('lower', pred['price']))
+                export_data['Upper Bound'].append(pred.get('upper', pred['price']))
+                export_data['Confidence %'].append(pred.get('confidence', 0))
+                export_data['Recommendation'].append(pred.get('action', ''))
+
+            forecast_export_df = pd.DataFrame(export_data)
+            csv_data = forecast_export_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📊 Download Excel",
+                data=csv_data,
+                file_name=f"{name.replace(' ', '_')}_predictions_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.button("📊 Download Excel", disabled=True, use_container_width=True)
 
     # Procurement signal section (Phase 6)
     _sig_map = (
