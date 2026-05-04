@@ -374,6 +374,90 @@ def walk_forward_mae(
     return float(np.mean(errors)) if errors else float("inf")
 
 
+# ── Return-based modelling helpers ───────────────────────────────────────────
+
+def build_return_features(
+    series: pd.Series,
+    externals: dict[str, pd.Series] | None = None,
+) -> pd.DataFrame:
+    """
+    Same features as build_features(), but target column is
+    return_1 = pct_change(1) instead of price level.
+    Predicting returns makes flat price series learnable:
+    even tiny learnable fluctuations compound across horizons.
+    """
+    df = build_features(series, externals)
+    returns = series.pct_change(1)
+    df["target_return"] = returns.reindex(df.index)
+    return df.dropna(subset=["target_return"])
+
+
+def walk_forward_mae_returns(
+    model,
+    scaler: StandardScaler | None,
+    train_series: pd.Series,
+    val_series: pd.Series,
+    feature_cols: list[str],
+    external_vals: dict[str, float] | None = None,
+) -> float:
+    """
+    Walk-forward MAE for a return-predicting model.
+    Converts predicted return → price, then measures MAE on price (same
+    units as level-model MAE so the two are directly comparable).
+    """
+    window = list(train_series.values)
+    if len(window) < 6:
+        return float("inf")
+
+    errors = []
+    for dt, actual in val_series.items():
+        x = _build_feature_vector(window, dt, feature_cols, external_vals)
+        if scaler is not None:
+            x = scaler.transform(x)
+        pred_return = float(np.clip(model.predict(x)[0], -0.30, 0.30))
+        pred_price  = max(0.0, window[-1] * (1 + pred_return))
+        errors.append(abs(pred_price - actual))
+        window.append(actual)  # feed actual, not prediction
+
+    return float(np.mean(errors)) if errors else float("inf")
+
+
+def recursive_forecast_returns(
+    model,
+    scaler: StandardScaler | None,
+    series: pd.Series,
+    horizons: list[int],
+    as_of: pd.Timestamp,
+    feature_cols: list[str],
+    external_vals: dict[str, float] | None = None,
+) -> dict[int, float]:
+    """
+    Recursive forecast where the model predicts month-on-month return.
+    Each step: price_t = price_{t-1} × (1 + predicted_return_t).
+    Because the return compounds across steps, even a small non-zero
+    return produces a visible price trend across h1 → h3 → h6.
+    """
+    window  = list(series.values[-12:])
+    predictions: dict[int, float] = {}
+    current = as_of
+
+    for step in range(1, max(horizons) + 1):
+        next_dt = current + relativedelta(months=1)
+        x_new   = _build_feature_vector(window, next_dt, feature_cols, external_vals)
+        if scaler is not None:
+            x_new = scaler.transform(x_new)
+        pred_return = float(np.clip(model.predict(x_new)[0], -0.30, 0.30))
+        pred_price  = max(0.0, window[-1] * (1 + pred_return))
+
+        if step in horizons:
+            predictions[step] = pred_price
+
+        window.append(pred_price)
+        current = next_dt
+
+    return predictions
+
+
 # ── Push to Supabase ──────────────────────────────────────────────────────────
 
 def push_predictions(supabase, records: list[dict]) -> bool:
@@ -399,7 +483,7 @@ def forecast_commodity(
 ) -> str:
     """
     1. Fetch series + align external signals
-    2. Train/eval each model on train split; apply baseline penalty
+    2. Train/eval each model on train split (level + return-based); apply baseline penalty
     3. Reject flat models; pick best non-flat
     4. Retrain winner on full data; apply sanity clip
     5. Push USD + PKR records
@@ -413,10 +497,16 @@ def forecast_commodity(
         logging.info(f"  {msg}")
         return msg
 
+    logging.info(
+        f"  Data: {len(series)} rows ({series.index[0].date()} → {series.index[-1].date()})"
+    )
+
     # ── External signals ──────────────────────────────────────────────────────
     ext_keys     = COMMODITY_EXTERNALS.get(commodity, [])
     externals    = {k: external_cache[k] for k in ext_keys if k in external_cache}
     feature_cols = get_feature_cols(commodity)
+
+    logging.info(f"  Externals: {list(externals.keys()) or 'none'}")
 
     # Last known external values (constant during recursive forecast)
     ext_vals: dict[str, float] = {}
@@ -445,26 +535,48 @@ def forecast_commodity(
         logging.info(f"  ⚠️ missing features (will skip): {missing}")
     feature_cols = available_cols
 
-    logging.info(f"  Features used: {len(feature_cols)} — {feature_cols}")
+    logging.info(f"  Features used: {len(feature_cols)}")
 
     X_train = df_train[feature_cols].values
     y_train = df_train["value"].values
 
+    # ── Return-based training data ────────────────────────────────────────────
+    df_train_ret = build_return_features(train_series, externals)
+    ret_cols     = [c for c in feature_cols if c in df_train_ret.columns]
+    X_train_ret  = df_train_ret[ret_cols].values
+    y_train_ret  = df_train_ret["target_return"].values
+
+    # model_specs: (name, model, use_scaler, use_returns)
     model_specs = [
-        ("baseline_last_value", None,                                               False),
-        ("linear_ridge",        Ridge(alpha=1.0),                                   True),
+        ("baseline_last_value", None,                                               False, False),
+        ("linear_ridge",        Ridge(alpha=1.0),                                   True,  False),
         ("random_forest",       RandomForestRegressor(n_estimators=100, max_depth=5,
-                                                      random_state=42),             False),
+                                                      random_state=42),             False, False),
+        ("ridge_returns",       Ridge(alpha=1.0),                                   True,  True),
+        ("rf_returns",          RandomForestRegressor(n_estimators=100, max_depth=5,
+                                                      random_state=42),             False, True),
     ]
 
     # ── Evaluate models ───────────────────────────────────────────────────────
     raw_maes: dict[str, float] = {}
-    for model_name, model, use_scaler in model_specs:
+    for model_name, model, use_scaler, use_returns in model_specs:
         try:
             if model_name == "baseline_last_value":
                 mae = walk_forward_mae(
                     None, None, train_series, val_series,
                     feature_cols, is_baseline=True,
+                )
+            elif use_returns:
+                if len(X_train_ret) < 8:
+                    raw_maes[model_name] = float("inf")
+                    logging.info(f"  MAE  {model_name}: skipped (too few return samples)")
+                    continue
+                scaler = StandardScaler() if use_scaler else None
+                X_fit  = scaler.fit_transform(X_train_ret) if scaler else X_train_ret
+                model.fit(X_fit, y_train_ret)
+                mae = walk_forward_mae_returns(
+                    model, scaler, train_series, val_series,
+                    feature_cols, external_vals=ext_vals or None,
                 )
             else:
                 scaler = StandardScaler() if use_scaler else None
@@ -496,27 +608,41 @@ def forecast_commodity(
     df_full = build_features(series, externals)
     X_full  = df_full[feature_cols].values
     y_full  = df_full["value"].values
+
+    df_full_ret = build_return_features(series, externals)
+    X_full_ret  = df_full_ret[ret_cols].values if ret_cols else X_full
+    y_full_ret  = df_full_ret["target_return"].values if len(df_full_ret) else y_full
+
     last_known = float(series.iloc[-1])
 
     # Try models in MAE order; skip flat ones
     ranked = sorted(effective_maes.items(), key=lambda x: x[1])
-    best_name   = None
-    preds_usd   = None
+    best_name    = None
+    preds_usd    = None
     flat_skipped = []
+
+    spec_map = {s[0]: (s[1], s[2], s[3]) for s in model_specs}
 
     for candidate_name, _ in ranked:
         if candidate_name == "baseline_last_value":
             candidate_preds = {h: last_known for h in HORIZONS}
         else:
-            spec_map = {s[0]: (s[1], s[2]) for s in model_specs}
-            fresh_model, use_scaler = spec_map[candidate_name]
+            fresh_model, use_scaler, use_returns = spec_map[candidate_name]
             scaler = StandardScaler() if use_scaler else None
-            X_fit  = scaler.fit_transform(X_full) if scaler else X_full
-            fresh_model.fit(X_fit, y_full)
-            candidate_preds = recursive_forecast(
-                fresh_model, scaler, series, HORIZONS, as_of,
-                feature_cols, ext_vals or None,
-            )
+            if use_returns:
+                X_fit = scaler.fit_transform(X_full_ret) if scaler else X_full_ret
+                fresh_model.fit(X_fit, y_full_ret)
+                candidate_preds = recursive_forecast_returns(
+                    fresh_model, scaler, series, HORIZONS, as_of,
+                    feature_cols, ext_vals or None,
+                )
+            else:
+                X_fit = scaler.fit_transform(X_full) if scaler else X_full
+                fresh_model.fit(X_fit, y_full)
+                candidate_preds = recursive_forecast(
+                    fresh_model, scaler, series, HORIZONS, as_of,
+                    feature_cols, ext_vals or None,
+                )
 
         if is_flat(candidate_preds):
             flat_skipped.append(candidate_name)
@@ -566,9 +692,11 @@ def forecast_commodity(
     # ── Sanity clip ───────────────────────────────────────────────────────────
     preds_usd = sanity_clip(preds_usd, last_known)
 
+    used_returns = best_name in {"ridge_returns", "rf_returns"}
     logging.info(
         f"  ★  selected: {best_name}  "
         + "  ".join(f"h{h}={preds_usd[h]:.4f}" for h in HORIZONS)
+        + ("  [return-based]" if used_returns else "")
     )
 
     # ── Build records ─────────────────────────────────────────────────────────
