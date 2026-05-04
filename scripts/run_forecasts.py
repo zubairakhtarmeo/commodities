@@ -527,13 +527,30 @@ def forecast_commodity(
         preds_usd = candidate_preds
         break
 
-    # If every model is flat, fall back to baseline (accept flat rather than nothing)
+    # If every model is flat, use momentum-trend fallback for cotton/polyester
     if best_name is None:
-        logging.info(
-            f"  ⚠️ All models produced flat output — using baseline as fallback"
-        )
-        best_name = "baseline_last_value"
-        preds_usd = {h: last_known for h in HORIZONS}
+        _MOMENTUM_COMMODITIES = {"cotton_usd", "cotton_pkr", "polyester_usd", "polyester_pkr"}
+        if commodity in _MOMENTUM_COMMODITIES and len(series) >= 4 and series.iloc[-4] != 0:
+            momentum = (series.iloc[-1] - series.iloc[-4]) / series.iloc[-4]
+            lo = last_known * 0.80
+            hi = last_known * 1.20
+            preds_usd = {
+                1: float(np.clip(last_known * (1 + momentum),       lo, hi)),
+                3: float(np.clip(last_known * (1 + momentum * 1.5), lo, hi)),
+                6: float(np.clip(last_known * (1 + momentum * 2.0), lo, hi)),
+            }
+            best_name = "momentum_fallback"
+            logging.info(
+                f"  Flat fallback activated using momentum for {commodity} "
+                f"(momentum={momentum:+.4f}, "
+                f"h1={preds_usd[1]:.4f}, h3={preds_usd[3]:.4f}, h6={preds_usd[6]:.4f})"
+            )
+        else:
+            logging.info(
+                f"  ⚠️ All models produced flat output — using baseline as fallback"
+            )
+            best_name = "baseline_last_value"
+            preds_usd = {h: last_known for h in HORIZONS}
 
     if flat_skipped:
         logging.info(f"  Flat-output prevention triggered for: {flat_skipped}")
