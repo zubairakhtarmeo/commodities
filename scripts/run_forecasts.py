@@ -306,7 +306,10 @@ def walk_forward_mae(
 
 def push_predictions(supabase, records: list[dict]) -> bool:
     try:
-        supabase.table("prediction_records").upsert(records).execute()
+        supabase.table("prediction_records").upsert(
+            records,
+            on_conflict="commodity,horizon_months,as_of_date",
+        ).execute()
         return True
     except Exception as e:
         logging.warning(f"  ✗ Supabase push failed: {e}")
@@ -463,7 +466,11 @@ def run_ml_forecasts():
         print("Forecast completed (skipped — no Supabase connection)")
         return
 
-    as_of    = pd.Timestamp(date.today().replace(day=1))
+    today = pd.Timestamp.today()
+    as_of = pd.Timestamp(year=today.year, month=today.month, day=1)
+    if as_of > pd.Timestamp.today():
+        raise ValueError(f"Invalid as_of_date computed: {as_of} is in the future")
+
     pkr_rate = get_fx_rate("PKR")
     logging.info(f"As-of: {as_of.date()}  |  FX: {pkr_rate:.2f} PKR/USD")
 
