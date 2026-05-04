@@ -75,7 +75,7 @@ MAX_JUMP_PCT      = 50.0   # clamp predictions to ±50% of last known price
 
 # External signals injected as features per commodity
 COMMODITY_EXTERNALS: dict[str, list[str]] = {
-    "cotton_usd":      [],
+    "cotton_usd":      ["crude_oil_usd"],          # crude → fertiliser/transport costs
     "crude_oil_usd":   [],
     "natural_gas_usd": ["crude_oil_usd"],
     "polyester_usd":   ["crude_oil_usd", "natural_gas_usd"],

@@ -147,7 +147,7 @@ def ingest_cotton(rates: dict):
         df['value'] = pd.to_numeric(df['value'], errors='coerce') / 100
         df = df.dropna()
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df[df['timestamp'] >= '2020-01-01']
+        df = df[df['timestamp'] >= '2015-01-01']
         push_to_supabase(df, 'cotton_usd', COMMODITY_UNITS.get('cotton_usd', 'USD/lb'), 'FRED', False)
         save_to_csv(df, DATA_DIR / "cotton" / "cotton_usd_monthly.csv")
         df_pkr = df.copy()
@@ -169,7 +169,7 @@ def ingest_crude_oil(rates: dict):
         df['value'] = pd.to_numeric(df['value'], errors='coerce')
         df = df.dropna()
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df[df['timestamp'] >= '2020-01-01']
+        df = df[df['timestamp'] >= '2015-01-01']
         df = df.set_index('timestamp').resample('MS').last().reset_index().dropna()
         push_to_supabase(df, 'crude_oil_usd', COMMODITY_UNITS.get('crude_oil_usd', 'USD/barrel'), 'FRED', False)
         save_to_csv(df, DATA_DIR / "energy" / "crude_oil_brent_usd_monthly_clean.csv")
@@ -192,7 +192,7 @@ def ingest_natural_gas(rates: dict):
         df['value'] = pd.to_numeric(df['value'], errors='coerce')
         df = df.dropna()
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df[df['timestamp'] >= '2020-01-01']
+        df = df[df['timestamp'] >= '2015-01-01']
         df = df.set_index('timestamp').resample('MS').mean().reset_index().dropna()
         push_to_supabase(df, 'natural_gas_usd', COMMODITY_UNITS.get('natural_gas_usd', 'USD/MMBTU'), 'FRED', False)
         save_to_csv(df, DATA_DIR / "energy" / "natural_gas_usd_monthly_clean.csv")
