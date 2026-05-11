@@ -64,6 +64,7 @@ COMMODITIES_USD = [
     "crude_oil_usd",
     "natural_gas_usd",
     "polyester_usd",
+    "viscose_usd",
 ]
 
 HORIZONS     = [1, 3, 6]
@@ -79,6 +80,9 @@ COMMODITY_EXTERNALS: dict[str, list[str]] = {
     "crude_oil_usd":   [],
     "natural_gas_usd": ["crude_oil_usd"],
     "polyester_usd":   ["crude_oil_usd", "natural_gas_usd"],
+    # VSF uses energy-intensive wet-spinning; crude oil drives production costs
+    # Cotton is a direct substitute — cotton price movements shift VSF demand
+    "viscose_usd":     ["crude_oil_usd", "cotton_usd"],
 }
 
 # Base feature columns (same for all commodities)
@@ -655,7 +659,7 @@ def forecast_commodity(
 
     # If every model is flat, use momentum-trend fallback for cotton/polyester
     if best_name is None:
-        _MOMENTUM_COMMODITIES = {"cotton_usd", "cotton_pkr", "polyester_usd", "polyester_pkr"}
+        _MOMENTUM_COMMODITIES = {"cotton_usd", "cotton_pkr", "polyester_usd", "polyester_pkr", "viscose_usd", "viscose_pkr"}
         if commodity in _MOMENTUM_COMMODITIES and len(series) >= 4 and series.iloc[-4] != 0:
             momentum = (series.iloc[-1] - series.iloc[-4]) / series.iloc[-4]
             lo = last_known * 0.80
@@ -746,41 +750,6 @@ def forecast_commodity(
     return status
 
 
-# ── Viscose lightweight validation ────────────────────────────────────────────
-
-def try_viscose(supabase) -> pd.Series | None:
-    """
-    Attempt to fetch viscose_usd data.  Returns the series if it meets minimum
-    quality standards; otherwise logs the issue and returns None.
-    """
-    try:
-        series = fetch_series(supabase, "viscose_usd")
-        if series is None or len(series) == 0:
-            logging.info("  viscose_usd: no data in commodity_prices — skipping")
-            return None
-
-        # Continuity check: flag gaps > 2 months
-        gaps = series.index.to_series().diff().dt.days.dropna()
-        large_gaps = (gaps > 62).sum()
-        nan_count  = series.isna().sum()
-
-        logging.info(
-            f"  viscose_usd: {len(series)} rows, {nan_count} NaN, {large_gaps} gap(s) > 2 mo"
-        )
-
-        if len(series) < MIN_ROWS:
-            logging.info(f"  viscose_usd: insufficient rows ({len(series)} < {MIN_ROWS}) — skipping")
-            return None
-        if nan_count > 0:
-            logging.info("  viscose_usd: NaN values detected — skipping")
-            return None
-
-        return series
-    except Exception as e:
-        logging.warning(f"  viscose_usd: fetch/validation error — {e}")
-        return None
-
-
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run_ml_forecasts():
@@ -826,20 +795,6 @@ def run_ml_forecasts():
         except Exception as e:
             logging.error(f"  ❌ Unexpected error for {commodity}: {e}")
             results[commodity] = f"❌ error: {e}"
-
-    # ── Viscose ───────────────────────────────────────────────────────────────
-    logging.info(f"\n📊 viscose_usd")
-    visc_series = try_viscose(supabase)
-    if visc_series is not None:
-        try:
-            results["viscose_usd"] = forecast_commodity(
-                supabase, "viscose_usd", as_of, pkr_rate, external_cache
-            )
-        except Exception as e:
-            logging.error(f"  ❌ viscose_usd forecast failed: {e}")
-            results["viscose_usd"] = f"❌ error: {e}"
-    else:
-        results["viscose_usd"] = "⚠️ skipped (no valid data)"
 
     # ── Summary ───────────────────────────────────────────────────────────────
     logging.info("\n=== FORECAST SUMMARY ===")

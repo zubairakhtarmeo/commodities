@@ -6415,10 +6415,10 @@ def render_pending_data_card(name: str, info: dict):
 
 
 # Maps tab name → (db_commodity_key, is_futures) for procurement signals.
-# Viscose is intentionally excluded (no prediction data).
 _INTL_SIGNAL_MAP: dict[str, tuple[str, bool]] = {
     "Cotton": ("cotton_usd", False),
     "Polyester": ("polyester_usd", True),
+    "Viscose": ("viscose_usd", False),
     "Natural Gas": ("natural_gas_usd", False),
     "Crude Oil": ("crude_oil_usd", False),
 }
@@ -6426,6 +6426,7 @@ _INTL_SIGNAL_MAP: dict[str, tuple[str, bool]] = {
 _LOCAL_SIGNAL_MAP: dict[str, tuple[str, bool]] = {
     "Cotton (Local)": ("cotton_pkr", False),
     "Polyester (Local)": ("polyester_pkr", True),
+    "Viscose (Local)": ("viscose_pkr", False),
     "Natural Gas": ("natural_gas_pkr", False),
     "Crude Oil": ("crude_oil_pkr", False),
 }

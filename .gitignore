@@ -5,10 +5,16 @@ src/*.egg-info/
 .venv/
 .vscode/
 .ipynb_checkpoints/
+.claude/
 
 # OS files
 Thumbs.db
 Desktop.ini
+
+# local secrets
+.env
+.env.*
+.streamlit/secrets.toml
 
 # local data
 /data/raw/
@@ -25,3 +31,9 @@ Desktop.ini
 
 # large binaries
 *.pdf
+
+# backups / temporary files
+*.bak
+*.bak_*
+*~
+*.tmp

@@ -228,9 +228,8 @@ def ingest_polyester(rates: dict):
 
 
 def ingest_viscose(rates: dict):
-    logging.info("\n📊 Ingesting Viscose...")
-    logging.warning("⚠️ Skipping Viscose as requested. Data must be updated manually.")
-    return "⚠️ skipped"
+    from scripts.ingest_viscose import ingest_viscose as _ingest_viscose
+    return _ingest_viscose(rates)
 
 
 def send_failure_alert(failures: dict):

@@ -1,0 +1,134 @@
+# Viscose Staple Fiber (VSF) — Elasticity Configuration
+# Instrument:  China VSF spot price (RMB/ton → USD/ton)
+# Benchmark:   SunSirs commodity_id=1057
+# Frequency:   Monthly
+#
+# Elasticity reasoning:
+#   VSF is a structurally low-volatility commodity (~4-6% annualised).
+#   Price is primarily driven by:
+#     - Chinese energy costs (wet-spinning is energy-intensive)
+#     - Cotton price differential (substitution pressure)
+#     - Dissolving pulp (feedstock) availability
+#     - China capacity utilisation
+#   Elasticities are deliberately conservative given the narrow historical range.
+
+asset_id: "VISCOSE"
+description: "Viscose Staple Fiber (VSF) China spot price with production-cost and substitution drivers"
+
+variables:
+  - name: "china_energy_cost"
+    category: "production_cost"
+    description: "Chinese energy cost index (proxy: crude oil / natural gas)"
+    unit: "% change"
+    default_value: 0.0
+
+  - name: "cotton_price_differential"
+    category: "substitution"
+    description: "Cotton vs VSF price spread; positive = cotton more expensive → VSF demand rises"
+    unit: "% change in spread"
+    default_value: 0.0
+
+  - name: "dissolving_pulp_price"
+    category: "feedstock"
+    description: "Dissolving pulp spot price (primary VSF feedstock)"
+    unit: "% change"
+    default_value: 0.0
+
+  - name: "china_vsf_capacity_utilisation"
+    category: "supply"
+    description: "China VSF industry capacity utilisation rate"
+    unit: "% change in utilisation"
+    default_value: 0.0
+
+  - name: "global_textile_demand"
+    category: "demand"
+    description: "Global apparel/textile demand indicator"
+    unit: "% change"
+    default_value: 0.0
+
+  - name: "usd_cny_rate"
+    category: "fx"
+    description: "USD/CNY exchange rate (affects USD-denominated price directly)"
+    unit: "% change"
+    default_value: 0.0
+
+  - name: "polyester_price"
+    category: "substitution"
+    description: "Polyester PSF price (direct VSF substitute in blended textiles)"
+    unit: "% change"
+    default_value: 0.0
+
+  - name: "pakistan_import_demand"
+    category: "demand"
+    description: "Pakistan VSF import volume (local demand signal)"
+    unit: "% change"
+    default_value: 0.0
+
+elasticities:
+  # Energy: wet-spinning uses ~1.5-2× more energy than polyester spinning
+  # A 10% energy cost rise historically raises VSF cost by ~2-3%
+  - variable: "china_energy_cost"
+    elasticity: 0.25
+    lag_periods: 1
+
+  # Cotton substitution: when cotton rises 10%, VSF demand rises ~3-4%
+  # This creates modest upward price pressure on VSF
+  - variable: "cotton_price_differential"
+    elasticity: 0.35
+    lag_periods: 0
+
+  # Dissolving pulp is 35-45% of VSF production cost
+  # A 10% feedstock rise → ~4% VSF price rise
+  - variable: "dissolving_pulp_price"
+    elasticity: 0.40
+    lag_periods: 1
+
+  # Supply side: China controls ~65% of global VSF output
+  # Higher utilisation → tighter supply → price support
+  - variable: "china_vsf_capacity_utilisation"
+    elasticity: 0.20
+    lag_periods: 0
+
+  # Demand: global textile demand growth of 5% → modest VSF price support
+  - variable: "global_textile_demand"
+    elasticity: 0.15
+    lag_periods: 0
+
+  # FX: USD/CNY directly affects USD-denominated price
+  # CNY appreciation (CNY/USD falls) → USD price rises
+  - variable: "usd_cny_rate"
+    elasticity: -0.90
+    lag_periods: 0
+
+  # Polyester substitute: if polyester rises 10%, some demand shifts to VSF → +2% VSF
+  - variable: "polyester_price"
+    elasticity: 0.20
+    lag_periods: 0
+
+  # Pakistan import demand: relatively small global share; modest local price impact
+  - variable: "pakistan_import_demand"
+    elasticity: 0.05
+    lag_periods: 1
+
+hierarchy:
+  - name: "production_cost"
+    children: ["china_energy_cost", "dissolving_pulp_price"]
+  - name: "substitution_demand"
+    children: ["cotton_price_differential", "polyester_price"]
+  - name: "supply_side"
+    children: ["china_vsf_capacity_utilisation"]
+  - name: "demand_side"
+    children: ["global_textile_demand", "pakistan_import_demand"]
+  - name: "macroeconomic"
+    children: ["usd_cny_rate"]
+
+metadata:
+  source: "SunSirs, World Bank Commodity Data, China NBS, internal estimates"
+  frequency: "monthly"
+  last_updated: "2026-05-06"
+  notes: >
+    VSF is structurally low-volatility (~4-6% annualised vs cotton 20-30%).
+    Forecasts will reflect this stability, which is itself a business insight:
+    VSF carries lower commodity risk than cotton.
+    Large deviations would indicate a market disruption (e.g., major Chinese
+    producer shutdown, dissolving pulp supply crisis, or cotton price shock).
