@@ -155,6 +155,7 @@ def push_predictions(predictions: list[dict], url: str, key: str) -> bool:
     r = requests.post(
         f"{url}/rest/v1/cotton_country_predictions",
         headers=headers,
+        params={"on_conflict": "country,as_of_date,horizon_months"},
         json=predictions,
         timeout=30,
     )

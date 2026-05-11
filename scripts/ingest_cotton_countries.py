@@ -137,6 +137,7 @@ def ingest_file(csv_path: str, supabase_url: str, supabase_key: str) -> int:
         r = requests.post(
             f"{supabase_url}/rest/v1/cotton_country_prices",
             headers=headers,
+            params={"on_conflict": "date,country,source"},
             json=batch,
             timeout=30,
         )
