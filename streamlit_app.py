@@ -447,6 +447,17 @@ def supabase_is_configured() -> bool:
     return get_supabase_config() is not None
 
 
+def _horizon_to_months(horizon: str) -> int | None:
+    """Best-effort conversion from UI horizon strings to monthly DB horizons."""
+    raw = str(horizon or "").strip().lower()
+    if raw.endswith("m") and raw[:-1].isdigit():
+        return int(raw[:-1])
+    if raw.endswith("d") and raw[:-1].isdigit():
+        days = int(raw[:-1])
+        return max(1, round(days / 30))
+    return None
+
+
 def _auto_sync_predictions_to_supabase() -> None:
     """Silently push all artifact prediction CSVs to Supabase once per session.
 
@@ -848,12 +859,48 @@ def supabase_fetch_prediction_history(
         )
         df = pd.DataFrame(rows)
         if df.empty:
-            return _from_cache()  # fallback to local cache when Supabase returns nothing
+            raise ValueError("No rows from asset/horizon prediction schema")
         df["target_date"] = pd.to_datetime(df["target_date"], errors="coerce")
         df = df.dropna(subset=["target_date"]).sort_values("target_date")
         df = df.drop_duplicates(subset=["target_date"], keep="last")
         result = df.tail(int(days))
         # Save to cache for next time (same pattern as crypto model)
+        try:
+            _PRED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                result.to_json(orient="records", date_format="iso"), encoding="utf-8"
+            )
+        except Exception:
+            pass
+        return result
+    except Exception:
+        pass
+
+    try:
+        eq_filters = {"commodity": asset}
+        months = _horizon_to_months(horizon)
+        if months is not None:
+            eq_filters["horizon_months"] = str(months)
+        if model_name and model_name != "default":
+            eq_filters["model_name"] = model_name
+
+        rows = supabase_rest_select(
+            table="prediction_records",
+            select="commodity,as_of_date,target_date,predicted_value,actual_value,unit,model_name,horizon_months",
+            eq_filters=eq_filters,
+            order="target_date.desc",
+            limit=int(days) * 3,
+        )
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return _from_cache()
+        df["target_date"] = pd.to_datetime(df["target_date"], errors="coerce")
+        df = df.dropna(subset=["target_date"]).sort_values("target_date")
+        df = df.drop_duplicates(subset=["target_date"], keep="last")
+        df["asset"] = df.get("commodity", asset)
+        df["frequency"] = "monthly"
+        df["horizon"] = df.get("horizon_months", "").map(lambda x: f"{int(x)}M" if pd.notna(x) else "")
+        result = df.tail(int(days))
         try:
             _PRED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(
@@ -1331,9 +1378,12 @@ def render_ai_predictions_page():
         st.info("Prediction validation charts are disabled until Supabase is configured.")
         return
 
-    # Quick health-check on the table
+    # Quick health-check on the table. Production may use either the newer
+    # commodity/horizon_months schema or the older asset/horizon schema.
     _, err, status = supabase_rest_select_meta(table="prediction_records", select="asset", limit=1)
-    if err and (status in (401, 403, 404) or "relation" in (err or "").lower() or "not found" in (err or "").lower()):
+    if err and ("column" in (err or "").lower() or "42703" in (err or "")):
+        _, err, status = supabase_rest_select_meta(table="prediction_records", select="commodity", limit=1)
+    if err and (status in (400, 401, 403, 404) or "relation" in (err or "").lower() or "not found" in (err or "").lower()):
         st.error(
             "Supabase `prediction_records` table not found or inaccessible.\n\n"
             f"Details: {err}\n\nSee docs/supabase_streamlit_cloud.md for setup SQL."
