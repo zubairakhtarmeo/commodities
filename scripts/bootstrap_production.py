@@ -169,6 +169,24 @@ STALE_WARN_DAYS  = 35   # warn if latest data is older than this
 STALE_FAIL_DAYS  = 60   # fail if older than this
 FORECAST_MAX_AGE = 45   # days since forecast was generated
 
+# Source classification — determines staleness expectations and warnings.
+# "fred"     : FRED API, typically 4-6 week publication lag; max delay ~70 days acceptable
+# "futures"  : Futures contract CSV with forward dates beyond today; don't flag as stale
+# "static"   : No live feed; CSV-only; warn if older than 120 days
+# "live"     : Live API with daily/weekly updates; standard thresholds apply
+COMMODITY_SOURCES: dict[str, str] = {
+    "cotton_usd":      "fred",     # FRED PCOTTINDUSDM, ~4-6 week lag
+    "cotton_pkr":      "fred",     # derived from cotton_usd
+    "crude_oil_usd":   "live",     # FRED DCOILBRENTEU, daily data
+    "crude_oil_pkr":   "live",
+    "natural_gas_usd": "live",     # FRED DHHNGSP, daily data
+    "natural_gas_pkr": "live",
+    "polyester_usd":   "futures",  # Futures CSV, includes forward contract months
+    "polyester_pkr":   "futures",
+    "viscose_usd":     "static",   # SunSirs scraper dead; CSV baseline only (Jan 2026)
+    "viscose_pkr":     "static",   # derived from viscose_usd
+}
+
 
 def check_environment() -> None:
     _section("Environment")
@@ -244,41 +262,72 @@ def check_commodity_data(url: str, key: str) -> None:
 
     today = date.today()
 
-    # Get distinct commodities present
-    rows, err = _select(url, key, "commodity_prices",
-                        {"select": "commodity", "limit": "500"})
-    if err:
-        _log("FAIL", f"Cannot read commodity_prices: {err}")
-        return
-
-    present = {r["commodity"] for r in rows if r.get("commodity")} if rows else set()
-
     for commodity in EXPECTED_COMMODITIES:
-        if commodity not in present:
-            _log("WARN", f"{commodity}: no rows in commodity_prices")
-        else:
-            latest, err2 = _latest_date(url, key, "commodity_prices",
-                                        extra_params={"commodity": f"eq.{commodity}"})
-            if err2:
-                _log("WARN", f"{commodity}: error fetching latest date -{err2}")
-                continue
-            if not latest:
-                _log("WARN", f"{commodity}: present but no date found")
-                continue
+        source_type = COMMODITY_SOURCES.get(commodity, "live")
 
-            try:
-                latest_dt = datetime.strptime(latest[:10], "%Y-%m-%d").date()
-                age_days = (today - latest_dt).days
-                if age_days > STALE_FAIL_DAYS:
-                    _log("FAIL", f"{commodity}: latest data is {age_days}d old ({latest_dt})")
-                elif age_days > STALE_WARN_DAYS:
-                    _log("WARN", f"{commodity}: latest data is {age_days}d old ({latest_dt})")
-                else:
-                    _log("OK", f"{commodity}: latest {latest_dt} ({age_days}d ago)")
-            except ValueError:
-                _log("WARN", f"{commodity}: unparseable date '{latest}'")
+        # Check for presence + latest date directly per commodity (avoids sampling gaps)
+        latest, err = _latest_date(url, key, "commodity_prices",
+                                   extra_params={"commodity": f"eq.{commodity}"})
+        if err:
+            _log("FAIL", f"{commodity}: query error - {err}")
+            continue
+        if latest is None:
+            _log("WARN" if source_type == "static" else "FAIL",
+                 f"{commodity}: no rows in commodity_prices")
+            continue
 
-    # Duplicate detection: look for (commodity, date) pairs appearing > once
+        try:
+            latest_dt = datetime.strptime(latest[:10], "%Y-%m-%d").date()
+        except ValueError:
+            _log("WARN", f"{commodity}: unparseable date '{latest}'")
+            continue
+
+        age_days = (today - latest_dt).days
+
+        if source_type == "futures":
+            # Futures data legitimately contains forward contract months
+            if age_days < -90:
+                _log("WARN", f"{commodity}: futures data extends {-age_days}d ahead "
+                              f"(latest {latest_dt}) - verify source CSV is current")
+            else:
+                _log("OK", f"{commodity}: latest {latest_dt} [futures data, fwd contract]")
+
+        elif source_type == "fred":
+            # FRED primary commodity prices publish with ~4-6 week delay
+            fred_warn = 75   # warn if older than 75 days (2.5× normal lag)
+            fred_fail = 120  # fail if older than 4 months (clearly stale)
+            if age_days > fred_fail:
+                _log("FAIL", f"{commodity}: {age_days}d old ({latest_dt}) "
+                              "[FRED source - check if ingestion is running]")
+            elif age_days > fred_warn:
+                _log("WARN", f"{commodity}: {age_days}d old ({latest_dt}) "
+                              "[FRED lag expected up to ~70d; this is borderline]")
+            else:
+                _log("OK", f"{commodity}: latest {latest_dt} ({age_days}d ago) [FRED]")
+
+        elif source_type == "static":
+            # Static/CSV-only sources; warn once they're significantly stale
+            static_warn = 120
+            static_fail = 365
+            if age_days > static_fail:
+                _log("FAIL", f"{commodity}: {age_days}d old ({latest_dt}) "
+                              "[static source - manual update required]")
+            elif age_days > static_warn:
+                _log("WARN", f"{commodity}: {age_days}d old ({latest_dt}) "
+                              "[static/CSV source - no live feed available]")
+            else:
+                _log("OK", f"{commodity}: latest {latest_dt} ({age_days}d ago) [static]")
+
+        else:  # live
+            if age_days > STALE_FAIL_DAYS:
+                _log("FAIL", f"{commodity}: {age_days}d old ({latest_dt}) "
+                              "- check ingestion pipeline")
+            elif age_days > STALE_WARN_DAYS:
+                _log("WARN", f"{commodity}: {age_days}d old ({latest_dt})")
+            else:
+                _log("OK", f"{commodity}: latest {latest_dt} ({age_days}d ago)")
+
+    # Duplicate detection (sample up to 5000 rows)
     dupes, err3 = _select(url, key, "commodity_prices",
                           {"select": "commodity,date", "limit": "5000"})
     if dupes and not err3:
@@ -288,10 +337,9 @@ def check_commodity_data(url: str, key: str) -> None:
             seen[k] = seen.get(k, 0) + 1
         dup_count = sum(1 for v in seen.values() if v > 1)
         if dup_count:
-            _log("WARN", f"commodity_prices: {dup_count} duplicate (commodity, date) pairs found")
+            _log("WARN", f"commodity_prices: {dup_count} duplicate (commodity, date) pairs")
         else:
             _log("OK", "commodity_prices: no duplicate (commodity, date) pairs")
-
 
 def check_forecasts(url: str, key: str) -> None:
     _section("Forecast Records (prediction_records)")

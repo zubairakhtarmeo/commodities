@@ -9,6 +9,15 @@ Unit convention (matches dashboard ton_to_kg display logic):
   viscose_usd  → USD/ton  (dashboard ÷1000 → USD/kg for display)
   viscose_pkr  → PKR/ton  (dashboard ÷1000 → PKR/kg for display)
 
+DATA SOURCE STATUS (as of 2026-05-12):
+  SunSirs now shows 2021 demo data to unauthenticated visitors.
+  The scraper fetches pages successfully but the parsed dates fall outside
+  the expected range (2025-2026), so it fails non-fatally and the CSV
+  baseline is used as fallback.
+  Current data ceiling: January 2026 (viscose_usd_monthly.csv, 73 rows).
+  To extend: either obtain SunSirs API access or source from an alternative
+  (e.g. ChinaTexNet, SCI99, World Bank Commodity Markets) and update the CSV.
+
 Design rules:
   - Never fabricate or back-fill data.
   - SunSirs failures are non-fatal: use CSV history as fallback.

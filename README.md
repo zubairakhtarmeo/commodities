@@ -28,6 +28,16 @@ forecast predict --config configs/example_monthly.yml --asset-id GENERIC_ASSET -
 Before onboarding real assets, read: `docs/invariants_and_extension_points.md`.
 It defines which modules are invariant (must never be customized per asset) and the only allowed extension mechanisms.
 
+## Data Sources and Freshness
+
+| Commodity | Source | Type | Update Cadence | Notes |
+|-----------|--------|------|---------------|-------|
+| cotton_usd / cotton_pkr | FRED `PCOTTINDUSDM` | Live API | Monthly | FRED publishes ~4-6 weeks after month-end; 72d age is normal |
+| crude_oil_usd / crude_oil_pkr | FRED `DCOILBRENTEU` | Live API | Daily → monthly | Very fresh; updates within ~24h |
+| natural_gas_usd / natural_gas_pkr | FRED `DHHNGSP` | Live API | Daily → monthly | Very fresh |
+| polyester_usd / polyester_pkr | `polyester_futures_monthly_clean.csv` | Futures CSV | Manual | Includes forward contract months (e.g. 2027); this is intentional futures data, not an error |
+| viscose_usd / viscose_pkr | SunSirs + CSV baseline | Static/CSV | Manual | SunSirs now returns 2021 demo data; live scraping is dead. CSV ceiling: Jan 2026. Extend manually or find alternative source |
+
 ## Production Validation
 
 Run the bootstrap health check before any deployment or after any data pipeline change:

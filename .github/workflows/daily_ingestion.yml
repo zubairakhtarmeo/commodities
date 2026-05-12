@@ -1,8 +1,8 @@
-name: Daily Data Ingestion
+# SUPERSEDED by daily_pipeline.yml which runs at the same time with Python 3.13.
+# Schedule removed to prevent duplicate runs. Kept for manual dispatch only.
+name: Daily Data Ingestion (legacy)
 on:
-  schedule:
-    - cron: '0 2 * * *'    # runs at 2am UTC daily
-  workflow_dispatch:         # allows manual trigger from GitHub UI
+  workflow_dispatch:  # manual trigger only
 
 jobs:
   ingest:
