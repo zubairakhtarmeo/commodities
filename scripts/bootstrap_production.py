@@ -408,43 +408,63 @@ def check_forecasts(url: str, key: str) -> None:
                               f"min={min_v:.4f} max={max_v:.4f}")
 
 
+_REAL_COUNTRY_SOURCES = {"FRED/ICE-No2"}   # sources classified as real/live
+
+
 def check_country_cotton(url: str, key: str) -> None:
     _section("Country Cotton Data")
 
     today = date.today()
 
-    # cotton_country_prices
+    # total row count
     count, err = _count(url, key, "cotton_country_prices")
     if err:
         _log("FAIL", f"cotton_country_prices: {err}")
     elif count == 0:
-        _log("FAIL", "cotton_country_prices: EMPTY -run scripts/ingest_cotton_countries.py")
+        _log("FAIL", "cotton_country_prices: EMPTY - run scripts/ingest_cotton_countries.py")
     else:
-        latest, _ = _latest_date(url, key, "cotton_country_prices")
-        if latest:
-            try:
-                age = (today - datetime.strptime(latest[:10], "%Y-%m-%d").date()).days
-                _log("OK", f"cotton_country_prices: {count:,} rows, latest {latest[:10]} ({age}d ago)")
-            except ValueError:
-                _log("OK", f"cotton_country_prices: {count:,} rows")
-        else:
-            _log("OK", f"cotton_country_prices: {count:,} rows")
+        _log("OK", f"cotton_country_prices: {count:,} rows")
 
-        # Check distinct countries
-        rows, _ = _select(url, key, "cotton_country_prices",
-                          {"select": "country", "limit": "500"})
-        countries = {r["country"] for r in (rows or []) if r.get("country")}
-        if len(countries) < 3:
-            _log("WARN", f"cotton_country_prices: only {len(countries)} distinct countries: {countries}")
-        else:
-            _log("OK", f"cotton_country_prices: {len(countries)} countries - {sorted(countries)}")
+    # Per-country source audit (fetch recent rows with source field)
+    rows, _ = _select(url, key, "cotton_country_prices",
+                      {"select": "country,source,date", "limit": "2000",
+                       "order": "date.desc"})
+    if rows:
+        by_country: dict[str, dict] = {}
+        for r in rows:
+            c = r.get("country", "")
+            if c and c not in by_country:
+                by_country[c] = r   # first occurrence = latest date per country
+
+        real_countries: list[str] = []
+        sample_countries: list[str] = []
+        for country, latest_row in sorted(by_country.items()):
+            src = str(latest_row.get("source", ""))
+            dt_str = str(latest_row.get("date", ""))[:10]
+            try:
+                age = (today - datetime.strptime(dt_str, "%Y-%m-%d").date()).days
+                age_label = f"{age}d ago"
+            except ValueError:
+                age_label = dt_str
+
+            if src in _REAL_COUNTRY_SOURCES:
+                real_countries.append(country)
+                _log("OK", f"  {country}: REAL [{src}], latest {dt_str} ({age_label})")
+            else:
+                sample_countries.append(country)
+                _log("WARN", f"  {country}: SAMPLE [{src}], latest {dt_str}")
+
+        _log("OK" if real_countries else "WARN",
+             f"Real country sources: {real_countries or 'none yet'}")
+        if sample_countries:
+            _log("WARN", f"Sample-only countries (illustrative): {sample_countries}")
 
     # cotton_country_predictions
     pred_count, err2 = _count(url, key, "cotton_country_predictions")
     if err2:
         _log("FAIL", f"cotton_country_predictions: {err2}")
     elif pred_count == 0:
-        _log("WARN", "cotton_country_predictions: empty -run scripts/run_cotton_country_forecasts.py")
+        _log("WARN", "cotton_country_predictions: empty - run scripts/run_cotton_country_forecasts.py")
     else:
         _log("OK", f"cotton_country_predictions: {pred_count:,} rows")
 
@@ -461,6 +481,8 @@ def check_deployment_files() -> None:
         BASE_DIR / "scripts" / "run_cotton_country_forecasts.py",
         BASE_DIR / "scripts" / "ingest_cotton_countries.py",
         BASE_DIR / "scripts" / "ingest_viscose.py",
+        BASE_DIR / "scripts" / "ingest_country_sources.py",
+        BASE_DIR / "country_sources" / "usa_cotton.py",
         BASE_DIR / "src" / "processing" / "units.py",
     ]
 

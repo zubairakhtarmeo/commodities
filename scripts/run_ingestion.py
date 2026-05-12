@@ -228,6 +228,15 @@ def ingest_viscose(rates: dict):
     return _ingest_viscose(rates)
 
 
+def ingest_country_sources(rates: dict):
+    from scripts.ingest_country_sources import ingest_usa
+    url, key = get_supabase_credentials()
+    if not url or not key:
+        return "skipped (no Supabase credentials)"
+    pkr_rate = rates.get("PKR", 278.5)
+    return ingest_usa(pkr_rate, url, key, dry_run=False)
+
+
 def send_failure_alert(failures: dict):
     if not os.getenv("ALERT_EMAIL"):
         return
@@ -274,7 +283,8 @@ def run_all():
         ("Crude Oil", lambda: ingest_crude_oil(rates)),
         ("Natural Gas", lambda: ingest_natural_gas(rates)),
         ("Polyester", lambda: ingest_polyester(rates)),
-        ("Viscose", lambda: ingest_viscose(rates))
+        ("Viscose", lambda: ingest_viscose(rates)),
+        ("Country Sources (USA)", lambda: ingest_country_sources(rates)),
     ]
 
     for name, task in tasks:

@@ -216,9 +216,10 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         prev_price_map = {c: _prev_price(g) for c, g in sb_df.groupby("country")}
 
         merged = pd.DataFrame({
-            "country": latest_sb["country"],
+            "country":       latest_sb["country"],
             "avg_usd_per_lb": latest_sb["price_usd_per_lb"],
-            "latest_month": latest_sb["date"],
+            "latest_month":  latest_sb["date"],
+            "source":        latest_sb["source"] if "source" in latest_sb.columns else "unknown",
         })
         prev_prices = merged["country"].map(prev_price_map)
         merged["trend_pct"] = np.where(
@@ -264,14 +265,23 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         unsafe_allow_html=True,
     )
 
-    # ── Bar chart ─────────────────────────────────────────────────────────────
-    chart_df = merged[["country", "avg_usd_per_lb"]].dropna().sort_values("avg_usd_per_lb", ascending=False)
+    # ── Bar chart — real sources in blue, sample in grey ─────────────────────
+    _REAL_SOURCES = {"FRED/ICE-No2"}
+    chart_df = merged[["country", "avg_usd_per_lb", "source"]].dropna(
+        subset=["country", "avg_usd_per_lb"]
+    ).sort_values("avg_usd_per_lb", ascending=False)
+    if "source" not in chart_df.columns:
+        chart_df["source"] = "unknown"
+    bar_colors = [
+        "#2563eb" if str(s) in _REAL_SOURCES else "#94a3b8"
+        for s in chart_df["source"]
+    ]
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             x=chart_df["country"],
             y=chart_df["avg_usd_per_lb"],
-            marker_color="#2563eb",
+            marker_color=bar_colors,
             text=chart_df["avg_usd_per_lb"],
             texttemplate="%{text:.3f}",
             textposition="outside",
@@ -305,9 +315,19 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         arrow = "↑" if v >= 0 else "↓"
         return f"{arrow} {abs(float(v)):.1f}%"
 
+    def _source_label(s: str) -> str:
+        if str(s) in _REAL_SOURCES:
+            return "Live"
+        if str(s) == "sample":
+            return "Sample"
+        return str(s) if s and str(s) != "unknown" else "Sample"
+
+    src_col = merged["source"] if "source" in merged.columns else pd.Series(["unknown"] * len(merged))
+
     table = pd.DataFrame(
         {
             "Country": merged["country"],
+            "Data": src_col.map(_source_label),
             "Avg Price (USD/lb)": merged["avg_usd_per_lb"].map(
                 lambda x: f"{float(x):.3f}" if pd.notna(x) else ""
             ),
@@ -327,6 +347,11 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
             return "background-color: #fee2e2; color: #991b1b; font-weight: 800;"
         return ""
 
+    def _data_style(val):
+        if val == "Live":
+            return "background-color: #dbeafe; color: #1d4ed8; font-weight: 800;"
+        return "color: #94a3b8; font-style: italic;"
+
     styled = (
         table.style
         .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
@@ -336,6 +361,7 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
             subset=["Avg Price (USD/lb)", "Forecast (1M, USD/lb)"],
         )
         .pipe(lambda s: _styler_apply_elementwise(s, _chg_style, subset=["Trend"]))
+        .pipe(lambda s: _styler_apply_elementwise(s, _data_style, subset=["Data"]))
         .set_table_styles(
             [
                 {
@@ -355,6 +381,10 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         )
     )
     st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
+    st.caption(
+        "Data column: **Live** = real auto-updating source (blue bars); "
+        "**Sample** = illustrative dataset, not guaranteed accurate (grey bars)."
+    )
 
 
 def _get_streamlit_secret(key: str) -> Optional[str]:
