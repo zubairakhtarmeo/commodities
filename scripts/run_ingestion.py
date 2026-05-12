@@ -229,12 +229,45 @@ def ingest_viscose(rates: dict):
 
 
 def ingest_country_sources(rates: dict):
-    from scripts.ingest_country_sources import ingest_usa
+    """Run all country cotton connectors (Tier A + Tier B)."""
+    from scripts.ingest_country_sources import (
+        ingest_brazil, ingest_ivory_coast, ingest_pakistan,
+        ingest_sudan, ingest_tanzania, ingest_turkey,
+        ingest_usa, ingest_west_africa,
+    )
+    from country_sources._common import fetch_ice_no2_series
+
     url, key = get_supabase_credentials()
     if not url or not key:
         return "skipped (no Supabase credentials)"
+
     pkr_rate = rates.get("PKR", 278.5)
-    return ingest_usa(pkr_rate, url, key, dry_run=False)
+    brl_rate = rates.get("BRL", 5.10)
+
+    # Fetch ICE No.2 once; pass to all basis-adjusted connectors
+    try:
+        ice_series = fetch_ice_no2_series(start_date="2015-01-01")
+    except Exception as exc:
+        logging.warning("Country sources: ICE fetch failed (%s) — skipping all", exc)
+        return f"FAIL: ICE fetch {exc}"
+
+    results = {
+        # Tier A
+        "USA":         ingest_usa(pkr_rate, url, key, dry_run=False),
+        "Brazil":      ingest_brazil(pkr_rate, brl_rate, ice_series, url, key, dry_run=False),
+        "Pakistan":    ingest_pakistan(pkr_rate, ice_series, url, key, dry_run=False),
+        "Turkey":      ingest_turkey(pkr_rate, ice_series, url, key, dry_run=False),
+        # Tier B
+        "Tanzania":    ingest_tanzania(pkr_rate, ice_series, url, key, dry_run=False),
+        "Ivory Coast": ingest_ivory_coast(pkr_rate, ice_series, url, key, dry_run=False),
+        "Sudan":       ingest_sudan(pkr_rate, ice_series, url, key, dry_run=False),
+        "West Africa": ingest_west_africa(pkr_rate, ice_series, url, key, dry_run=False),
+    }
+    failures = [f"{c}: {s}" for c, s in results.items() if "FAIL" in s]
+    if failures:
+        raise RuntimeError("Country source failures: " + "; ".join(failures))
+    ok = sum(1 for s in results.values() if s.startswith("OK"))
+    return f"OK: {ok}/{len(results)} countries updated"
 
 
 def send_failure_alert(failures: dict):

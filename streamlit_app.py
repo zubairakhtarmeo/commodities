@@ -265,17 +265,28 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         unsafe_allow_html=True,
     )
 
-    # ── Bar chart — real sources in blue, sample in grey ─────────────────────
-    _REAL_SOURCES = {"FRED/ICE-No2"}
+    # ── Source classification ──────────────────────────────────────────────────
+    _LIVE_SOURCES      = {"FRED/ICE-No2", "CEPEA/ESALQ"}
+    _ESTIMATED_SOURCES = {"ICE/Brazil-basis", "ICE/Pakistan-domestic", "ICE/Turkey-import"}
+    _REGIONAL_SOURCES  = {
+        "regional/EastAfrica", "regional/WestAfrica-CIV",
+        "regional/EastAfrica-SDN", "regional/WestAfrica",
+    }
+
+    def _bar_color(src: str) -> str:
+        s = str(src)
+        if s in _LIVE_SOURCES:      return "#2563eb"   # blue  — Live
+        if s in _ESTIMATED_SOURCES: return "#d97706"   # amber — Estimated
+        if s in _REGIONAL_SOURCES:  return "#0891b2"   # teal  — Regional
+        return "#94a3b8"                                # grey  — Sample
+
+    # ── Bar chart — colour-coded by source tier ────────────────────────────────
     chart_df = merged[["country", "avg_usd_per_lb", "source"]].dropna(
         subset=["country", "avg_usd_per_lb"]
     ).sort_values("avg_usd_per_lb", ascending=False)
     if "source" not in chart_df.columns:
         chart_df["source"] = "unknown"
-    bar_colors = [
-        "#2563eb" if str(s) in _REAL_SOURCES else "#94a3b8"
-        for s in chart_df["source"]
-    ]
+    bar_colors = [_bar_color(s) for s in chart_df["source"]]
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
@@ -316,11 +327,11 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         return f"{arrow} {abs(float(v)):.1f}%"
 
     def _source_label(s: str) -> str:
-        if str(s) in _REAL_SOURCES:
-            return "Live"
-        if str(s) == "sample":
-            return "Sample"
-        return str(s) if s and str(s) != "unknown" else "Sample"
+        sv = str(s)
+        if sv in _LIVE_SOURCES:      return "Live"
+        if sv in _ESTIMATED_SOURCES: return "Estimated"
+        if sv in _REGIONAL_SOURCES:  return "Regional"
+        return "Sample"
 
     src_col = merged["source"] if "source" in merged.columns else pd.Series(["unknown"] * len(merged))
 
@@ -348,8 +359,9 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         return ""
 
     def _data_style(val):
-        if val == "Live":
-            return "background-color: #dbeafe; color: #1d4ed8; font-weight: 800;"
+        if val == "Live":      return "background-color: #dbeafe; color: #1d4ed8; font-weight: 800;"
+        if val == "Estimated": return "background-color: #fef3c7; color: #b45309; font-weight: 700;"
+        if val == "Regional":  return "background-color: #cffafe; color: #0e7490; font-weight: 700;"
         return "color: #94a3b8; font-style: italic;"
 
     styled = (
@@ -382,8 +394,10 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
     )
     st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
     st.caption(
-        "Data column: **Live** = real auto-updating source (blue bars); "
-        "**Sample** = illustrative dataset, not guaranteed accurate (grey bars)."
+        "**Live** (blue) = official auto-updating source.  "
+        "**Estimated** (amber) = derived from ICE No.2 with documented market basis.  "
+        "**Regional** (teal) = benchmark estimate for farm-gate positioning.  "
+        "**Sample** (grey) = illustrative placeholder only."
     )
 
 

@@ -408,7 +408,14 @@ def check_forecasts(url: str, key: str) -> None:
                               f"min={min_v:.4f} max={max_v:.4f}")
 
 
-_REAL_COUNTRY_SOURCES = {"FRED/ICE-No2"}   # sources classified as real/live
+_LIVE_COUNTRY_SOURCES      = {"FRED/ICE-No2", "CEPEA/ESALQ"}
+_ESTIMATED_COUNTRY_SOURCES = {"ICE/Brazil-basis", "ICE/Pakistan-domestic", "ICE/Turkey-import"}
+_REGIONAL_COUNTRY_SOURCES  = {
+    "regional/EastAfrica", "regional/WestAfrica-CIV",
+    "regional/EastAfrica-SDN", "regional/WestAfrica",
+}
+# Kept for backwards compatibility with existing callers
+_REAL_COUNTRY_SOURCES = _LIVE_COUNTRY_SOURCES | _ESTIMATED_COUNTRY_SOURCES | _REGIONAL_COUNTRY_SOURCES
 
 
 def check_country_cotton(url: str, key: str) -> None:
@@ -436,8 +443,11 @@ def check_country_cotton(url: str, key: str) -> None:
             if c and c not in by_country:
                 by_country[c] = r   # first occurrence = latest date per country
 
-        real_countries: list[str] = []
+        live_countries: list[str] = []
+        estimated_countries: list[str] = []
+        regional_countries: list[str] = []
         sample_countries: list[str] = []
+
         for country, latest_row in sorted(by_country.items()):
             src = str(latest_row.get("source", ""))
             dt_str = str(latest_row.get("date", ""))[:10]
@@ -447,17 +457,24 @@ def check_country_cotton(url: str, key: str) -> None:
             except ValueError:
                 age_label = dt_str
 
-            if src in _REAL_COUNTRY_SOURCES:
-                real_countries.append(country)
-                _log("OK", f"  {country}: REAL [{src}], latest {dt_str} ({age_label})")
+            if src in _LIVE_COUNTRY_SOURCES:
+                live_countries.append(country)
+                _log("OK",   f"  {country}: LIVE [{src}], latest {dt_str} ({age_label})")
+            elif src in _ESTIMATED_COUNTRY_SOURCES:
+                estimated_countries.append(country)
+                _log("OK",   f"  {country}: ESTIMATED [{src}], latest {dt_str} ({age_label})")
+            elif src in _REGIONAL_COUNTRY_SOURCES:
+                regional_countries.append(country)
+                _log("OK",   f"  {country}: REGIONAL [{src}], latest {dt_str} ({age_label})")
             else:
                 sample_countries.append(country)
                 _log("WARN", f"  {country}: SAMPLE [{src}], latest {dt_str}")
 
-        _log("OK" if real_countries else "WARN",
-             f"Real country sources: {real_countries or 'none yet'}")
+        non_sample = live_countries + estimated_countries + regional_countries
+        _log("OK" if non_sample else "WARN",
+             f"Live: {live_countries}  Estimated: {estimated_countries}  Regional: {regional_countries}")
         if sample_countries:
-            _log("WARN", f"Sample-only countries (illustrative): {sample_countries}")
+            _log("WARN", f"Still SAMPLE (no connector yet): {sample_countries}")
 
     # cotton_country_predictions
     pred_count, err2 = _count(url, key, "cotton_country_predictions")
@@ -483,6 +500,14 @@ def check_deployment_files() -> None:
         BASE_DIR / "scripts" / "ingest_viscose.py",
         BASE_DIR / "scripts" / "ingest_country_sources.py",
         BASE_DIR / "country_sources" / "usa_cotton.py",
+        BASE_DIR / "country_sources" / "_common.py",
+        BASE_DIR / "country_sources" / "brazil.py",
+        BASE_DIR / "country_sources" / "pakistan.py",
+        BASE_DIR / "country_sources" / "turkey.py",
+        BASE_DIR / "country_sources" / "tanzania.py",
+        BASE_DIR / "country_sources" / "ivory_coast.py",
+        BASE_DIR / "country_sources" / "sudan.py",
+        BASE_DIR / "country_sources" / "west_africa.py",
         BASE_DIR / "src" / "processing" / "units.py",
     ]
 
