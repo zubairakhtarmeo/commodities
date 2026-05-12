@@ -130,60 +130,122 @@ def _cotton_country_from_name(raw_name: str) -> str | None:
 
 
 def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pkr_rate: float | None, key_prefix: str) -> None:
-    """Executive Summary (Cotton only): Country-wise cotton prices from procurement lines."""
-    df = _load_purchases_cotton_lines()
-    if df is None or df.empty:
-        st.info("🌍 Country-wise Cotton Prices: purchase-line data not available in this deployment.")
-        return
+    """Country-wise cotton prices: local purchase lines (dev) or Supabase cotton_country_prices (production).
 
-    # Use existing FX logic from the Summary page; keep this section USD by default.
+    Data sources tried in order:
+      1. data/processed/purchases_clean/purchases_cotton.csv  — present in local dev
+      2. Supabase table cotton_country_prices                  — always available in production
+    The section renders whenever either source has data; no deployment-only gating.
+    """
     fx = float(usd_pkr_rate) if usd_pkr_rate and usd_pkr_rate > 0 else 280.0
-
-    unit_col = "unit_price" if "unit_price" in df.columns else ("rate" if "rate" in df.columns else None)
-    if not unit_col:
-        st.info("🌍 Country-wise Cotton Prices: missing price column in purchase data.")
-        return
-
-    work = df.copy()
-    work["country"] = work.get("description", "").map(_cotton_country_from_name)
-    work[unit_col] = pd.to_numeric(work[unit_col], errors="coerce")
-    work = work.dropna(subset=["country", unit_col])
-    work = work[work[unit_col] > 0]
-
-    if "grn_date" in work.columns:
-        work["month"] = pd.to_datetime(work["grn_date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
-    else:
-        work["month"] = pd.NaT
-
-    # Compute current (latest month) and prior-month averages per country in PKR/kg, then convert to USD/lb.
-    monthly = (
-        work.dropna(subset=["month"])
-        .groupby(["country", "month"], as_index=False)[unit_col]
-        .mean()
-        .rename(columns={unit_col: "avg_pkr_per_kg"})
-        .sort_values(["country", "month"])
-    )
-    if monthly.empty:
-        st.info("🌍 Country-wise Cotton Prices: not enough dated purchase lines to compute trends.")
-        return
-
-    # Latest month per country
-    latest = monthly.groupby("country", as_index=False).tail(1).rename(columns={"month": "latest_month"})
-    prev = monthly.groupby("country", as_index=False).nth(-2).reset_index(drop=True).rename(
-        columns={"month": "prev_month", "avg_pkr_per_kg": "prev_avg_pkr_per_kg"}
-    )
-    merged = latest.merge(prev[["country", "prev_month", "prev_avg_pkr_per_kg"]], on="country", how="left")
-
-    # Convert PKR/kg -> USD/lb
     kg_to_lb = 2.20462262185
-    merged["avg_usd_per_lb"] = merged["avg_pkr_per_kg"] / fx / kg_to_lb
-    merged["trend_pct"] = np.where(
-        merged["prev_avg_pkr_per_kg"].notna() & (merged["prev_avg_pkr_per_kg"] > 0),
-        (merged["avg_pkr_per_kg"] - merged["prev_avg_pkr_per_kg"]) / merged["prev_avg_pkr_per_kg"] * 100.0,
-        np.nan,
+
+    # ── Source 1: local purchase lines ───────────────────────────────────────
+    df_local = _load_purchases_cotton_lines()
+
+    # ── Source 2: Supabase cotton_country_prices ─────────────────────────────
+    sb_rows = supabase_rest_select(
+        table="cotton_country_prices",
+        select="date,country,price_usd_per_lb,price_pkr_per_maund,source",
+        order="date.desc",
+        limit=2000,
     )
 
-    # Forecast alignment: reuse existing Cotton (International) ML prediction as a multiplier.
+    # ── Debug output (collapsible; remove after production verified) ─────────
+    with st.expander("🔍 [DEBUG] Country Cotton — data sources", expanded=False):
+        local_rows = len(df_local) if df_local is not None and not df_local.empty else 0
+        st.write(f"**local purchases_cotton.csv:** {local_rows} rows")
+        if local_rows:
+            st.write("columns:", list(df_local.columns))
+            st.dataframe(df_local.head(3))
+        st.write(f"**Supabase cotton_country_prices:** {len(sb_rows)} rows")
+        if sb_rows:
+            sb_preview = pd.DataFrame(sb_rows)
+            st.write("columns:", list(sb_preview.columns))
+            st.dataframe(sb_preview.head(3))
+
+    # ── Build unified `merged` DataFrame (country, avg_usd_per_lb, trend_pct) ─
+
+    merged: pd.DataFrame | None = None
+
+    # --- Path A: local CSV (PKR/kg purchase lines) ---
+    if df_local is not None and not df_local.empty:
+        unit_col = "unit_price" if "unit_price" in df_local.columns else (
+            "rate" if "rate" in df_local.columns else None
+        )
+        if unit_col:
+            work = df_local.copy()
+            work["country"] = work.get("description", "").map(_cotton_country_from_name)
+            work[unit_col] = pd.to_numeric(work[unit_col], errors="coerce")
+            work = work.dropna(subset=["country", unit_col])
+            work = work[work[unit_col] > 0]
+            if "grn_date" in work.columns:
+                work["month"] = pd.to_datetime(work["grn_date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+            else:
+                work["month"] = pd.NaT
+            monthly = (
+                work.dropna(subset=["month"])
+                .groupby(["country", "month"], as_index=False)[unit_col]
+                .mean()
+                .rename(columns={unit_col: "avg_pkr_per_kg"})
+                .sort_values(["country", "month"])
+            )
+            if not monthly.empty:
+                latest = monthly.groupby("country", as_index=False).tail(1).rename(
+                    columns={"month": "latest_month"}
+                )
+                prev = (
+                    monthly.groupby("country", as_index=False)
+                    .nth(-2)
+                    .reset_index(drop=True)
+                    .rename(columns={"month": "prev_month", "avg_pkr_per_kg": "prev_avg_pkr_per_kg"})
+                )
+                merged = latest.merge(
+                    prev[["country", "prev_month", "prev_avg_pkr_per_kg"]], on="country", how="left"
+                )
+                merged["avg_usd_per_lb"] = merged["avg_pkr_per_kg"] / fx / kg_to_lb
+                merged["trend_pct"] = np.where(
+                    merged["prev_avg_pkr_per_kg"].notna() & (merged["prev_avg_pkr_per_kg"] > 0),
+                    (merged["avg_pkr_per_kg"] - merged["prev_avg_pkr_per_kg"])
+                    / merged["prev_avg_pkr_per_kg"]
+                    * 100.0,
+                    np.nan,
+                )
+
+    # --- Path B: Supabase cotton_country_prices (price_usd_per_lb already computed) ---
+    if (merged is None or merged.empty) and sb_rows:
+        sb_df = pd.DataFrame(sb_rows)
+        sb_df["date"] = pd.to_datetime(sb_df["date"], errors="coerce")
+        sb_df["price_usd_per_lb"] = pd.to_numeric(sb_df["price_usd_per_lb"], errors="coerce")
+        sb_df = sb_df.dropna(subset=["date", "country", "price_usd_per_lb"])
+        sb_df = sb_df.sort_values("date")
+
+        latest_sb = sb_df.groupby("country").last().reset_index()
+
+        # Previous record per country for trend
+        def _prev_price(g: pd.DataFrame) -> float:
+            return float(g.iloc[-2]["price_usd_per_lb"]) if len(g) >= 2 else float("nan")
+
+        prev_price_map = {c: _prev_price(g) for c, g in sb_df.groupby("country")}
+
+        merged = pd.DataFrame({
+            "country": latest_sb["country"],
+            "avg_usd_per_lb": latest_sb["price_usd_per_lb"],
+            "latest_month": latest_sb["date"],
+        })
+        prev_prices = merged["country"].map(prev_price_map)
+        merged["trend_pct"] = np.where(
+            prev_prices.notna() & (prev_prices > 0),
+            (merged["avg_usd_per_lb"] - prev_prices) / prev_prices * 100.0,
+            np.nan,
+        )
+
+    # ── No data from either source ────────────────────────────────────────────
+    if merged is None or merged.empty:
+        st.info("🌍 Country-wise Cotton Prices: no data available from local file or Supabase.")
+        return
+
+    # ── Forecast multiplier from Cotton (International) ML prediction ─────────
     mult = 1.0
     try:
         if cotton_int_payload and cotton_int_payload.get("predictions") and cotton_int_payload.get("current_price"):
@@ -195,10 +257,9 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
                 mult = pred_int / cur_int
     except Exception:
         mult = 1.0
-
     merged["forecast_usd_per_lb"] = merged["avg_usd_per_lb"] * float(mult)
 
-    # ---- UI (Cotton-only, modular) ----
+    # ── Section header ────────────────────────────────────────────────────────
     st.markdown(
         """
         <div style='background: linear-gradient(135deg, #0b1220 0%, #1f2937 100%);
@@ -216,7 +277,7 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         unsafe_allow_html=True,
     )
 
-    # Bar chart: Country vs current avg price
+    # ── Bar chart ─────────────────────────────────────────────────────────────
     chart_df = merged[["country", "avg_usd_per_lb"]].dropna().sort_values("avg_usd_per_lb", ascending=False)
     fig = go.Figure()
     fig.add_trace(
@@ -250,7 +311,7 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
     fig.update_traces(cliponaxis=False)
     st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_country_cotton_bar")
 
-    # Table: Country | Avg Price | Trend | Forecast
+    # ── Summary table ─────────────────────────────────────────────────────────
     def _trend_label(v):
         if v is None or (isinstance(v, float) and np.isnan(v)):
             return ""
@@ -260,9 +321,13 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
     table = pd.DataFrame(
         {
             "Country": merged["country"],
-            "Avg Price (USD/lb)": merged["avg_usd_per_lb"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else ""),
+            "Avg Price (USD/lb)": merged["avg_usd_per_lb"].map(
+                lambda x: f"{float(x):.3f}" if pd.notna(x) else ""
+            ),
             "Trend": merged["trend_pct"].map(_trend_label),
-            "Forecast (1M, USD/lb)": merged["forecast_usd_per_lb"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else ""),
+            "Forecast (1M, USD/lb)": merged["forecast_usd_per_lb"].map(
+                lambda x: f"{float(x):.3f}" if pd.notna(x) else ""
+            ),
         }
     ).sort_values("Avg Price (USD/lb)", ascending=False)
 
@@ -279,7 +344,10 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         table.style
         .set_properties(**{"font-size": "0.85rem", "font-weight": "700", "padding": "10px 12px"})
         .set_properties(**{"text-align": "left"}, subset=["Country"])
-        .set_properties(**{"text-align": "right", "font-family": "IBM Plex Mono"}, subset=["Avg Price (USD/lb)", "Forecast (1M, USD/lb)"])
+        .set_properties(
+            **{"text-align": "right", "font-family": "IBM Plex Mono"},
+            subset=["Avg Price (USD/lb)", "Forecast (1M, USD/lb)"],
+        )
         .pipe(lambda s: _styler_apply_elementwise(s, _chg_style, subset=["Trend"]))
         .set_table_styles(
             [
