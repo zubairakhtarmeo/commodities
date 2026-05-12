@@ -87,6 +87,26 @@ The last forecast run produced partial output. Re-run `python scripts/run_foreca
 **`[FAIL] <table>: HTTP 401`**
 Key mismatch or RLS policy blocking access. Verify `SUPABASE_SERVICE_ROLE_KEY` in `.streamlit/secrets.toml`.
 
+## Forecast Evaluation Methodology
+
+Run `python scripts/evaluate_forecasts.py` to generate `artifacts/forecast_evaluation.json`.
+Results appear in the **AI Predictions** dashboard under "Forecast Accuracy (Backtesting)".
+
+**How it works:**
+- Rolling walk-forward backtest over the last 18 months of historical data (configurable via `--backtest-months`)
+- For each evaluation month `t` and horizon `h`: train on data `[0..t]`, predict `h` months ahead using actual values at intermediate steps (no error compounding), compare to observed price at `t+h`
+- Metrics: MAE, RMSE, MAPE, directional accuracy (% correct direction)
+- Baselines: last-value persistence (`last_value`) and 3-month moving average (`ma3`)
+
+**Models evaluated:** linear_ridge, random_forest, ridge_returns, rf_returns
+
+**Honest reporting:** if an ML model fails to outperform the last-value baseline, this is reported as-is.
+Common causes: viscose/polyester are static/futures series with limited time variation;
+natural gas has high volatility that ML struggles to predict without exogenous signals.
+
+**Bootstrap integration:** `scripts/bootstrap_production.py` checks evaluation file age
+and whether any ML model beats the baseline per commodity.
+
 ## Safety notes (common leakage traps)
 - Never compute rolling stats using centered windows.
 - Never fit scalers/imputers on full data; fit on train folds only.

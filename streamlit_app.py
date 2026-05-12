@@ -1484,6 +1484,90 @@ def render_ai_predictions_page():
     for name, info in INTERNATIONAL_COMMODITIES.items():
         _render_commodity_prediction_chart(name, info, months=months)
 
+    _render_forecast_evaluation_section()
+
+
+def _render_forecast_evaluation_section() -> None:
+    """Load and display forecast backtesting results from artifacts/forecast_evaluation.json."""
+    import json as _json
+
+    eval_path = BASE_DIR / "artifacts" / "forecast_evaluation.json"
+
+    st.markdown("---")
+    st.markdown("### 📐 Forecast Accuracy (Backtesting)")
+    st.caption(
+        "Rolling walk-forward backtest: each evaluation month, models are trained on all prior data "
+        "and their h-step predictions compared to what actually happened. "
+        "Run `python scripts/evaluate_forecasts.py` to refresh."
+    )
+
+    if not eval_path.exists():
+        st.info(
+            "No evaluation results yet. Run `python scripts/evaluate_forecasts.py` to generate them. "
+            "Results will be saved to `artifacts/forecast_evaluation.json`."
+        )
+        return
+
+    try:
+        with open(eval_path, "r", encoding="utf-8") as f:
+            eval_data = _json.load(f)
+    except Exception as exc:
+        st.warning(f"Could not load evaluation results: {exc}")
+        return
+
+    generated_at = eval_data.get("generated_at", "unknown")
+    backtest_months = eval_data.get("backtest_months", "?")
+    st.caption(f"Generated: {generated_at[:19].replace('T', ' ')} UTC  |  Backtest window: {backtest_months} months")
+
+    commodities_data = eval_data.get("commodities", {})
+    if not commodities_data:
+        st.info("Evaluation file exists but contains no results.")
+        return
+
+    HORIZONS = eval_data.get("horizons", [1, 3, 6])
+    MODEL_DISPLAY = {
+        "last_value":    "Baseline: Last Value",
+        "ma3":           "Baseline: MA-3",
+        "linear_ridge":  "Linear Ridge",
+        "random_forest": "Random Forest",
+        "ridge_returns": "Ridge (Returns)",
+        "rf_returns":    "RF (Returns)",
+    }
+
+    for commodity, data in commodities_data.items():
+        with st.expander(f"**{commodity}**", expanded=False):
+            if "error" in data:
+                st.warning(data["error"])
+                continue
+
+            # Build comparison table
+            rows = []
+            for m_key, m_label in MODEL_DISPLAY.items():
+                row = {"Model": m_label}
+                for h in HORIZONS:
+                    h_key = f"h{h}"
+                    m_data = data.get(h_key, {}).get(m_key, {})
+                    mae  = m_data.get("mae")
+                    mape = m_data.get("mape")
+                    n    = m_data.get("n", 0)
+                    if mae is not None and n >= 3:
+                        row[f"MAE h{h}"] = f"{mae:.4f}"
+                        row[f"MAPE h{h}"] = f"{mape:.1f}%" if mape is not None else "n/a"
+                    else:
+                        row[f"MAE h{h}"] = "n/a"
+                        row[f"MAPE h{h}"] = "n/a"
+                rows.append(row)
+
+            if rows:
+                df_eval = pd.DataFrame(rows).set_index("Model")
+                st.dataframe(df_eval, use_container_width=True)
+
+            # Beat-baseline summary
+            summary = data.get("beat_baseline_summary", {})
+            if summary:
+                beats = [f"**{MODEL_DISPLAY.get(m, m)}**: {v}" for m, v in summary.items()]
+                st.caption("  |  ".join(beats))
+
 
 def _cache_buster_for_events_latest() -> float:
     """Return mtime of the latest events file (0 if missing)."""

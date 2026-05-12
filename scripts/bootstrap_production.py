@@ -506,6 +506,64 @@ def check_deployment_files() -> None:
             pass
 
 
+def check_evaluation_artifacts() -> None:
+    _section("Forecast Evaluation Artifacts")
+
+    eval_path = BASE_DIR / "artifacts" / "forecast_evaluation.json"
+    if not eval_path.exists():
+        _log("WARN", "artifacts/forecast_evaluation.json missing - run: python scripts/evaluate_forecasts.py")
+        return
+
+    import json as _json
+    try:
+        with open(eval_path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+    except Exception as exc:
+        _log("FAIL", f"Cannot parse forecast_evaluation.json: {exc}")
+        return
+
+    generated_at = data.get("generated_at", "")
+    if generated_at:
+        try:
+            from datetime import datetime, timezone
+            gen_dt  = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+            age_days = (datetime.now(timezone.utc) - gen_dt).days
+            if age_days > 30:
+                _log("WARN", f"Evaluation results are {age_days}d old (re-run evaluate_forecasts.py)")
+            else:
+                _log("OK",   f"Evaluation file present, {age_days}d old")
+        except Exception:
+            _log("OK", "Evaluation file present (age unknown)")
+    else:
+        _log("OK", "Evaluation file present")
+
+    commodities = data.get("commodities", {})
+    for commodity, cdata in commodities.items():
+        if "error" in cdata:
+            _log("WARN", f"  {commodity}: evaluation error - {cdata['error']}")
+            continue
+        # Check if any ML model beats the last_value baseline at h1
+        h1 = cdata.get("h1", {})
+        baseline_mae = h1.get("last_value", {}).get("mae")
+        ml_models    = ["linear_ridge", "random_forest", "ridge_returns", "rf_returns"]
+        any_beats    = any(
+            h1.get(m, {}).get("mae") is not None
+            and h1.get(m, {}).get("mae") < (baseline_mae or float("inf"))
+            for m in ml_models
+        )
+        mape_best = min(
+            (h1.get(m, {}).get("mape") or 999 for m in ml_models),
+            default=None,
+        )
+        if baseline_mae is None:
+            _log("WARN", f"  {commodity}: no h1 evaluation data")
+        elif any_beats:
+            label = f"MAPE {mape_best:.1f}%" if mape_best and mape_best < 900 else ""
+            _log("OK",   f"  {commodity}: ML beats baseline at h1  {label}".rstrip())
+        else:
+            _log("WARN", f"  {commodity}: no ML model beats last-value baseline at h1 (baseline MAE {baseline_mae:.4f})")
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -561,6 +619,7 @@ def main() -> int:
             check_country_cotton(url, key)
 
     check_deployment_files()
+    check_evaluation_artifacts()
 
     _print_summary()
     return 1 if _COUNTERS.get("FAIL", 0) else 0
