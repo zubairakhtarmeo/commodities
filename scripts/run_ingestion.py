@@ -37,10 +37,6 @@ from src.processing.units import (
 from src.processing.validation import validate_dataframe
 
 
-print("ENV CHECK:")
-print("SUPABASE_URL:", bool(os.getenv("SUPABASE_URL")))
-print("SUPABASE_KEY:", bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")))
-print("FRED_API_KEY:", bool(os.getenv("FRED_API_KEY")))
 
 
 def get_supabase_credentials():
@@ -258,6 +254,10 @@ def send_failure_alert(failures: dict):
 
 
 def run_all():
+    logging.info("ENV CHECK: SUPABASE_URL=%s SUPABASE_KEY=%s FRED_API_KEY=%s",
+                 bool(os.getenv("SUPABASE_URL")),
+                 bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+                 bool(os.getenv("FRED_API_KEY")))
     logging.info("=" * 50)
     logging.info("🚀 STARTING COMMODITY INGESTION (PHASE 5 AUTOMATION)")
     logging.info("=" * 50)

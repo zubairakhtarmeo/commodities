@@ -42,10 +42,6 @@ logging.basicConfig(
 
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-print("ENV CHECK:")
-print("SUPABASE_URL:", bool(os.getenv("SUPABASE_URL")))
-print("SUPABASE_KEY:", bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")))
-print("FRED_API_KEY:", bool(os.getenv("FRED_API_KEY")))
 
 try:
     import toml
@@ -753,6 +749,10 @@ def forecast_commodity(
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run_ml_forecasts():
+    logging.info("ENV CHECK: SUPABASE_URL=%s SUPABASE_KEY=%s FRED_API_KEY=%s",
+                 bool(os.getenv("SUPABASE_URL")),
+                 bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+                 bool(os.getenv("FRED_API_KEY")))
     logging.info("=" * 50)
     logging.info("🚀 STARTING ML FORECASTING (PHASE 6 — ENHANCED)")
     logging.info("=" * 50)

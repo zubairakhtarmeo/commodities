@@ -151,19 +151,6 @@ def _render_countrywise_cotton_prices(*, cotton_int_payload: dict | None, usd_pk
         limit=2000,
     )
 
-    # ── Debug output (collapsible; remove after production verified) ─────────
-    with st.expander("🔍 [DEBUG] Country Cotton — data sources", expanded=False):
-        local_rows = len(df_local) if df_local is not None and not df_local.empty else 0
-        st.write(f"**local purchases_cotton.csv:** {local_rows} rows")
-        if local_rows:
-            st.write("columns:", list(df_local.columns))
-            st.dataframe(df_local.head(3))
-        st.write(f"**Supabase cotton_country_prices:** {len(sb_rows)} rows")
-        if sb_rows:
-            sb_preview = pd.DataFrame(sb_rows)
-            st.write("columns:", list(sb_preview.columns))
-            st.dataframe(sb_preview.head(3))
-
     # ── Build unified `merged` DataFrame (country, avg_usd_per_lb, trend_pct) ─
 
     merged: pd.DataFrame | None = None
@@ -2021,9 +2008,7 @@ def load_commodity_data(asset_path: str, currency: str):
 def _load_commodity_data_cached(asset_path: str, currency: str, _raw_mtime: float):
     """Cached commodity loader. `_raw_mtime` exists only to bust cache on file changes."""
     ton_assets_to_kg = (
-        "polyester/polyester_usd_monthly",
         "viscose/viscose_usd_monthly",
-        "polyester/polyester_pkr_monthly",
         "viscose/viscose_pkr_monthly",
     )
     want_per_kg = "/kg" in str(currency).lower()
@@ -6030,7 +6015,6 @@ def _load_predictions_cached(
                 "viscose":     "viscose_usd",
             }
             commodity_key = _db_key_map.get(commodity_key, commodity_key)
-            print(f"[predictions] asset={asset!r}  →  db_key={commodity_key!r}")
             try:
                 resp = requests.get(
                     endpoint,
@@ -6707,7 +6691,7 @@ def _fetch_cotton_country_data(supabase_cfg: tuple) -> tuple:
 
         return hist_df, pred_df
     except Exception as e:
-        print(f"[country_cotton] fetch error: {e}")
+        pass  # caller handles None return
         return None, None
 
 
