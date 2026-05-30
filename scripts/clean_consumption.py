@@ -78,11 +78,39 @@ COLUMN_CANDIDATES: dict[str, list[str]] = {
                      "gl_date"],
 }
 
+# Subinventory codes that hold actual raw material stock.
+# Only issues (negative qty) from these locations represent real consumption.
+RM_SUBINVENTORY_CODES: list[str] = ["RM-COTTON", "RM-FIBER"]
+
+# Oracle appends a function-suffix to every org name in the transaction register
+# (e.g. "MSM - Spinning U1 - Raw Material").  Strip these so names match the
+# inventory report (which uses "MSM - Spinning U1") and the procurement engine.
+ORG_SUFFIXES_TO_STRIP: list[str] = [
+    " - Raw Material",
+    " - Manufacturing",
+    " - General Store",
+    " - Trading",
+    " - Knitting",
+]
+
 OUTPUT_COLS = [
     "item_code", "item_desc", "org_name", "lot_number",
     "subinventory", "txn_type", "primary_qty", "consumption_qty",
     "date", "year_month", "category",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Org name normalisation
+# ---------------------------------------------------------------------------
+
+def _strip_org_suffix(org: object) -> str:
+    """Remove Oracle function-suffixes from org names (e.g. ' - Raw Material')."""
+    s = str(org).strip() if org is not None else ""
+    for suffix in ORG_SUFFIXES_TO_STRIP:
+        if s.endswith(suffix):
+            return s[: -len(suffix)].strip()
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -207,20 +235,26 @@ def clean_consumption(
     xlsx_path: Path,
     mapper: Optional[CommodityMapper] = None,
     filter_month: Optional[str] = None,
+    filter_rm_only: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Full cleaning pipeline for the transaction register extract.
 
     Args:
-        xlsx_path:    Path to MG_TRANSACTION_REGISTER_INV.xlsx
-        mapper:       CommodityMapper instance. Uses built-in rules when None.
-        filter_month: Optional "YYYY-MM" string to restrict to one month.
-                      When None, all months present in the file are processed.
+        xlsx_path:      Path to MG_TRANSACTION_REGISTER_INV.xlsx
+        mapper:         CommodityMapper instance. Uses built-in rules when None.
+        filter_month:   Optional "YYYY-MM" string to restrict to one month.
+                        When None, all months present in the file are processed.
+        filter_rm_only: When True (default), restrict to RM-COTTON / RM-FIBER
+                        subinventory **issue** rows (primary_qty < 0).  These are
+                        the only rows that represent actual raw-material consumption.
+                        Set False to return all transactions (e.g. for diagnostics).
 
     Returns:
-        detail_df:    Row-level dataframe (OUTPUT_COLS).
-        summary_df:   Wide pivot — rows = Org Name,
-                      columns = [categories] + Total Consumed.
-        diagnostics_df: Transaction-type sign diagnostic report.
+        detail_df:      Row-level dataframe (OUTPUT_COLS).
+        summary_df:     Wide pivot — rows = Org Name,
+                        columns = [categories] + Total Consumed.
+        diagnostics_df: Transaction-type sign diagnostic report (built before
+                        any RM filter so it reflects the full sign picture).
     """
     if mapper is None:
         mapper = CommodityMapper.default()
@@ -246,7 +280,8 @@ def clean_consumption(
 
     detail["item_code"]    = _get("item_code").astype(str).str.strip()
     detail["item_desc"]    = _get("item_desc").astype(str).str.strip()
-    detail["org_name"]     = _get("org_name").astype(str).str.strip()
+    # Strip Oracle function-suffix so org names match inventory (e.g. "MSM - Spinning U1")
+    detail["org_name"]     = _get("org_name").astype(str).str.strip().apply(_strip_org_suffix)
     detail["lot_number"]   = _get("lot_number").astype(str).str.strip()
     detail["subinventory"] = _get("subinventory").astype(str).str.strip()
     detail["txn_type"]     = _get("txn_type").astype(str).str.strip()
@@ -258,11 +293,21 @@ def clean_consumption(
     detail = detail.dropna(subset=["primary_qty"])
     detail = detail[detail["item_code"].str.len() > 0]
 
-    # Build diagnostics BEFORE applying ABS — must see raw signs
+    # Build diagnostics BEFORE filtering — must see raw signs across all txn types
     diagnostics = txn_diagnostics(detail)
 
+    if filter_rm_only:
+        # Keep only issues (negative qty) from RM subinventories.
+        # The Oracle transaction register includes both sides of every transfer:
+        # the issuing side (negative) and the receiving side (positive).  Only the
+        # issuing side from RM-COTTON / RM-FIBER represents actual consumption.
+        rm_codes = [c.upper() for c in RM_SUBINVENTORY_CODES]
+        detail = detail[
+            detail["subinventory"].str.upper().isin(rm_codes) &
+            (detail["primary_qty"] < 0)
+        ].copy()
+
     # Consumption qty: Oracle issues stock as negative → ABS normalises to positive.
-    # Receipts (positive) are preserved as-is; callers can filter by txn_type.
     detail["consumption_qty"] = detail["primary_qty"].abs()
 
     # Year-month period for granular analysis
@@ -341,21 +386,24 @@ def run(
     output_path: Optional[str | Path] = None,
     mapping_csv: Optional[str | Path] = None,
     filter_month: Optional[str] = None,
+    filter_rm_only: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Entry point: clean consumption and optionally write Excel output.
 
     Args:
-        input_path:   Path to MG_TRANSACTION_REGISTER_INV.xlsx
-        output_path:  Optional path to write the output Excel workbook.
-        mapping_csv:  Optional path to commodity_mapping.csv.
-        filter_month: Optional "YYYY-MM" to restrict to one month.
+        input_path:     Path to MG_TRANSACTION_REGISTER_INV.xlsx
+        output_path:    Optional path to write the output Excel workbook.
+        mapping_csv:    Optional path to commodity_mapping.csv.
+        filter_month:   Optional "YYYY-MM" to restrict to one month.
+        filter_rm_only: Restrict to RM subinventory issues only (default True).
 
     Returns:
         (detail_df, summary_df, diagnostics_df)
     """
     mapper = CommodityMapper.from_csv_or_default(mapping_csv)
     detail, summary, diagnostics = clean_consumption(
-        Path(input_path), mapper=mapper, filter_month=filter_month
+        Path(input_path), mapper=mapper, filter_month=filter_month,
+        filter_rm_only=filter_rm_only,
     )
 
     if output_path:

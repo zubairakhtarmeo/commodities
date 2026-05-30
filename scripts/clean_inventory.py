@@ -5,16 +5,22 @@ Cleans and aggregates Oracle inventory extract from MG_STOCK_TILL_DATE_MULTIPLE_
 
 Pipeline:
     1. Load Excel → auto-detect header row (tolerant of Oracle title rows)
-    2. Retain five columns: Item Code, Description, Org Name, Primary Qty,
-       SubInventory Code
-    3. Filter rows: SubInventory Code IN ['RM-COTTON', 'RM-FIBER']
-    4. Classify each row into a material category via CommodityMapper
+    2. Retain columns: Item Code, Description, Org Name, Primary Qty.
+       SubInventory Code is used when present; absent in many Oracle report formats.
+    3. Assign category via one of two strategies (automatic):
+       a. Section-header propagation (preferred): Oracle groups rows under section
+          headers ('Fiber', 'Cotton', 'Stretch Fiber', 'Cotton - Waste'). The script
+          propagates each header as the category for all data rows beneath it.
+       b. Subinventory filter (fallback): when a Subinventory Code column is present,
+          keep only rows where the code is in KEEP_SUBINVENTORY and classify via
+          CommodityMapper.
+    4. Strip "- Raw Material" / "- RM" suffixes from Org Name.
     5. Return two outputs:
        - detail_df:  cleaned row-level dataframe
        - summary_df: Org Name × Category totals + Total Inventory column
                      (matches Raw Material sheet structure)
 
-Mapping source priority:
+Mapping source priority (strategy b only):
     1. --mapping-csv argument (external commodity_mapping.csv)
     2. Built-in DEFAULT_PREFIX_RULES  (fallback, no CSV required)
     3. Description regex             (last resort)
@@ -53,8 +59,27 @@ from commodity_mapper import CommodityMapper, UNMAPPED
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Subinventory codes to keep (uppercase); extend this list to include new RM codes
+# Subinventory codes to keep (uppercase) — used only when the column is present.
 KEEP_SUBINVENTORY: list[str] = ["RM-COTTON", "RM-FIBER"]
+
+# Oracle report section headers → canonical category names.
+# The MG_STOCK_TILL_DATE_MULTIPLE_UNIT report groups rows under these headings.
+# Lowercase keys for case-insensitive matching.
+SECTION_LABEL_MAP: dict[str, str] = {
+    "fiber":          "Fiber",
+    "cotton":         "Cotton",
+    "stretch fiber":  "Stretch Fiber",
+    "cotton - waste": "Cotton Waste",
+    "cotton waste":   "Cotton Waste",
+}
+
+# Org name suffixes appended by Oracle BI Publisher that must be stripped so
+# org names match the procurement engine's expected format.
+ORG_SUFFIXES_TO_STRIP: list[str] = [
+    " - Raw Material",
+    " - RM",
+    "-Raw Material",
+]
 
 # Candidate column name variants per logical field (lowercased snake_case).
 # Oracle BI Publisher may label the same column differently across report versions.
@@ -122,6 +147,42 @@ def _resolve_columns(df: pd.DataFrame) -> dict[str, Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Section-header propagation (for Oracle reports without Subinventory Code)
+# ---------------------------------------------------------------------------
+
+def _propagate_section_labels(raw: pd.DataFrame, header_row: int) -> pd.Series:
+    """Return a Series (same index as raw.iloc[header_row+1:]) containing the
+    section label active at each row, or None for non-data rows.
+
+    Oracle groups inventory rows under section headers such as 'Fiber',
+    'Cotton', 'Stretch Fiber', 'Cotton - Waste'.  This function propagates
+    the most-recently-seen section header downward until the next header or
+    the end of the file.
+    """
+    data_slice = raw.iloc[header_row + 1:]  # preserves original raw indices
+    labels: dict[int, str | None] = {}
+    current_label: str | None = None
+
+    for idx, row in data_slice.iterrows():
+        c0 = str(row.iloc[0]).strip() if row.iloc[0] is not None else ""
+        c0_key = c0.lower()
+        if c0_key in SECTION_LABEL_MAP:
+            current_label = SECTION_LABEL_MAP[c0_key]
+        labels[idx] = current_label
+
+    return pd.Series(labels)
+
+
+def _strip_org_suffix(org: object) -> str:
+    """Remove Oracle-appended suffixes like ' - Raw Material' from org names."""
+    s = str(org).strip() if org is not None else ""
+    for suffix in ORG_SUFFIXES_TO_STRIP:
+        if s.endswith(suffix):
+            return s[: -len(suffix)].strip()
+    return s
+
+
+# ---------------------------------------------------------------------------
 # Core processing
 # ---------------------------------------------------------------------------
 
@@ -153,9 +214,9 @@ def clean_inventory(
     header_row = _detect_header_row(raw)
     header = [_snake(v) for v in raw.iloc[header_row].tolist()]
 
-    df = raw.iloc[header_row + 1:].copy()
+    df = raw.iloc[header_row + 1:].copy()   # preserves original raw indices
     df.columns = header
-    df = df.dropna(how="all")
+    df = df.dropna(how="all")               # may drop rows but index values preserved
     df = df.loc[:, ~df.columns.str.fullmatch(r"unnamed(_\d+)?", case=False, na=False)]
 
     col_map = _resolve_columns(df)
@@ -168,27 +229,46 @@ def clean_inventory(
 
     detail["item_code"]         = _get("item_code").astype(str).str.strip()
     detail["description"]       = _get("description").astype(str).str.strip()
-    detail["org_name"]          = _get("org_name").astype(str).str.strip()
+    detail["org_name"]          = _get("org_name").astype(str).str.strip().apply(_strip_org_suffix)
     detail["primary_qty"]       = pd.to_numeric(_get("primary_qty"), errors="coerce")
     detail["subinventory_code"] = _get("subinventory_code").astype(str).str.strip().str.upper()
 
     detail = detail.dropna(subset=["primary_qty"])
     detail = detail[detail["item_code"].str.len() > 0]
 
-    # Keep only raw-material subinventory codes
-    keep_codes = [c.upper() for c in KEEP_SUBINVENTORY]
-    detail = detail[detail["subinventory_code"].isin(keep_codes)].copy()
+    has_subinv_col = col_map["subinventory_code"] is not None
 
-    if detail.empty:
-        empty_detail = pd.DataFrame(columns=OUTPUT_COLS)
-        empty_summary = pd.DataFrame(columns=["org_name", "Total Inventory"])
-        return empty_detail, empty_summary
+    if has_subinv_col:
+        # Strategy B: subinventory code column present — filter then classify via mapper.
+        keep_codes = [c.upper() for c in KEEP_SUBINVENTORY]
+        detail = detail[detail["subinventory_code"].isin(keep_codes)].copy()
 
-    # Classify using the provided (or default) mapper
-    detail["category"] = detail.apply(
-        lambda row: mapper.classify(row["item_code"], row["description"]),
-        axis=1,
-    )
+        if detail.empty:
+            empty_detail = pd.DataFrame(columns=OUTPUT_COLS)
+            empty_summary = pd.DataFrame(columns=["org_name", "Total Inventory"])
+            return empty_detail, empty_summary
+
+        detail["category"] = detail.apply(
+            lambda row: mapper.classify(row["item_code"], row["description"]),
+            axis=1,
+        )
+    else:
+        # Strategy A: no subinventory column — derive category from Oracle section headers.
+        # The Oracle report groups rows under 'Fiber', 'Cotton', 'Stretch Fiber',
+        # 'Cotton - Waste' headings; propagate the active heading as the category.
+        section_labels = _propagate_section_labels(raw, header_row)
+        # Align section_labels to detail's index (detail was sliced from raw similarly)
+        detail["category"] = section_labels.reindex(detail.index).values
+
+        # Keep only rows that fall under a recognised section (exclude Total / Grand Total rows)
+        detail = detail[detail["category"].notna()].copy()
+        # Exclude section-header rows themselves (item_code won't match known patterns)
+        detail = detail[detail["item_code"].str.match(r"^[A-Z]{2,4}-\d+", na=False)].copy()
+
+        if detail.empty:
+            empty_detail = pd.DataFrame(columns=OUTPUT_COLS)
+            empty_summary = pd.DataFrame(columns=["org_name", "Total Inventory"])
+            return empty_detail, empty_summary
 
     detail = detail[OUTPUT_COLS].reset_index(drop=True)
 
