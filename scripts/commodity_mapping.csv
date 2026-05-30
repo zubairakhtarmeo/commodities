@@ -1,0 +1,20 @@
+# commodity_mapping.csv
+# Maps Oracle item code prefixes to material categories.
+# Rules:
+#   - item_code_prefix matches the FIRST segment of the Oracle item code
+#     (everything before the first dash).  Example: "COT" matches "COT-2024-001".
+#   - First matching row wins — put more specific prefixes before general ones.
+#   - Lines starting with # are comments and are ignored.
+#   - To add a new material: append one row, no code changes needed.
+item_code_prefix,category
+ICOT,Cotton
+COT,Cotton
+PSF,Fiber
+FIB,Fiber
+STF,Stretch Fiber
+VIS,Viscose
+VSF,Viscose
+CW,Cotton Waste
+FW,Fiber Waste
+CHM,Chemicals
+PKG,Packaging

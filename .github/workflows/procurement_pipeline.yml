@@ -1,0 +1,369 @@
+# =============================================================================
+# Procurement Strategy Pipeline — Monthly Automation
+# =============================================================================
+#
+# Schedule:
+#   Day  1 of every month  @ 01:00 UTC  (month-end data is available)
+#   Day 15 of every month  @ 01:00 UTC  (mid-month coverage check)
+#   Manual trigger via workflow_dispatch
+#
+# Runner:
+#   SELF-HOSTED Windows runner required for Oracle Selenium extraction.
+#   Oracle Fusion BI Publisher access requires VPN and a local Chrome install.
+#   The runner must be registered with labels: [self-hosted, windows, oracle].
+#
+#   If running on a GitHub-hosted runner (no Oracle access), use the
+#   skip_extraction input to bypass Step 1/2 and supply files manually.
+#
+# Required GitHub Secrets:
+#   ORACLE_USERNAME           — Oracle Fusion login username
+#   ORACLE_PASSWORD           — Oracle Fusion login password
+#
+# Optional GitHub Secrets (if used by future connector scripts):
+#   ORACLE_BASE_URL           — Oracle Fusion base URL (e.g. https://fa-xxxx.oraclecloud.com)
+#
+# IMPORTANT — base_directory constraint:
+#   inventory_data.py and consumption_data.py have a hardcoded base_directory.
+#   The --oracle-dir argument passed to this pipeline MUST match that path.
+#   Default is D:\oracle_exports. Update ORACLE_EXPORT_DIR below if changed.
+#
+# Artifacts retained 90 days:
+#   validation-report-<run#>     reports/monthly_validation_report.md
+#   workbook-archives-<run#>     data/strategy/archive/*.xlsx
+#   pipeline-outputs-<run#>      reports/ + data/strategy/archive/ (combined)
+# =============================================================================
+
+name: Procurement Strategy Pipeline
+
+on:
+  schedule:
+    # Day 1 of every month at 01:00 UTC
+    - cron: '0 1 1 * *'
+    # Day 15 of every month at 01:00 UTC
+    - cron: '0 1 15 * *'
+
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Reporting year  (blank = previous calendar month)'
+        required: false
+        type: string
+        default: ''
+      month:
+        description: 'Reporting month 1–12  (blank = previous calendar month)'
+        required: false
+        type: string
+        default: ''
+      skip_extraction:
+        description: 'Skip Oracle extraction — use files already in oracle-dir'
+        required: false
+        type: boolean
+        default: false
+
+# ---------------------------------------------------------------------------
+# Concurrency: only one run at a time; do not cancel an in-progress run.
+# Oracle extractions are long-running; cancelling mid-write risks corrupt files.
+# ---------------------------------------------------------------------------
+concurrency:
+  group: procurement-pipeline
+  cancel-in-progress: false
+
+jobs:
+  # ===========================================================================
+  # JOB: procurement-pipeline
+  # ===========================================================================
+  procurement-pipeline:
+    name: 'Monthly Procurement Strategy Pipeline'
+
+    # Self-hosted Windows runner required — Oracle Selenium + VPN access.
+    # Register your runner with these labels:
+    #   ./config.cmd --labels self-hosted,windows,oracle
+    runs-on: [self-hosted, windows, oracle]
+
+    # Hard timeout: 2 hours covers worst-case Oracle browser automation + report.
+    timeout-minutes: 120
+
+    env:
+      # --- Oracle credentials (injected from GitHub Secrets) -----------------
+      ORACLE_USERNAME: ${{ secrets.ORACLE_USERNAME }}
+      ORACLE_PASSWORD: ${{ secrets.ORACLE_PASSWORD }}
+
+      # --- Directory where extraction scripts download Oracle files ----------
+      # This MUST match base_directory in inventory_data.py / consumption_data.py
+      ORACLE_EXPORT_DIR: 'D:\oracle_exports'
+
+      # --- Convenience shortcuts --------------------------------------------
+      WORKBOOK_PATH: 'data\strategy\Strategies.xlsx'
+      ARCHIVE_DIR:   'data\strategy\archive'
+      REPORTS_DIR:   'reports'
+      PYTHON_VERSION: '3.13'
+
+    steps:
+
+      # -----------------------------------------------------------------------
+      # STEP 1 — Checkout repository
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so git-based diagnostics are accurate.
+          fetch-depth: 0
+          # LFS not used for xlsx in this project.
+          lfs: false
+
+      # -----------------------------------------------------------------------
+      # STEP 2 — Set up Python
+      # -----------------------------------------------------------------------
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      # -----------------------------------------------------------------------
+      # STEP 3 — Install dependencies
+      # -----------------------------------------------------------------------
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          Write-Host "Installed packages:"
+          pip list --format=columns | Select-String -Pattern "pandas|openpyxl|selenium|xlsxwriter"
+
+      # -----------------------------------------------------------------------
+      # STEP 4 — Verify workbook exists
+      # -----------------------------------------------------------------------
+      - name: Verify workbook exists
+        shell: pwsh
+        run: |
+          $wb = "$env:WORKBOOK_PATH"
+          if (-not (Test-Path $wb)) {
+            Write-Error "CRITICAL: Workbook not found at $wb"
+            Write-Error "Ensure Strategies.xlsx is committed to data/strategy/ or"
+            Write-Error "restored from the latest workbook-archives artifact."
+            exit 1
+          }
+          $size = (Get-Item $wb).Length
+          Write-Host "Workbook verified: $wb  ($([math]::Round($size/1KB, 1)) KB)"
+
+          # Also verify archive directory exists (create if absent)
+          if (-not (Test-Path $env:ARCHIVE_DIR)) {
+            New-Item -ItemType Directory -Force -Path $env:ARCHIVE_DIR | Out-Null
+            Write-Host "Created archive directory: $env:ARCHIVE_DIR"
+          }
+
+          # Create reports directory if absent
+          if (-not (Test-Path $env:REPORTS_DIR)) {
+            New-Item -ItemType Directory -Force -Path $env:REPORTS_DIR | Out-Null
+            Write-Host "Created reports directory: $env:REPORTS_DIR"
+          }
+
+          # Ensure Oracle export directory exists
+          if (-not (Test-Path $env:ORACLE_EXPORT_DIR)) {
+            New-Item -ItemType Directory -Force -Path $env:ORACLE_EXPORT_DIR | Out-Null
+            Write-Host "Created Oracle export directory: $env:ORACLE_EXPORT_DIR"
+          }
+
+      # -----------------------------------------------------------------------
+      # STEP 5 — Build pipeline arguments
+      # -----------------------------------------------------------------------
+      - name: Build pipeline arguments
+        id: build_args
+        shell: pwsh
+        run: |
+          $argList = @("--oracle-dir", "`"$env:ORACLE_EXPORT_DIR`"")
+          $argList += @("--workbook",   "`"$env:WORKBOOK_PATH`"")
+          $argList += @("--archive-dir","`"$env:ARCHIVE_DIR`"")
+          $argList += @("--mapping-csv","scripts\commodity_mapping.csv")
+
+          # Append optional year / month overrides from workflow_dispatch inputs
+          $yr = "${{ inputs.year }}"
+          $mo = "${{ inputs.month }}"
+          if ($yr -ne "") { $argList += @("--year",  $yr) }
+          if ($mo -ne "") { $argList += @("--month", $mo) }
+
+          # Skip-extraction flag (manual trigger only)
+          $skipExt = "${{ inputs.skip_extraction }}"
+          if ($skipExt -eq "true") {
+            $argList += "--skip-extraction"
+            Write-Host "Oracle extraction SKIPPED — using existing files in $env:ORACLE_EXPORT_DIR"
+          }
+
+          $argsJoined = $argList -join " "
+          Write-Host "Pipeline command: python scripts/run_monthly_strategy_pipeline.py $argsJoined"
+
+          # Export to subsequent steps
+          echo "args=$argsJoined" >> $env:GITHUB_OUTPUT
+
+      # -----------------------------------------------------------------------
+      # STEP 6 — Execute pipeline
+      # -----------------------------------------------------------------------
+      - name: Execute procurement pipeline
+        id: pipeline
+        shell: pwsh
+        run: |
+          python scripts/run_monthly_strategy_pipeline.py ${{ steps.build_args.outputs.args }}
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Pipeline exited with code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      # -----------------------------------------------------------------------
+      # STEP 7 — Generate workflow summary
+      # -----------------------------------------------------------------------
+      - name: Generate workflow summary
+        if: always()
+        shell: pwsh
+        run: |
+          $report = "reports\monthly_validation_report.md"
+          $summary = $env:GITHUB_STEP_SUMMARY
+
+          # Determine run context
+          $runType = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "Manual" } `
+                     elseif ("${{ github.event.schedule }}" -eq "0 1 1 * *")  { "Day-1 Scheduled" } `
+                     else { "Day-15 Scheduled" }
+
+          # Header
+          @"
+          ## Procurement Strategy Pipeline — $runType
+
+          | Field | Value |
+          |-------|-------|
+          | Run # | ${{ github.run_number }} |
+          | Triggered by | ${{ github.event_name }} |
+          | Runner | ${{ runner.name }} |
+          | SHA | ${{ github.sha }} |
+
+          "@ | Out-File -FilePath $summary -Encoding utf8
+
+          if (-not (Test-Path $report)) {
+            "### Status: FAILED (no report generated)" | Out-File -FilePath $summary -Append -Encoding utf8
+            "Pipeline failed before Step 8. Check the Execute pipeline step logs." `
+              | Out-File -FilePath $summary -Append -Encoding utf8
+            exit 0
+          }
+
+          # --- Parse key metrics from the markdown report -------------------
+          $content = Get-Content $report -Raw
+
+          # Extract inventory / consumption row counts (pattern: "**N** rows")
+          $invMatch  = [regex]::Match($content, 'Inventory.*?(\d[\d,]+)\s+rows?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+          $consMatch = [regex]::Match($content, 'Consumption.*?(\d[\d,]+)\s+rows?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+
+          # Extract BUY / HOLD / MONITOR counts
+          $buyMatch     = [regex]::Match($content, 'BUY[^\d]*(\d+)')
+          $holdMatch    = [regex]::Match($content, 'HOLD[^\d]*(\d+)')
+          $monitorMatch = [regex]::Match($content, 'MONITOR[^\d]*(\d+)')
+
+          # Extract overall pass/warn/fail from the report
+          $passMatch = [regex]::Match($content, 'PASS[^\d]*(\d+)')
+          $warnMatch = [regex]::Match($content, 'WARN[^\d]*(\d+)')
+          $failMatch = [regex]::Match($content, 'FAIL[^\d]*(\d+)')
+
+          # Determine overall status emoji
+          $hasFail = $content -match 'FAIL'
+          $hasWarn = $content -match 'WARN'
+          $statusEmoji = if ($hasFail) { "FAILED" } elseif ($hasWarn) { "PASSED WITH WARNINGS" } else { "PASSED" }
+
+          # Write metrics table
+          @"
+          ### Pipeline Status: $statusEmoji
+
+          #### Data Volumes
+          | Metric | Value |
+          |--------|-------|
+          | Inventory rows | $( if ($invMatch.Success) { $invMatch.Groups[1].Value } else { "see report" } ) |
+          | Consumption rows | $( if ($consMatch.Success) { $consMatch.Groups[1].Value } else { "see report" } ) |
+
+          #### Procurement Recommendations
+          | Action | Count |
+          |--------|-------|
+          | BUY | $( if ($buyMatch.Success) { $buyMatch.Groups[1].Value } else { "—" } ) |
+          | HOLD | $( if ($holdMatch.Success) { $holdMatch.Groups[1].Value } else { "—" } ) |
+          | MONITOR | $( if ($monitorMatch.Success) { $monitorMatch.Groups[1].Value } else { "—" } ) |
+
+          #### Validation Checks
+          | Status | Count |
+          |--------|-------|
+          | PASS | $( if ($passMatch.Success) { $passMatch.Groups[1].Value } else { "—" } ) |
+          | WARN | $( if ($warnMatch.Success) { $warnMatch.Groups[1].Value } else { "—" } ) |
+          | FAIL | $( if ($failMatch.Success) { $failMatch.Groups[1].Value } else { "—" } ) |
+
+          > Full report available in the **validation-report-${{ github.run_number }}** artifact.
+          "@ | Out-File -FilePath $summary -Append -Encoding utf8
+
+      # -----------------------------------------------------------------------
+      # STEP 8a — Upload validation report
+      # -----------------------------------------------------------------------
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report-${{ github.run_number }}
+          path: reports/monthly_validation_report.md
+          retention-days: 90
+          if-no-files-found: warn
+
+      # -----------------------------------------------------------------------
+      # STEP 8b — Upload workbook archives
+      # -----------------------------------------------------------------------
+      - name: Upload workbook archives
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbook-archives-${{ github.run_number }}
+          path: data/strategy/archive/*.xlsx
+          retention-days: 90
+          if-no-files-found: warn
+
+      # -----------------------------------------------------------------------
+      # STEP 8c — Upload combined pipeline outputs
+      # -----------------------------------------------------------------------
+      - name: Upload combined pipeline outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-outputs-${{ github.run_number }}
+          path: |
+            reports/
+            data/strategy/archive/
+          retention-days: 90
+          if-no-files-found: warn
+
+      # -----------------------------------------------------------------------
+      # STEP 9 — Failure diagnostic (only on failure)
+      # -----------------------------------------------------------------------
+      - name: Failure diagnostic
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Host "===================================================="
+          Write-Host "PIPELINE FAILED — Diagnostic snapshot"
+          Write-Host "===================================================="
+          Write-Host ""
+          Write-Host "--- Oracle export directory contents ---"
+          if (Test-Path $env:ORACLE_EXPORT_DIR) {
+            Get-ChildItem $env:ORACLE_EXPORT_DIR | Format-Table Name, LastWriteTime, Length -AutoSize
+          } else {
+            Write-Host "  (directory does not exist)"
+          }
+          Write-Host ""
+          Write-Host "--- Workbook archive directory ---"
+          if (Test-Path $env:ARCHIVE_DIR) {
+            Get-ChildItem $env:ARCHIVE_DIR | Format-Table Name, LastWriteTime, Length -AutoSize
+          } else {
+            Write-Host "  (directory does not exist)"
+          }
+          Write-Host ""
+          Write-Host "--- Validation report (first 50 lines if present) ---"
+          $rpt = "reports\monthly_validation_report.md"
+          if (Test-Path $rpt) {
+            Get-Content $rpt | Select-Object -First 50
+          } else {
+            Write-Host "  (report not generated)"
+          }
+          Write-Host ""
+          Write-Host "--- Python environment ---"
+          python --version
+          pip show openpyxl pandas selenium 2>$null

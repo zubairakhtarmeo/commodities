@@ -21,6 +21,7 @@ Desktop.ini
 /data/interim/
 /data/processed/
 /data/backups/
+/data/strategy/
 
 # artifacts
 /artifacts/
