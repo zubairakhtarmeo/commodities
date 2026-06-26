@@ -1646,14 +1646,20 @@ def render_procurement_intelligence_page() -> None:
         )
         st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "Executive Decision",
         "Overview",
         "BUY — Action Required",
         "HOLD — Adequate Stock",
         "MONITOR — Attention",
         "Inventory Risk",
         "Full Report",
+        "What-If Lab",              # PSE-6B
+        "Monitoring",               # PSE-7A
     ])
+
+    with tab0:
+        render_pse6a_executive_panel()
 
     with tab1:
         _render_overview(df, meta)
@@ -1672,3 +1678,1944 @@ def render_procurement_intelligence_page() -> None:
 
     with tab6:
         _render_summary(df, meta)
+
+    with tab7:
+        render_pse6b_whatif_panel()
+
+    with tab8:
+        render_pse7a_monitoring_panel()
+
+
+# ===========================================================================
+# PSE-6A  EXECUTIVE PROCUREMENT DECISION PANEL
+# ===========================================================================
+# Consumes procurement_decision_engine.py (PSE-5B) output only.
+# No quantities are recomputed here — display layer only.
+# ===========================================================================
+
+_PSE6A_WORKBOOK = _PROJECT_ROOT / "data" / "strategy" / "Strategies.xlsx"
+
+_U_COLOR = {
+    "CRITICAL": ("#dc2626", "#fef2f2", "#fca5a5"),  # (text, bg, border)
+    "HIGH":     ("#b45309", "#fffbeb", "#fde68a"),
+    "MEDIUM":   ("#1d4ed8", "#eff6ff", "#bfdbfe"),
+    "LOW":      ("#059669", "#f0fdf4", "#86efac"),
+}
+_A_COLOR = {
+    "BUY_NOW":     "#dc2626",
+    "BUY_FORWARD": "#b45309",
+    "BUY_SPLIT":   "#7c3aed",
+    "DEFER":       "#1d4ed8",
+    "HOLD":        "#64748b",
+}
+_FI_COLOR = {
+    "COST_AVOIDANCE": "#059669",
+    "SAVING":         "#1d4ed8",
+    "NONE":           "#94a3b8",
+}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _run_pse5b_cached(workbook_path: str, today_str: str) -> dict:
+    """Single shared cache for the full PSE pipeline.  Cached 30 min.
+
+    Performs ONE workbook read and shares the result across PSE-6A, PSE-6B,
+    and PSE-7A via the 'report', 'scenario', and 'inventory' keys so that no
+    downstream caller needs to re-read the workbook.
+    """
+    try:
+        from datetime import date as _date
+        from procurement_orchestrator import run_orchestration
+        from procurement_scenario_engine import run_pse5a
+        from procurement_decision_engine import generate_executive_report
+
+        _today = _date.fromisoformat(today_str)
+
+        # Single workbook read for the entire dashboard session
+        _orch = run_orchestration(workbook_path=workbook_path)
+        _so   = _orch["strategy_output"]
+
+        # PSE-5A: reuses the already-loaded orch (no second workbook read)
+        _sr = run_pse5a(
+            workbook_path=workbook_path,
+            live_prices=False,
+            today=_today,
+            _orch=_orch,
+        )
+
+        # PSE-5B executive layer: pure computation, no I/O
+        _er = generate_executive_report(
+            scenario_report=_sr,
+            local_status=_so.local_status,
+            imported_status=_so.imported_status,
+        )
+
+        return {
+            "ok": True,
+            "report":   _er.to_dict(),
+            "scenario": _sr.to_dict(),
+            "inventory": {
+                "local_inventory_tons":    float(_so.local_inventory_tons),
+                "imported_inventory_tons": float(_so.imported_inventory_tons),
+                "total_inventory_tons":    float(_so.total_inventory_tons),
+                "local_status":            _so.local_status,
+                "imported_status":         _so.imported_status,
+                "local_days_cover":        float(_so.local_days_cover),
+                "imported_days_cover":     float(_so.imported_days_cover),
+            },
+        }
+    except Exception as exc:
+        import traceback
+        return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
+
+
+def _badge(text: str, text_color: str, bg: str, border: str, size: str = "0.72rem") -> str:
+    return (
+        f"<span style='display:inline-block;padding:2px 10px;border-radius:12px;"
+        f"font-size:{size};font-weight:700;letter-spacing:0.4px;"
+        f"color:{text_color};background:{bg};border:1.5px solid {border};'>"
+        f"{text}</span>"
+    )
+
+
+def _urgency_pill(urgency: str) -> str:
+    tc, bg, bd = _U_COLOR.get(urgency, ("#475569", "#f1f5f9", "#e2e8f0"))
+    return _badge(urgency, tc, bg, bd)
+
+
+def _action_pill(action_label: str, action_code: str) -> str:
+    col = _A_COLOR.get(action_code, "#475569")
+    return _badge(action_label.upper(), col, "#ffffff", col)
+
+
+def _fi_pill(fi_type: str) -> str:
+    col = _FI_COLOR.get(fi_type, "#94a3b8")
+    labels = {"COST_AVOIDANCE": "COST AVOIDANCE", "SAVING": "EXPECTED SAVING", "NONE": "NO PRICE BENEFIT"}
+    return _badge(labels.get(fi_type, fi_type), col, "#ffffff", col)
+
+
+def _conf_bar(score: int, label: str) -> str:
+    col = "#059669" if score >= 75 else ("#1d4ed8" if score >= 50 else "#b45309")
+    bar_w = max(4, score)
+    return (
+        f"<div style='display:flex;align-items:center;gap:8px;'>"
+        f"<div style='flex:1;background:#e2e8f0;border-radius:4px;height:6px;'>"
+        f"<div style='width:{bar_w}%;background:{col};height:6px;border-radius:4px;'></div>"
+        f"</div>"
+        f"<span style='font-size:0.72rem;font-weight:700;color:{col};white-space:nowrap;'>"
+        f"{score}/100 · {label}</span>"
+        f"</div>"
+    )
+
+
+def _qty_row(label: str, qty: float, note: str = "", color: str = "#0f172a") -> str:
+    if qty == 0 and not note:
+        return ""
+    note_html = f"<span style='color:#94a3b8;font-size:0.72rem;margin-left:6px;'>{note}</span>" if note else ""
+    return (
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
+        f"padding:4px 0;border-bottom:1px solid #f1f5f9;'>"
+        f"<span style='font-size:0.78rem;color:#64748b;'>{label}</span>"
+        f"<span style='font-size:0.88rem;font-weight:700;color:{color};'>"
+        f"{qty:,.0f} t{note_html}</span>"
+        f"</div>"
+    )
+
+
+def _pse6a_source_card(dec: dict, source_label: str) -> None:
+    """Render one source decision card (LOCAL or IMPORTED)."""
+    urgency     = dec.get("urgency", "LOW")
+    action_code = dec.get("action_code", "HOLD")
+    action_lbl  = dec.get("action", "Hold")
+    conf        = dec.get("confidence", {})
+    risk        = dec.get("risk", {})
+    fi          = dec.get("expected_cost_impact", {})
+
+    tc, bg, bd = _U_COLOR.get(urgency, ("#475569", "#f1f5f9", "#e2e8f0"))
+
+    qty_now      = dec.get("qty_now_tons", 0.0)
+    qty_later    = dec.get("qty_later_tons", 0.0)
+    mandatory    = dec.get("mandatory_tons", 0.0)
+    structural   = dec.get("base_structural_tons", 0.0)
+    opportunistic = dec.get("opportunistic_tons", 0.0)
+    deferred     = dec.get("deferred_tons", 0.0)
+    order_date   = dec.get("order_date") or "—"
+    arrival      = dec.get("expected_arrival") or "—"
+    defer_until  = dec.get("defer_until") or "—"
+
+    fi_type     = fi.get("impact_type", "NONE")
+    fi_narrative = fi.get("narrative", "")
+    avoidance   = fi.get("cost_avoidance_usd")
+    savings     = fi.get("expected_savings_usd")
+
+    qty_rows_html = "".join(filter(None, [
+        _qty_row("Mandatory replenishment", mandatory, "stock-protection", "#dc2626") if mandatory > 0 else "",
+        _qty_row("Structural (base plan)", structural, "calendar/mix", "#1d4ed8") if structural > 0 else "",
+        _qty_row("Opportunistic (forward buy)", opportunistic, "price-timed", "#7c3aed") if opportunistic > 0 else "",
+        _qty_row("Deferred to later window", deferred, f"by {defer_until}", "#059669") if deferred > 0 else "",
+    ]))
+
+    total_label = "Total — order today" if qty_now > 0 else "Total — deferred"
+    total_qty   = qty_now if qty_now > 0 else qty_later
+    total_color = "#dc2626" if urgency == "CRITICAL" else ("#b45309" if urgency == "HIGH" else "#0f172a")
+    qty_rows_html += _qty_row(total_label, total_qty, "", total_color)
+
+    if avoidance:
+        fi_amount = f"USD {avoidance:,.0f}"
+    elif savings:
+        fi_amount = f"USD {savings:,.0f}"
+    else:
+        fi_amount = "—"
+
+    st.markdown(f"""
+    <div style='background:#ffffff;border-radius:10px;border:1px solid {bd};
+                border-left:4px solid {tc};padding:1rem 1.2rem;
+                box-shadow:0 2px 6px rgba(0,0,0,0.06);margin-bottom:0.5rem;'>
+
+      <div style='display:flex;justify-content:space-between;align-items:flex-start;
+                  margin-bottom:0.65rem;flex-wrap:wrap;gap:6px;'>
+        <div>
+          <span style='font-size:1rem;font-weight:800;color:#0f172a;
+                       letter-spacing:-0.3px;'>{source_label}</span>
+          &nbsp;&nbsp;{_action_pill(action_lbl, action_code)}&nbsp;{_urgency_pill(urgency)}
+        </div>
+        <div style='text-align:right;'>
+          {_conf_bar(conf.get("score", 0), conf.get("label", ""))}
+        </div>
+      </div>
+
+      <div style='margin-bottom:0.75rem;'>{qty_rows_html}</div>
+
+      <div style='display:grid;grid-template-columns:1fr 1fr;gap:6px;
+                  margin-bottom:0.75rem;'>
+        <div style='background:#f8fafc;border-radius:6px;padding:6px 10px;'>
+          <div style='font-size:0.68rem;color:#94a3b8;font-weight:600;
+                      letter-spacing:0.3px;margin-bottom:2px;'>ORDER DATE</div>
+          <div style='font-size:0.85rem;font-weight:700;color:#0f172a;'>{order_date}</div>
+        </div>
+        <div style='background:#f8fafc;border-radius:6px;padding:6px 10px;'>
+          <div style='font-size:0.68rem;color:#94a3b8;font-weight:600;
+                      letter-spacing:0.3px;margin-bottom:2px;'>
+            {'EXPECTED ARRIVAL' if qty_now > 0 else 'DEFER UNTIL'}</div>
+          <div style='font-size:0.85rem;font-weight:700;color:#0f172a;'>
+            {arrival if qty_now > 0 else defer_until}</div>
+        </div>
+      </div>
+
+      <div style='display:flex;align-items:center;justify-content:space-between;
+                  flex-wrap:wrap;gap:6px;margin-bottom:0.65rem;'>
+        {_fi_pill(fi_type)}
+        <span style='font-size:0.82rem;font-weight:700;
+                     color:{_FI_COLOR.get(fi_type,"#94a3b8")};'>{fi_amount}</span>
+      </div>
+
+      <div style='font-size:0.78rem;color:#374151;line-height:1.55;
+                  padding-top:0.5rem;border-top:1px solid #f1f5f9;'>
+        {dec.get("executive_summary","").replace(". ", ".<br>")}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def _pse6a_portfolio_card(er: dict) -> None:
+    """Render portfolio-level summary strip."""
+    local    = er.get("local", {})
+    imported = er.get("imported", {})
+    urgency  = er.get("portfolio_urgency", "LOW")
+    tc, bg, bd = _U_COLOR.get(urgency, ("#475569", "#f1f5f9", "#e2e8f0"))
+
+    total_now   = local.get("qty_now_tons", 0) + imported.get("qty_now_tons", 0)
+    total_defer = local.get("qty_later_tons", 0) + imported.get("qty_later_tons", 0)
+
+    # combined financial
+    total_avoid = (
+        (local.get("expected_cost_impact", {}).get("cost_avoidance_usd") or 0) +
+        (imported.get("expected_cost_impact", {}).get("cost_avoidance_usd") or 0)
+    )
+    total_save  = (
+        (local.get("expected_cost_impact", {}).get("expected_savings_usd") or 0) +
+        (imported.get("expected_cost_impact", {}).get("expected_savings_usd") or 0)
+    )
+    fi_str = (
+        f"USD {total_avoid:,.0f} avoided" if total_avoid > 0 else
+        f"USD {total_save:,.0f} saving"   if total_save  > 0 else "—"
+    )
+
+    risks   = er.get("key_risks", [])
+    actions = er.get("recommended_actions", [])
+
+    risk_html = "".join(
+        f"<div style='font-size:0.75rem;color:#dc2626;padding:2px 0;'>&#9655; {r}</div>"
+        for r in risks
+    )
+    action_html = "".join(
+        f"<div style='font-size:0.75rem;color:#0f172a;padding:2px 0;'>&#10003; {a}</div>"
+        for a in actions
+    )
+
+    st.markdown(f"""
+    <div style='background:{bg};border-radius:10px;border:1px solid {bd};
+                border-left:5px solid {tc};padding:1rem 1.4rem;
+                margin-bottom:1rem;box-shadow:0 2px 8px rgba(0,0,0,0.07);'>
+      <div style='display:flex;justify-content:space-between;align-items:center;
+                  margin-bottom:0.75rem;flex-wrap:wrap;gap:8px;'>
+        <div>
+          <span style='font-size:0.68rem;font-weight:700;color:{tc};
+                       letter-spacing:1px;text-transform:uppercase;
+                       margin-bottom:2px;display:block;'>Portfolio Risk</span>
+          <span style='font-size:1.1rem;font-weight:800;color:#0f172a;'>
+            Executive Procurement Decision</span>
+        </div>
+        {_urgency_pill(urgency)}
+      </div>
+
+      <div style='display:grid;grid-template-columns:repeat(4,1fr);gap:10px;
+                  margin-bottom:0.85rem;'>
+        <div style='background:#ffffff;border-radius:7px;padding:8px 12px;
+                    border:1px solid {bd};'>
+          <div style='font-size:0.65rem;color:#94a3b8;font-weight:700;
+                      letter-spacing:0.5px;margin-bottom:3px;'>BUY TODAY</div>
+          <div style='font-size:1.05rem;font-weight:800;color:{tc};'>
+            {total_now:,.0f} t</div>
+        </div>
+        <div style='background:#ffffff;border-radius:7px;padding:8px 12px;
+                    border:1px solid {bd};'>
+          <div style='font-size:0.65rem;color:#94a3b8;font-weight:700;
+                      letter-spacing:0.5px;margin-bottom:3px;'>DEFERRED</div>
+          <div style='font-size:1.05rem;font-weight:800;color:#1d4ed8;'>
+            {total_defer:,.0f} t</div>
+        </div>
+        <div style='background:#ffffff;border-radius:7px;padding:8px 12px;
+                    border:1px solid {bd};'>
+          <div style='font-size:0.65rem;color:#94a3b8;font-weight:700;
+                      letter-spacing:0.5px;margin-bottom:3px;'>FINANCIAL IMPACT</div>
+          <div style='font-size:0.88rem;font-weight:800;color:#059669;'>{fi_str}</div>
+        </div>
+        <div style='background:#ffffff;border-radius:7px;padding:8px 12px;
+                    border:1px solid {bd};'>
+          <div style='font-size:0.65rem;color:#94a3b8;font-weight:700;
+                      letter-spacing:0.5px;margin-bottom:3px;'>LOCAL · IMPORTED</div>
+          <div style='font-size:0.8rem;font-weight:700;color:#0f172a;'>
+            {local.get("action","—")} · {imported.get("action","—")}</div>
+        </div>
+      </div>
+
+      <div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;'>
+        <div>
+          <div style='font-size:0.68rem;font-weight:700;color:#94a3b8;
+                      letter-spacing:0.5px;margin-bottom:4px;'>KEY RISKS</div>
+          {risk_html if risk_html else
+           "<div style='font-size:0.75rem;color:#059669;'>No elevated risks.</div>"}
+        </div>
+        <div>
+          <div style='font-size:0.68rem;font-weight:700;color:#94a3b8;
+                      letter-spacing:0.5px;margin-bottom:4px;'>RECOMMENDED ACTIONS</div>
+          {action_html if action_html else
+           "<div style='font-size:0.75rem;color:#64748b;'>No actions required.</div>"}
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def _pse6a_timeline(er: dict) -> None:
+    """Render procurement action timeline as a Plotly Gantt chart."""
+    import datetime as _dt
+
+    local    = er.get("local",    {})
+    imported = er.get("imported", {})
+    today    = _dt.date.today()
+
+    bars = []
+    for dec, label in [(local, "LOCAL"), (imported, "IMPORTED")]:
+        ac   = dec.get("action_code", "HOLD")
+        qty  = dec.get("qty_now_tons", 0)
+        qltr = dec.get("qty_later_tons", 0)
+        urg  = dec.get("urgency", "LOW")
+        col  = _U_COLOR.get(urg, ("#475569", "#f1f5f9", "#e2e8f0"))[0]
+
+        if ac in ("BUY_NOW", "BUY_FORWARD", "BUY_SPLIT") and qty > 0:
+            arr_str  = dec.get("expected_arrival")
+            arr_date = (_dt.date.fromisoformat(arr_str)
+                        if arr_str else today + _dt.timedelta(days=30))
+            bars.append(dict(
+                Task=label, Start=str(today), Finish=str(arr_date),
+                Action=f"Order: {qty:,.0f} t  →  Arrival: {arr_date}",
+                Color=col, LT=arr_date,
+            ))
+
+        if qltr > 0:
+            def_end_str = dec.get("defer_until")
+            def_end = (_dt.date.fromisoformat(def_end_str)
+                       if def_end_str else today + _dt.timedelta(days=14))
+            bars.append(dict(
+                Task=label + " (deferred)", Start=str(today),
+                Finish=str(def_end),
+                Action=f"Defer {qltr:,.0f} t  →  latest safe date: {def_end}",
+                Color="#1d4ed8", LT=def_end,
+            ))
+
+    if not bars:
+        st.markdown(
+            "<div style='color:#94a3b8;font-size:0.82rem;padding:0.5rem 0;'>"
+            "No active procurement actions to display on the timeline.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    fig = go.Figure()
+    y_pos = {t: i for i, t in enumerate(dict.fromkeys(b["Task"] for b in bars))}
+
+    for b in bars:
+        t0  = _dt.date.fromisoformat(b["Start"])
+        t1  = _dt.date.fromisoformat(b["Finish"])
+        days = max((t1 - t0).days, 1)
+        fig.add_trace(go.Bar(
+            x=[days], y=[b["Task"]], orientation="h",
+            base=[(t0 - today).days],
+            marker_color=b["Color"], marker_line_width=0,
+            text=b["Action"], textposition="inside",
+            textfont=dict(size=10, color="#ffffff"),
+            hovertemplate=b["Action"] + "<extra></extra>",
+            name=b["Task"],
+            showlegend=False,
+        ))
+        fig.add_annotation(
+            x=(t1 - today).days + 1, y=b["Task"],
+            text=str(b["Finish"]), showarrow=False,
+            font=dict(size=9, color="#64748b"), xanchor="left",
+        )
+
+    max_day = max(((_dt.date.fromisoformat(b["Finish"]) - today).days + 14) for b in bars)
+    fig.update_layout(
+        barmode="overlay",
+        height=max(160, 70 * len(y_pos) + 60),
+        margin=dict(l=10, r=60, t=10, b=30),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#fafafa",
+        xaxis=dict(
+            title="Days from today",
+            tickfont=dict(size=9),
+            range=[-2, max_day],
+            showgrid=True, gridcolor="#e2e8f0",
+            zeroline=True, zerolinecolor="#dc2626", zerolinewidth=2,
+        ),
+        yaxis=dict(showgrid=False, tickfont=dict(size=10)),
+        font=dict(family="Inter, sans-serif"),
+    )
+    fig.add_vline(x=0, line_width=2, line_color="#dc2626",
+                  annotation_text="TODAY", annotation_position="top right",
+                  annotation_font_size=9)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+def _pse6a_insights(er: dict) -> None:
+    """Expandable Executive Insights section — structured reasoning per source."""
+    for source_key, label in [("local", "LOCAL COTTON"), ("imported", "IMPORTED COTTON")]:
+        dec = er.get(source_key, {})
+        if not dec:
+            continue
+        with st.expander(
+            f"Why is the engine recommending this for {label}?",
+            expanded=False,
+        ):
+            fields = [
+                ("Inventory Position",  dec.get("inventory_reason", "")),
+                ("Price Intelligence",  dec.get("price_reason", "")),
+                ("Timing Rationale",    dec.get("timing_reason", "")),
+                ("Quantity Breakdown",  dec.get("quantity_reason", "")),
+                ("Business Rationale",  dec.get("business_reason", "")),
+                ("Risk if Not Followed", dec.get("expected_risk_if_ignored", "")),
+                ("Financial Impact",    dec.get("expected_cost_impact", {}).get("narrative", "")),
+                ("Confidence",          dec.get("confidence", {}).get("explanation", "")),
+            ]
+            for title, body in fields:
+                if not body:
+                    continue
+                st.markdown(
+                    f"<div style='margin-bottom:0.6rem;'>"
+                    f"<div style='font-size:0.72rem;font-weight:700;color:#1d4ed8;"
+                    f"letter-spacing:0.5px;text-transform:uppercase;"
+                    f"margin-bottom:3px;'>{title}</div>"
+                    f"<div style='font-size:0.82rem;color:#374151;line-height:1.6;'>"
+                    f"{body}</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+
+def render_pse6a_executive_panel() -> None:
+    """
+    PSE-6A — Executive Procurement Decision Panel.
+
+    Runs PSE-5B (cached 30 min) and renders:
+      1. Portfolio summary card
+      2. LOCAL + IMPORTED source decision cards
+      3. Action timeline
+      4. Expandable executive insights
+    """
+    import datetime as _dt
+
+    # ── Run / load PSE-5B ────────────────────────────────────────────────────
+    workbook = str(_PSE6A_WORKBOOK) if _PSE6A_WORKBOOK.exists() else None
+
+    if not workbook:
+        st.info(
+            "Inventory workbook not found. "
+            "Expected: `data/strategy/Strategies.xlsx`  \n"
+            "Place the workbook file there and refresh the page."
+        )
+        return
+
+    today_str = _dt.date.today().isoformat()
+
+    with st.spinner("Loading procurement decision engine…"):
+        result = _run_pse5b_cached(workbook, today_str)
+
+    if not result.get("ok"):
+        err = result.get("error", "Unknown error")
+        st.error(
+            f"**PSE-5B pipeline error.**  \n"
+            f"The decision engine could not run.  \n\n"
+            f"```\n{err}\n```"
+        )
+        st.caption(
+            "Check that `data/strategy/Strategies.xlsx` is current and the "
+            "procurement engine dependencies are installed."
+        )
+        return
+
+    er = result["report"]
+
+    # ── 1. Portfolio summary ──────────────────────────────────────────────────
+    _pse6a_portfolio_card(er)
+
+    # ── 2. Source decision cards ──────────────────────────────────────────────
+    c1, c2 = st.columns(2, gap="medium")
+    with c1:
+        _pse6a_source_card(er.get("local",    {}), "LOCAL COTTON")
+    with c2:
+        _pse6a_source_card(er.get("imported", {}), "IMPORTED COTTON")
+
+    # ── 3. Action timeline ────────────────────────────────────────────────────
+    st.markdown(
+        "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+        "letter-spacing:0.8px;text-transform:uppercase;"
+        "margin:1.1rem 0 0.4rem 0;'>Procurement Timeline</div>",
+        unsafe_allow_html=True,
+    )
+    _pse6a_timeline(er)
+
+    # ── 4. Executive insights (expandable) ───────────────────────────────────
+    st.markdown(
+        "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+        "letter-spacing:0.8px;text-transform:uppercase;"
+        "margin:0.8rem 0 0.4rem 0;'>Executive Insights</div>",
+        unsafe_allow_html=True,
+    )
+    _pse6a_insights(er)
+
+    st.caption(
+        f"Decision engine: PSE-5B  ·  Data: {_PSE6A_WORKBOOK.name}  ·  "
+        f"Refreshed: {today_str}  ·  Cache TTL: 30 min"
+    )
+
+
+# ===========================================================================
+# PSE-6B  EXECUTIVE WHAT-IF SIMULATION LABORATORY
+# ===========================================================================
+# Allows management to test procurement scenarios without changing production
+# calculations.  Production recommendation is read-only.
+# Simulation calls the existing engine (_build_source_decision, run_pse3d,
+# compute_procurement_calendar, compute_order_consolidation) with
+# user-supplied parameter overrides — no calculations are duplicated.
+# ===========================================================================
+
+def _pse6b_load_defaults() -> dict:
+    """Build What-If Lab defaults by reading production constants at import time.
+
+    Avoids duplicating the approved PSE-2.7 constants (DAILY_CONSUMPTION_TOTAL,
+    LOCAL_MIX_TARGET, LOCAL_LEAD_TIME_DAYS, IMPORTED_LEAD_TIME_DAYS) so that a
+    constant change in procurement_strategy_engine.py is automatically reflected
+    in the simulator without a separate edit here.
+    """
+    from procurement_strategy_engine import (
+        DAILY_CONSUMPTION_TOTAL,
+        LOCAL_MIX_TARGET,
+        LOCAL_LEAD_TIME_DAYS,
+        IMPORTED_LEAD_TIME_DAYS,
+    )
+    return {
+        "total_consumption":  float(DAILY_CONSUMPTION_TOTAL),
+        "local_mix_pct":      float(LOCAL_MIX_TARGET * 100),
+        "local_lead_time":    int(LOCAL_LEAD_TIME_DAYS),
+        "imported_lead_time": int(IMPORTED_LEAD_TIME_DAYS),
+        "pkr_rate":           281.0,   # market rate — not a static constant
+        "current_price":        0.78,
+        "forecast_h1":          0.78,
+        "forecast_h3":          0.78,
+    }
+
+_PSE6B_PROD_DEFAULTS = _pse6b_load_defaults()
+
+
+def _pse6b_get_prod_so(workbook_path: str, today_str: str) -> dict:
+    """Return inventory/status data from the shared PSE-5B cache.
+
+    No workbook read here — data is extracted from _run_pse5b_cached() which
+    already holds it.  Not separately cached because there is no I/O cost.
+    """
+    result = _run_pse5b_cached(workbook_path, today_str)
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("error", "Pipeline error")}
+    return {"ok": True, **result["inventory"]}
+
+
+def _pse6b_run_simulation(so_dict: dict, sim_params: dict, today_str: str) -> dict:
+    """
+    Run the procurement engine with user-overridden parameters.
+
+    Calls existing engine functions with simulation inputs — no procurement
+    calculations are duplicated.  Returns serialisable dict.
+    """
+    try:
+        from datetime import date as _date
+        from procurement_strategy_engine import MIN_STOCK_DAYS, _classify_supply_status
+        from procurement_planning_engine import run_pse3d
+        from procurement_calendar_engine import compute_procurement_calendar
+        from procurement_consolidation_engine import compute_order_consolidation
+        from procurement_scenario_engine import (
+            _build_source_decision, ScenarioReport,
+            ACTION_BUY_NOW, ACTION_BUY_FORWARD, ACTION_BUY_SPLIT,
+            ACTION_DEFER, ACTION_HOLD,
+        )
+        from procurement_decision_engine import generate_executive_report
+
+        today = _date.fromisoformat(today_str)
+
+        local_mix  = sim_params["local_mix_pct"] / 100.0
+        imp_mix    = 1.0 - local_mix
+        total_cons = sim_params["total_consumption"]
+        sim_rate_l = total_cons * local_mix
+        sim_rate_i = total_cons * imp_mix
+        sim_ss_l   = MIN_STOCK_DAYS * sim_rate_l
+        sim_ss_i   = MIN_STOCK_DAYS * sim_rate_i
+        sim_lt_l   = int(sim_params["local_lead_time"])
+        sim_lt_i   = int(sim_params["imported_lead_time"])
+        sim_rop_l  = (MIN_STOCK_DAYS + sim_lt_l) * sim_rate_l
+        sim_rop_i  = (MIN_STOCK_DAYS + sim_lt_i) * sim_rate_i
+
+        sim_local_inv = float(sim_params["local_inventory"])
+        sim_imp_inv   = float(sim_params["imported_inventory"])
+        sim_total_inv = sim_local_inv + sim_imp_inv
+
+        sim_local_status = _classify_supply_status(sim_local_inv, sim_ss_l, sim_rop_l)
+        sim_imp_status   = _classify_supply_status(sim_imp_inv,   sim_ss_i, sim_rop_i)
+
+        current_price = float(sim_params["current_price"])
+        forecast_h1   = float(sim_params["forecast_h1"])
+        forecast_h3   = float(sim_params["forecast_h3"])
+        pkr_rate      = float(sim_params["pkr_rate"])
+
+        plan = run_pse3d(
+            local_inventory_tons=sim_local_inv,
+            imported_inventory_tons=sim_imp_inv,
+            local_status=sim_local_status,
+            imported_status=sim_imp_status,
+            total_inventory_tons=sim_total_inv,
+            current_price_usd_per_lb=current_price,
+            forecast_h1_usd_per_lb=forecast_h1,
+            forecast_h3_usd_per_lb=forecast_h3,
+            pkr_rate=pkr_rate,
+            today=today,
+        )
+        cal  = compute_procurement_calendar(
+            local_inventory_tons=sim_local_inv,
+            imported_inventory_tons=sim_imp_inv,
+            local_status=sim_local_status,
+            imported_status=sim_imp_status,
+            total_inventory_tons=sim_total_inv,
+            today=today,
+        )
+        cons = compute_order_consolidation(calendar_result=cal)
+        req  = plan.requirement
+
+        local_sd = _build_source_decision(
+            source="LOCAL",
+            status=sim_local_status,
+            inventory_tons=sim_local_inv,
+            total_inventory_tons=sim_total_inv,
+            days_cover=round(sim_local_inv / max(sim_rate_l, 0.01), 1),
+            rop_tons=sim_rop_l,
+            safety_stock_tons=sim_ss_l,
+            lead_time_days=sim_lt_l,
+            daily_rate=sim_rate_l,
+            deficit_from_plan=req["deficit_local_tons"],
+            latest_safe_order_date=plan.local_recommendation["latest_safe_order_date"],
+            consolidation_result=cons,
+            plan=plan,
+            today=today,
+            current_price=current_price,
+            forecast_price=forecast_h1,
+            forecast_h_bounds=None,
+            pkr_rate=pkr_rate,
+        )
+        imp_sd = _build_source_decision(
+            source="IMPORTED",
+            status=sim_imp_status,
+            inventory_tons=sim_imp_inv,
+            total_inventory_tons=sim_total_inv,
+            days_cover=round(sim_imp_inv / max(sim_rate_i, 0.01), 1),
+            rop_tons=sim_rop_i,
+            safety_stock_tons=sim_ss_i,
+            lead_time_days=sim_lt_i,
+            daily_rate=sim_rate_i,
+            deficit_from_plan=req["deficit_imported_tons"],
+            latest_safe_order_date=plan.imported_recommendation["latest_safe_order_date"],
+            consolidation_result=cons,
+            plan=plan,
+            today=today,
+            current_price=current_price,
+            forecast_price=forecast_h3,
+            forecast_h_bounds=None,
+            pkr_rate=pkr_rate,
+        )
+
+        _prio = {ACTION_BUY_NOW: 1, ACTION_BUY_FORWARD: 2, ACTION_BUY_SPLIT: 3,
+                 ACTION_DEFER: 4, ACTION_HOLD: 5}
+        lp = _prio.get(local_sd.final_action, 9)
+        ip = _prio.get(imp_sd.final_action, 9)
+        portfolio_action = local_sd.final_action if lp <= ip else imp_sd.final_action
+
+        sim_sr = ScenarioReport(
+            run_date=today.isoformat(),
+            local=local_sd,
+            imported=imp_sd,
+            portfolio_action=portfolio_action,
+            portfolio_risk_level="SIM",
+            portfolio_reasoning="Simulation run — parameters overridden by user.",
+            price_inputs_used={
+                "current_price_usd_per_lb": current_price,
+                "forecast_h1_usd_per_lb":   forecast_h1,
+                "forecast_h3_usd_per_lb":   forecast_h3,
+                "pkr_rate":                  pkr_rate,
+            },
+            assumptions=["SIMULATION — parameters overridden by user."],
+        )
+
+        exec_report = generate_executive_report(
+            scenario_report=sim_sr,
+            local_status=sim_local_status,
+            imported_status=sim_imp_status,
+            pkr_rate=pkr_rate,
+        )
+
+        return {
+            "ok":          True,
+            "exec_report": exec_report.to_dict(),
+            "sim_rates": {
+                "local":           sim_rate_l,
+                "imported":        sim_rate_i,
+                "rop_local":       sim_rop_l,
+                "rop_imported":    sim_rop_i,
+                "local_status":    sim_local_status,
+                "imported_status": sim_imp_status,
+            },
+        }
+    except Exception as exc:
+        import traceback
+        return {"ok": False, "error": str(exc) + "\n" + traceback.format_exc()}
+
+
+# ---------------------------------------------------------------------------
+# Score, diff, adopt — pure functions (no Streamlit)
+# ---------------------------------------------------------------------------
+
+def _pse6b_score(dec: dict, risk_appetite: str) -> dict:
+    """Return 5-dimension scores (0-100, higher is better)."""
+    urgency     = dec.get("urgency", "LOW")
+    risk_level  = dec.get("risk", {}).get("level", "LOW")
+    conf_score  = dec.get("confidence", {}).get("score", 50)
+    action_code = dec.get("action_code", "HOLD")
+    fi          = dec.get("expected_cost_impact", {})
+    fi_type     = fi.get("impact_type", "NONE")
+    avoidance   = fi.get("cost_avoidance_usd") or 0
+    savings     = fi.get("expected_savings_usd") or 0
+
+    op_map  = {"CRITICAL": 15, "HIGH": 45, "MEDIUM": 72, "LOW": 95}
+    op_safe = op_map.get(urgency, 50)
+
+    if fi_type == "COST_AVOIDANCE" and avoidance > 0:
+        fin = min(95, 60 + int(avoidance / 60_000))
+    elif fi_type == "SAVING" and savings > 0:
+        fin = min(90, 55 + int(savings / 60_000))
+    elif action_code == "DEFER":
+        fin = 60
+    elif action_code in ("BUY_NOW", "BUY_FORWARD"):
+        fin = 52
+    else:
+        fin = 50
+
+    inv_stab = min(95, conf_score + 8)
+
+    risk_map  = {"CRITICAL": 10, "HIGH": 35, "MEDIUM": 65, "LOW": 92}
+    sup_risk  = risk_map.get(risk_level, 50)
+
+    if risk_appetite == "Conservative":
+        w = (0.40, 0.15, 0.25, 0.20)
+    elif risk_appetite == "Aggressive":
+        w = (0.15, 0.40, 0.20, 0.25)
+    else:
+        w = (0.30, 0.25, 0.20, 0.25)
+
+    overall = int(w[0] * op_safe + w[1] * fin + w[2] * inv_stab + w[3] * sup_risk)
+
+    return {
+        "operational_safety":  op_safe,
+        "financial_benefit":   fin,
+        "inventory_stability": inv_stab,
+        "supply_risk":         sup_risk,
+        "overall":             overall,
+    }
+
+
+def _pse6b_diff_lines(sim_params: dict, prod_so: dict) -> list:
+    """Return executive-language bullets describing what changed."""
+    lines = []
+    D = _PSE6B_PROD_DEFAULTS
+
+    delta_cons = sim_params["total_consumption"] - D["total_consumption"]
+    if abs(delta_cons) > 0.5:
+        verb   = "Increasing" if delta_cons > 0 else "Reducing"
+        effect = "increases" if delta_cons > 0 else "decreases"
+        lines.append(
+            f"{verb} daily consumption by {abs(delta_cons):.1f} t/day {effect} "
+            f"all recommended purchase quantities proportionally."
+        )
+
+    delta_lt_l = sim_params["local_lead_time"] - D["local_lead_time"]
+    if delta_lt_l:
+        verb   = "Extending" if delta_lt_l > 0 else "Reducing"
+        effect = ("advances the procurement trigger and raises the local reorder point"
+                  if delta_lt_l > 0 else
+                  "relaxes the local procurement window and lowers the reorder point")
+        lines.append(
+            f"{verb} local lead time by {abs(delta_lt_l)} days — {effect}."
+        )
+
+    delta_lt_i = sim_params["imported_lead_time"] - D["imported_lead_time"]
+    if delta_lt_i:
+        verb   = "Adding" if delta_lt_i > 0 else "Removing"
+        effect = ("advances imported procurement by approximately one order cycle "
+                  "and increases shortage risk"
+                  if delta_lt_i > 0 else
+                  "reduces the imported reorder threshold, relaxing imported urgency")
+        lines.append(
+            f"{verb} {abs(delta_lt_i)} days to imported lead time — {effect}."
+        )
+
+    delta_price_pct = ((sim_params["current_price"] - D["current_price"])
+                       / max(D["current_price"], 0.01) * 100)
+    if abs(delta_price_pct) > 1.5:
+        verb   = "Raising" if delta_price_pct > 0 else "Lowering"
+        effect = ("weakens the case for forward purchasing"
+                  if delta_price_pct > 0 else
+                  "strengthens the buy-now signal")
+        lines.append(
+            f"{verb} the market price by {delta_price_pct:+.1f}% to "
+            f"USD {sim_params['current_price']:.3f}/lb — {effect}."
+        )
+
+    h1_chg = ((sim_params["forecast_h1"] - sim_params["current_price"])
+              / max(sim_params["current_price"], 0.01) * 100)
+    if abs(h1_chg) > 2:
+        outlook = "rising" if h1_chg > 0 else "falling"
+        effect  = ("engine will favour forward purchases to lock in today's price"
+                   if h1_chg > 0 else
+                   "engine will favour deferral to capture the projected lower price")
+        lines.append(
+            f"Short-term (H1) price outlook {outlook} ({h1_chg:+.1f}%) — {effect}."
+        )
+
+    h3_chg = ((sim_params["forecast_h3"] - sim_params["current_price"])
+              / max(sim_params["current_price"], 0.01) * 100)
+    if abs(h3_chg) > 2 and abs(h3_chg - h1_chg) > 3:
+        outlook = "rising" if h3_chg > 0 else "falling"
+        effect  = ("supports early commitment of imported volume"
+                   if h3_chg > 0 else
+                   "creates opportunity to defer imported orders and reduce near-term cash outlay")
+        lines.append(
+            f"3-month (H3) imported outlook {outlook} ({h3_chg:+.1f}%) — {effect}."
+        )
+
+    delta_mix = sim_params["local_mix_pct"] - D["local_mix_pct"]
+    if abs(delta_mix) > 1.5:
+        verb   = "Increasing" if delta_mix > 0 else "Reducing"
+        effect = ("shifts procurement toward local cotton, reducing imported volume requirements"
+                  if delta_mix > 0 else
+                  "shifts volume toward imported cotton, reducing local procurement requirements")
+        lines.append(
+            f"{verb} local cotton mix to {sim_params['local_mix_pct']:.0f}% — {effect}."
+        )
+
+    max_storage = sim_params.get("max_storage")
+    if max_storage:
+        effect = ("creates additional headroom for forward buying"
+                  if max_storage > 30_000 else
+                  "constrains opportunistic forward buying capacity")
+        lines.append(
+            f"Storage capacity set to {max_storage:,.0f} t — {effect}."
+        )
+
+    prod_local_inv = prod_so.get("local_inventory_tons", 0)
+    prod_imp_inv   = prod_so.get("imported_inventory_tons", 0)
+    if abs(sim_params["local_inventory"] - prod_local_inv) > 50:
+        delta = sim_params["local_inventory"] - prod_local_inv
+        verb  = "Adding" if delta > 0 else "Reducing"
+        lines.append(
+            f"{verb} {abs(delta):,.0f} t to local inventory position — "
+            f"{'improves days cover and reduces urgency' if delta > 0 else 'reduces days cover and may increase urgency'}."
+        )
+    if abs(sim_params["imported_inventory"] - prod_imp_inv) > 50:
+        delta = sim_params["imported_inventory"] - prod_imp_inv
+        verb  = "Adding" if delta > 0 else "Reducing"
+        lines.append(
+            f"{verb} {abs(delta):,.0f} t to imported inventory — "
+            f"{'improves imported cover and may defer the next order' if delta > 0 else 'tightens imported cover and may advance urgency'}."
+        )
+
+    if not lines:
+        lines.append(
+            "Parameters unchanged from production defaults — simulation matches "
+            "the live production recommendation exactly."
+        )
+
+    return lines
+
+
+def _pse6b_adopt(sc_l: dict, sc_i: dict, pc_l: dict, pc_i: dict,
+                 risk_appetite: str) -> dict:
+    """Return YES / NO / PARTIALLY verdict with explanation."""
+    sim_avg  = (sc_l["overall"]  + sc_i["overall"])  / 2
+    prod_avg = (pc_l["overall"]  + pc_i["overall"])  / 2
+    delta    = sim_avg - prod_avg
+
+    dims = ("operational_safety", "financial_benefit", "inventory_stability", "supply_risk")
+    _labels = {
+        "operational_safety":  "Operational Safety",
+        "financial_benefit":   "Financial Benefit",
+        "inventory_stability": "Inventory Stability",
+        "supply_risk":         "Supply Risk",
+    }
+    better = [d for d in dims if (sc_l[d] + sc_i[d]) > (pc_l[d] + pc_i[d]) + 5]
+    worse  = [d for d in dims if (sc_l[d] + sc_i[d]) < (pc_l[d] + pc_i[d]) - 5]
+
+    if delta >= 8:
+        verdict = "YES"
+        color   = "#059669"
+        explanation = (
+            f"This simulation improves the overall procurement strategy score by "
+            f"{delta:.0f} points ({prod_avg:.0f} → {sim_avg:.0f}). "
+        )
+        if better:
+            explanation += (
+                f"It outperforms production on: "
+                f"{', '.join(_labels[d] for d in better)}. "
+            )
+        if worse:
+            explanation += (
+                f"Trade-off accepted — lower scores on: "
+                f"{', '.join(_labels[d] for d in worse)}. "
+            )
+        explanation += "Management should consider adopting these parameters in the next cycle."
+    elif delta <= -8:
+        verdict = "NO"
+        color   = "#dc2626"
+        explanation = (
+            f"This simulation reduces the overall strategy score by "
+            f"{abs(delta):.0f} points ({prod_avg:.0f} → {sim_avg:.0f}). "
+        )
+        if worse:
+            explanation += (
+                f"Underperforms production on: "
+                f"{', '.join(_labels[d] for d in worse)}. "
+            )
+        explanation += "The production recommendation remains the stronger strategy."
+    else:
+        verdict = "PARTIALLY"
+        color   = "#b45309"
+        explanation = (
+            f"The simulation produces a comparable outcome (score delta: {delta:+.0f} pts). "
+        )
+        if better:
+            explanation += (
+                f"Elements worth adopting: improvements in "
+                f"{', '.join(_labels[d] for d in better)}. "
+            )
+        if worse:
+            explanation += (
+                f"Elements to avoid: weaker performance on "
+                f"{', '.join(_labels[d] for d in worse)}. "
+            )
+        explanation += "Selective adoption of specific parameters may capture the upside without the downside."
+
+    if risk_appetite == "Conservative" and verdict == "YES":
+        explanation += (
+            "  Note (Conservative appetite): verify Operational Safety score "
+            "before committing."
+        )
+    elif risk_appetite == "Aggressive" and verdict == "NO":
+        explanation += (
+            "  Note (Aggressive appetite): financial upside in this simulation "
+            "may still merit partial consideration."
+        )
+
+    return {
+        "verdict":  verdict,
+        "color":    color,
+        "explanation": explanation,
+        "sim_avg":  sim_avg,
+        "prod_avg": prod_avg,
+        "delta":    delta,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
+def _pse6b_render_comparison_table(prod_dec: dict, sim_dec: dict,
+                                   label: str) -> None:
+    """Side-by-side production vs simulation comparison for one source."""
+    p_fi  = prod_dec.get("expected_cost_impact", {})
+    s_fi  = sim_dec.get("expected_cost_impact", {})
+    p_amt = p_fi.get("cost_avoidance_usd") or p_fi.get("expected_savings_usd") or 0
+    s_amt = s_fi.get("cost_avoidance_usd") or s_fi.get("expected_savings_usd") or 0
+
+    rows = [
+        ("Action",
+         prod_dec.get("action", "—"),
+         sim_dec.get("action", "—")),
+        ("Urgency",
+         prod_dec.get("urgency", "—"),
+         sim_dec.get("urgency", "—")),
+        ("Confidence",
+         f"{prod_dec.get('confidence',{}).get('score',0)}/100"
+         f" {prod_dec.get('confidence',{}).get('label','')}",
+         f"{sim_dec.get('confidence',{}).get('score',0)}/100"
+         f" {sim_dec.get('confidence',{}).get('label','')}"),
+        ("Qty Now (t)",
+         f"{prod_dec.get('qty_now_tons',0):,.0f}",
+         f"{sim_dec.get('qty_now_tons',0):,.0f}"),
+        ("Deferred (t)",
+         f"{prod_dec.get('qty_later_tons',0):,.0f}",
+         f"{sim_dec.get('qty_later_tons',0):,.0f}"),
+        ("Order Date",
+         prod_dec.get("order_date") or "—",
+         sim_dec.get("order_date") or "—"),
+        ("Expected Arrival",
+         prod_dec.get("expected_arrival") or "—",
+         sim_dec.get("expected_arrival") or "—"),
+        ("Financial Impact",
+         p_fi.get("impact_type", "NONE"),
+         s_fi.get("impact_type", "NONE")),
+        ("Impact (USD)",
+         f"{p_amt:,.0f}" if p_amt else "—",
+         f"{s_amt:,.0f}" if s_amt else "—"),
+        ("Risk Level",
+         prod_dec.get("risk", {}).get("level", "—"),
+         sim_dec.get("risk", {}).get("level", "—")),
+    ]
+
+    tbl = (
+        f"<div style='font-size:0.72rem;font-weight:700;color:#1d4ed8;"
+        f"letter-spacing:0.6px;text-transform:uppercase;margin-bottom:6px;'>"
+        f"{label}</div>"
+        f"<table style='width:100%;border-collapse:collapse;font-size:0.75rem;'>"
+        f"<thead><tr>"
+        f"<th style='text-align:left;padding:5px 7px;background:#f8fafc;"
+        f"color:#64748b;font-weight:700;border-bottom:2px solid #e2e8f0;'>Metric</th>"
+        f"<th style='text-align:right;padding:5px 7px;background:#eff6ff;"
+        f"color:#1d4ed8;font-weight:700;border-bottom:2px solid #bfdbfe;'>Production</th>"
+        f"<th style='text-align:right;padding:5px 7px;background:#f0fdf4;"
+        f"color:#059669;font-weight:700;border-bottom:2px solid #86efac;'>Simulation</th>"
+        f"</tr></thead><tbody>"
+    )
+    for i, (metric, pval, sval) in enumerate(rows):
+        bg      = "#ffffff" if i % 2 == 0 else "#f8fafc"
+        changed = (pval != sval)
+        sstyle  = "font-weight:700;color:#059669;" if changed else "color:#374151;"
+        tbl += (
+            f"<tr style='background:{bg};'>"
+            f"<td style='padding:5px 7px;color:#374151;"
+            f"border-bottom:1px solid #f1f5f9;'>{metric}</td>"
+            f"<td style='padding:5px 7px;text-align:right;color:#374151;"
+            f"border-bottom:1px solid #f1f5f9;'>{pval}</td>"
+            f"<td style='padding:5px 7px;text-align:right;{sstyle}"
+            f"border-bottom:1px solid #f1f5f9;'>{sval}</td>"
+            f"</tr>"
+        )
+    tbl += "</tbody></table>"
+    st.markdown(tbl, unsafe_allow_html=True)
+
+
+def _pse6b_render_score_card(sc_l: dict, sc_i: dict,
+                              pc_l: dict, pc_i: dict,
+                              risk_appetite: str) -> None:
+    """5-dimension score card with overlaid production vs simulation bars."""
+    sim_avg  = int((sc_l["overall"]  + sc_i["overall"])  / 2)
+    prod_avg = int((pc_l["overall"]  + pc_i["overall"])  / 2)
+    delta    = sim_avg - prod_avg
+    dc       = "#059669" if delta >= 0 else "#dc2626"
+    ds       = "+" if delta >= 0 else ""
+
+    st.markdown(
+        f"<div style='display:flex;justify-content:space-between;"
+        f"align-items:center;margin-bottom:0.6rem;'>"
+        f"<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+        f"letter-spacing:0.8px;text-transform:uppercase;'>Scenario Score</div>"
+        f"<div style='display:flex;gap:10px;align-items:center;'>"
+        f"<span style='font-size:0.72rem;color:#64748b;'>Prod <b>{prod_avg}</b></span>"
+        f"<span style='font-size:0.72rem;color:{dc};font-weight:700;'>"
+        f"Sim <b>{sim_avg}</b> ({ds}{delta})</span>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    dim_defs = [
+        ("Operational Safety",   "operational_safety",   "Safety from procurement shortages"),
+        ("Financial Benefit",    "financial_benefit",    "Expected cost avoidance or savings"),
+        ("Inventory Stability",  "inventory_stability",  "Confidence in inventory position"),
+        ("Supply Risk",          "supply_risk",          "Overall supply chain risk level"),
+    ]
+    for lbl, key, desc in dim_defs:
+        sim_v  = int((sc_l[key] + sc_i[key]) / 2)
+        prod_v = int((pc_l[key] + pc_i[key]) / 2)
+        d_dim  = sim_v - prod_v
+        dc_dim = "#059669" if d_dim >= 0 else "#dc2626"
+        ds_dim = "+" if d_dim >= 0 else ""
+        bar_c  = "#059669" if sim_v >= prod_v else "#dc2626"
+        st.markdown(
+            f"<div style='margin-bottom:0.5rem;'>"
+            f"<div style='display:flex;justify-content:space-between;"
+            f"align-items:baseline;margin-bottom:3px;'>"
+            f"<span style='font-size:0.74rem;color:#374151;font-weight:600;'>{lbl}</span>"
+            f"<span style='font-size:0.68rem;color:{dc_dim};font-weight:700;'>"
+            f"Prod {prod_v} → Sim {sim_v} ({ds_dim}{d_dim})</span>"
+            f"</div>"
+            f"<div style='position:relative;height:8px;background:#e2e8f0;"
+            f"border-radius:4px;margin-bottom:2px;'>"
+            f"<div style='position:absolute;left:0;top:0;height:8px;"
+            f"width:{prod_v}%;background:#1d4ed8;border-radius:4px;opacity:0.35;'></div>"
+            f"<div style='position:absolute;left:0;top:0;height:8px;"
+            f"width:{sim_v}%;background:{bar_c};border-radius:4px;opacity:0.80;'></div>"
+            f"</div>"
+            f"<div style='font-size:0.63rem;color:#94a3b8;'>{desc}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        f"<div style='font-size:0.65rem;color:#94a3b8;margin-top:4px;'>"
+        f"Risk Appetite: <b>{risk_appetite}</b> — dimension weights adjusted accordingly.</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _pse6b_render_diff_analysis(diff_lines: list) -> None:
+    bullets = "".join(
+        f"<div style='display:flex;gap:8px;padding:6px 0;"
+        f"border-bottom:1px solid #f1f5f9;align-items:flex-start;'>"
+        f"<span style='color:#1d4ed8;font-size:0.8rem;flex-shrink:0;"
+        f"margin-top:1px;'>&#9654;</span>"
+        f"<span style='font-size:0.78rem;color:#374151;line-height:1.55;'>{l}</span>"
+        f"</div>"
+        for l in diff_lines
+    )
+    st.markdown(
+        f"<div style='background:#f8fafc;border-radius:8px;"
+        f"border:1px solid #e2e8f0;padding:0.85rem 1rem;'>{bullets}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _pse6b_render_adopt_card(adopt: dict) -> None:
+    vc   = adopt["color"]
+    vd   = adopt["verdict"]
+    v_bg = {"YES": "#f0fdf4", "NO": "#fef2f2", "PARTIALLY": "#fffbeb"}.get(vd, "#f8fafc")
+    v_bd = {"YES": "#86efac", "NO": "#fca5a5", "PARTIALLY": "#fde68a"}.get(vd, "#e2e8f0")
+    st.markdown(
+        f"<div style='background:{v_bg};border:1px solid {v_bd};"
+        f"border-left:5px solid {vc};border-radius:8px;padding:0.85rem 1.1rem;'>"
+        f"<div style='font-size:0.68rem;font-weight:700;color:#94a3b8;"
+        f"letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;'>"
+        f"Would I adopt this strategy?</div>"
+        f"<div style='font-size:1.05rem;font-weight:900;color:{vc};"
+        f"letter-spacing:-0.3px;margin-bottom:0.5rem;'>{vd}</div>"
+        f"<div style='font-size:0.78rem;color:#374151;line-height:1.6;'>"
+        f"{adopt['explanation']}</div>"
+        f"<div style='display:flex;gap:16px;margin-top:0.55rem;'>"
+        f"<span style='font-size:0.68rem;color:#64748b;'>"
+        f"Production score: <b>{adopt['prod_avg']:.0f}</b></span>"
+        f"<span style='font-size:0.68rem;color:{vc};font-weight:700;'>"
+        f"Simulation score: <b>{adopt['sim_avg']:.0f}</b></span>"
+        f"<span style='font-size:0.68rem;color:{vc};font-weight:700;'>"
+        f"Delta: {adopt['delta']:+.0f} pts</span>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _pse6b_render_saved_scenarios() -> None:
+    saved = st.session_state.get("pse6b_saved", [])
+    if not saved:
+        st.caption(
+            "No saved simulations yet.  "
+            "Run a simulation and click **Save** to store it here."
+        )
+        return
+
+    for i, s in enumerate(reversed(saved)):
+        real_i = len(saved) - 1 - i
+        with st.expander(
+            f"{s['name']}  ·  {s['created']}  ·  Score {s['score']}/100  ·  {s['verdict']}",
+            expanded=False,
+        ):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Parameters**")
+                for k, v in s.get("params", {}).items():
+                    st.markdown(f"- {k.replace('_',' ').title()}: **{v}**")
+            with col2:
+                st.markdown("**Outcome**")
+                o = s.get("outcome", {})
+                st.markdown(
+                    f"- LOCAL: **{o.get('local_action','—')}** "
+                    f"{o.get('local_qty_now',0):,.0f} t now"
+                )
+                st.markdown(
+                    f"- IMPORTED: **{o.get('imported_action','—')}** "
+                    f"{o.get('imported_qty_now',0):,.0f} t now"
+                )
+                st.markdown(f"- Portfolio Urgency: **{o.get('portfolio_urgency','—')}**")
+            st.markdown(
+                f"*{s['verdict']}* — {s['explanation'][:180]}…"
+            )
+            if st.button("Delete this scenario", key=f"pse6b_del_{real_i}"):
+                st.session_state["pse6b_saved"].pop(real_i)
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Master entry point
+# ---------------------------------------------------------------------------
+
+def render_pse6b_whatif_panel() -> None:
+    """
+    PSE-6B — Executive What-If Simulation Laboratory.
+
+    Allows management to test procurement scenarios without changing production
+    calculations.  Production recommendation is never overwritten.
+
+    Flow:
+      1. Load production baseline from cached workbook run (PSE-5B)
+      2. Render parameter controls in a form
+      3. On submit: run simulation via existing engine functions with overrides
+      4. Display: comparison table, scenario score, diff analysis, adopt verdict
+      5. Optionally save simulation to session state
+    """
+    import datetime as _dt
+
+    workbook = str(_PSE6A_WORKBOOK) if _PSE6A_WORKBOOK.exists() else None
+    if not workbook:
+        st.info(
+            "Inventory workbook not found. "
+            "Expected: `data/strategy/Strategies.xlsx`"
+        )
+        return
+
+    today_str = _dt.date.today().isoformat()
+
+    with st.spinner("Loading production baseline…"):
+        prod_so = _pse6b_get_prod_so(workbook, today_str)
+
+    if not prod_so.get("ok"):
+        st.error(
+            f"**Could not load production data.**\n\n"
+            f"```\n{prod_so.get('error','Unknown error')}\n```"
+        )
+        return
+
+    with st.spinner("Loading production decisions…"):
+        prod_pse6a = _run_pse5b_cached(workbook, today_str)
+
+    if not prod_pse6a.get("ok"):
+        st.error(
+            f"**Could not load production decisions.**\n\n"
+            f"```\n{prod_pse6a.get('error','Unknown error')}\n```"
+        )
+        return
+
+    prod_er        = prod_pse6a["report"]
+    prod_local_dec = prod_er.get("local",    {})
+    prod_imp_dec   = prod_er.get("imported", {})
+
+    # ── Parameter Controls ────────────────────────────────────────────────────
+    st.markdown(
+        "<div style='background:#1e293b;border-radius:10px;"
+        "padding:0.75rem 1.2rem;margin-bottom:1rem;'>"
+        "<div style='color:#f1f5f9;font-size:0.72rem;font-weight:700;"
+        "letter-spacing:1px;text-transform:uppercase;'>"
+        "What-If Simulation Parameters</div>"
+        "<div style='color:#94a3b8;font-size:0.7rem;margin-top:2px;'>"
+        "Adjust parameters and click <b style='color:#e2e8f0;'>Run Simulation</b>. "
+        "Production recommendation is not affected.</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    prod_local_inv = float(prod_so["local_inventory_tons"])
+    prod_imp_inv   = float(prod_so["imported_inventory_tons"])
+
+    with st.form("pse6b_sim_form"):
+
+        st.markdown("**Market Prices**")
+        pc1, pc2, pc3, pc4 = st.columns(4)
+        with pc1:
+            current_price = st.number_input(
+                "Current Price (USD/lb)",
+                min_value=0.30, max_value=2.00, value=0.78, step=0.01, format="%.3f",
+            )
+        with pc2:
+            forecast_h1 = st.number_input(
+                "Forecast H1 (USD/lb)",
+                min_value=0.30, max_value=2.00, value=0.78, step=0.01, format="%.3f",
+                help="1-month forecast used for local cotton signal",
+            )
+        with pc3:
+            forecast_h3 = st.number_input(
+                "Forecast H3 (USD/lb)",
+                min_value=0.30, max_value=2.00, value=0.78, step=0.01, format="%.3f",
+                help="3-month forecast used for imported cotton signal",
+            )
+        with pc4:
+            pkr_rate = st.number_input(
+                "PKR/USD Rate",
+                min_value=100.0, max_value=500.0, value=281.0, step=1.0, format="%.1f",
+            )
+
+        st.markdown("**Inventory Position**")
+        ic1, ic2 = st.columns(2)
+        with ic1:
+            local_inv = st.number_input(
+                "Local Inventory (t)",
+                min_value=0.0, max_value=50_000.0,
+                value=prod_local_inv, step=100.0,
+                help=f"Live production value: {prod_local_inv:,.0f} t",
+            )
+        with ic2:
+            imp_inv = st.number_input(
+                "Imported Inventory (t)",
+                min_value=0.0, max_value=50_000.0,
+                value=prod_imp_inv, step=100.0,
+                help=f"Live production value: {prod_imp_inv:,.0f} t",
+            )
+
+        st.markdown("**Operational Parameters**")
+        oc1, oc2, oc3, oc4, oc5 = st.columns(5)
+        with oc1:
+            total_consumption = st.number_input(
+                "Daily Consumption (t/day)",
+                min_value=50.0, max_value=250.0, value=110.0, step=1.0,
+            )
+        with oc2:
+            local_mix_pct = st.slider(
+                "Local Mix (%)", min_value=20, max_value=80, value=45, step=1,
+            )
+        with oc3:
+            local_lead_time = st.number_input(
+                "Local Lead Time (days)",
+                min_value=1, max_value=90, value=10, step=1,
+            )
+        with oc4:
+            imported_lead_time = st.number_input(
+                "Imported Lead Time (days)",
+                min_value=14, max_value=270, value=90, step=7,
+            )
+        with oc5:
+            max_storage = st.number_input(
+                "Max Storage (t)",
+                min_value=0.0, max_value=100_000.0, value=0.0, step=500.0,
+                help="0 = no storage constraint",
+            )
+
+        st.markdown("**Risk Appetite**")
+        risk_appetite = st.radio(
+            "Risk Appetite",
+            ["Conservative", "Balanced", "Aggressive"],
+            index=1,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+        scenario_name = st.text_input(
+            "Scenario Name (for saving)", value="Scenario A", max_chars=60,
+        )
+
+        btn1, btn2, _ = st.columns([2, 1, 3])
+        with btn1:
+            submitted = st.form_submit_button(
+                "Run Simulation", type="primary", use_container_width=True,
+            )
+        with btn2:
+            save_requested = st.form_submit_button(
+                "Save", use_container_width=True,
+            )
+
+    # ── Execute simulation ────────────────────────────────────────────────────
+    if submitted or save_requested:
+        sim_params = {
+            "current_price":      current_price,
+            "forecast_h1":        forecast_h1,
+            "forecast_h3":        forecast_h3,
+            "pkr_rate":           pkr_rate,
+            "local_inventory":    local_inv,
+            "imported_inventory": imp_inv,
+            "total_consumption":  total_consumption,
+            "local_mix_pct":      float(local_mix_pct),
+            "local_lead_time":    int(local_lead_time),
+            "imported_lead_time": int(imported_lead_time),
+            "max_storage":        float(max_storage) if max_storage > 0 else None,
+            "risk_appetite":      risk_appetite,
+        }
+        with st.spinner("Running simulation…"):
+            sim_result = _pse6b_run_simulation(prod_so, sim_params, today_str)
+
+        if not sim_result.get("ok"):
+            st.error(
+                f"**Simulation error.**\n\n"
+                f"```\n{sim_result.get('error','Unknown error')}\n```"
+            )
+        else:
+            st.session_state["pse6b_sim_result"] = sim_result
+            st.session_state["pse6b_sim_params"]  = sim_params
+
+            if save_requested:
+                if "pse6b_saved" not in st.session_state:
+                    st.session_state["pse6b_saved"] = []
+                sim_er  = sim_result["exec_report"]
+                sim_l   = sim_er.get("local",    {})
+                sim_i   = sim_er.get("imported",  {})
+                sc_l    = _pse6b_score(sim_l, risk_appetite)
+                sc_i    = _pse6b_score(sim_i, risk_appetite)
+                pc_l    = _pse6b_score(prod_local_dec, risk_appetite)
+                pc_i    = _pse6b_score(prod_imp_dec,   risk_appetite)
+                adopt   = _pse6b_adopt(sc_l, sc_i, pc_l, pc_i, risk_appetite)
+                avg_sc  = int((sc_l["overall"] + sc_i["overall"]) / 2)
+                st.session_state["pse6b_saved"].append({
+                    "name":        scenario_name,
+                    "created":     today_str,
+                    "score":       avg_sc,
+                    "verdict":     adopt["verdict"],
+                    "explanation": adopt["explanation"],
+                    "params": {
+                        k: v for k, v in sim_params.items()
+                        if k not in ("local_inventory", "imported_inventory")
+                    },
+                    "outcome": {
+                        "local_action":      sim_l.get("action", "—"),
+                        "local_qty_now":     sim_l.get("qty_now_tons", 0),
+                        "imported_action":   sim_i.get("action", "—"),
+                        "imported_qty_now":  sim_i.get("qty_now_tons", 0),
+                        "portfolio_urgency": sim_er.get("portfolio_urgency", "—"),
+                    },
+                })
+                st.success(f"Simulation '{scenario_name}' saved.")
+
+    # ── Display results ───────────────────────────────────────────────────────
+    sim_result_state = st.session_state.get("pse6b_sim_result")
+    sim_params_state = st.session_state.get("pse6b_sim_params", {})
+
+    if sim_result_state and sim_result_state.get("ok"):
+        sim_er  = sim_result_state["exec_report"]
+        sim_l   = sim_er.get("local",    {})
+        sim_i   = sim_er.get("imported", {})
+        rap     = sim_params_state.get("risk_appetite", "Balanced")
+
+        sc_l  = _pse6b_score(sim_l,           rap)
+        sc_i  = _pse6b_score(sim_i,           rap)
+        pc_l  = _pse6b_score(prod_local_dec,  rap)
+        pc_i  = _pse6b_score(prod_imp_dec,    rap)
+        adopt = _pse6b_adopt(sc_l, sc_i, pc_l, pc_i, rap)
+
+        # Comparison tables
+        st.markdown(
+            "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+            "letter-spacing:0.8px;text-transform:uppercase;"
+            "margin:1rem 0 0.4rem 0;'>Production vs Simulation</div>",
+            unsafe_allow_html=True,
+        )
+        cmp1, cmp2 = st.columns(2, gap="medium")
+        with cmp1:
+            _pse6b_render_comparison_table(prod_local_dec, sim_l, "LOCAL COTTON")
+        with cmp2:
+            _pse6b_render_comparison_table(prod_imp_dec, sim_i, "IMPORTED COTTON")
+
+        st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
+
+        # Score + Adopt
+        score_col, adopt_col = st.columns([1, 1], gap="medium")
+        with score_col:
+            _pse6b_render_score_card(sc_l, sc_i, pc_l, pc_i, rap)
+        with adopt_col:
+            _pse6b_render_adopt_card(adopt)
+
+        # Diff analysis
+        st.markdown(
+            "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+            "letter-spacing:0.8px;text-transform:uppercase;"
+            "margin:0.8rem 0 0.4rem 0;'>Executive Difference Summary</div>",
+            unsafe_allow_html=True,
+        )
+        _pse6b_render_diff_analysis(_pse6b_diff_lines(sim_params_state, prod_so))
+
+    else:
+        st.info(
+            "Configure parameters above and click **Run Simulation** "
+            "to generate a what-if analysis."
+        )
+
+    # Saved scenarios
+    st.markdown(
+        "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+        "letter-spacing:0.8px;text-transform:uppercase;"
+        "margin:1.2rem 0 0.4rem 0;'>Saved Simulations</div>",
+        unsafe_allow_html=True,
+    )
+    _pse6b_render_saved_scenarios()
+
+    st.caption(
+        f"PSE-6B What-If Lab  ·  Production data: {_PSE6A_WORKBOOK.name}  ·  {today_str}  ·  "
+        f"Engine: PSE-5A/5B (simulation mode — production values unchanged)"
+    )
+
+
+# ===========================================================================
+# PSE-7A  EXECUTIVE MONITORING & EARLY WARNING SYSTEM
+# ===========================================================================
+# Consumes PSE-5A (ScenarioReport) and PSE-5B (ExecutiveReport) outputs.
+# Generates proactive alerts and an executive watchlist.
+# No procurement calculations are performed here.
+# ===========================================================================
+
+_SEV_COLORS = {
+    "CRITICAL": ("#dc2626", "#fef2f2", "#fca5a5"),
+    "HIGH":     ("#b45309", "#fffbeb", "#fde68a"),
+    "WARNING":  ("#7c3aed", "#f5f3ff", "#ddd6fe"),
+    "NOTICE":   ("#1d4ed8", "#eff6ff", "#bfdbfe"),
+    "INFO":     ("#059669", "#f0fdf4", "#86efac"),
+}
+
+_CAT_ICON = {
+    "INVENTORY":   "&#9679;",
+    "PRICE":       "&#9650;",
+    "TIMING":      "&#9719;",
+    "OPPORTUNITY": "&#9733;",
+    "RISK":        "&#9888;",
+    "SYSTEM":      "&#9881;",
+}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _run_pse7a_cached(
+    workbook_path: str,
+    today_str: str,
+    best_sim_score: Optional[int] = None,
+    prod_score: Optional[int] = None,
+) -> dict:
+    """Run PSE-7A monitoring pipeline.  Cached 15 min (fresher than PSE-6A).
+
+    All upstream data (executive report, scenario report, inventory) is read
+    from _run_pse5b_cached() — no additional workbook read occurs here.
+    """
+    try:
+        from datetime import date as _date
+        from procurement_monitoring_engine import generate_monitoring_report
+
+        # All data comes from the shared 30-min cache — zero additional I/O
+        prod_result = _run_pse5b_cached(workbook_path, today_str)
+
+        if not prod_result.get("ok"):
+            return {"ok": False, "error": prod_result.get("error")}
+
+        today = _date.fromisoformat(today_str)
+        inv   = prod_result["inventory"]
+
+        report = generate_monitoring_report(
+            exec_report_dict=prod_result["report"],
+            scenario_report_dict=prod_result["scenario"],
+            local_inventory_tons=inv["local_inventory_tons"],
+            imported_inventory_tons=inv["imported_inventory_tons"],
+            total_inventory_tons=inv["total_inventory_tons"],
+            today=today,
+            best_sim_score=best_sim_score,
+            prod_score=prod_score,
+        )
+        return {"ok": True, "report": report.to_dict()}
+    except Exception as exc:
+        import traceback
+        return {"ok": False, "error": str(exc) + "\n" + traceback.format_exc()}
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
+def _sev_badge(severity: str) -> str:
+    tc, bg, bd = _SEV_COLORS.get(severity, ("#475569", "#f1f5f9", "#e2e8f0"))
+    return (
+        f"<span style='display:inline-block;padding:2px 10px;"
+        f"border-radius:12px;font-size:0.7rem;font-weight:700;"
+        f"letter-spacing:0.4px;color:{tc};background:{bg};"
+        f"border:1.5px solid {bd};'>{severity}</span>"
+    )
+
+
+def _pse7a_render_severity_strip(count_by_sev: dict, highest: str) -> None:
+    """Horizontal severity count strip at top of panel."""
+    cells = ""
+    for sev in ("CRITICAL", "HIGH", "WARNING", "NOTICE", "INFO"):
+        cnt = count_by_sev.get(sev, 0)
+        tc, bg, bd = _SEV_COLORS.get(sev, ("#475569", "#f1f5f9", "#e2e8f0"))
+        opacity = "1.0" if cnt > 0 else "0.35"
+        cells += (
+            f"<div style='background:{bg};border:1.5px solid {bd};"
+            f"border-radius:8px;padding:6px 12px;text-align:center;"
+            f"opacity:{opacity};min-width:70px;'>"
+            f"<div style='font-size:1.1rem;font-weight:900;color:{tc};'>{cnt}</div>"
+            f"<div style='font-size:0.62rem;font-weight:700;color:{tc};"
+            f"letter-spacing:0.5px;'>{sev}</div>"
+            f"</div>"
+        )
+    st.markdown(
+        f"<div style='display:flex;gap:8px;align-items:stretch;"
+        f"margin-bottom:1rem;flex-wrap:wrap;'>{cells}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _pse7a_render_alerts(alerts: list) -> None:
+    if not alerts:
+        st.success("No active alerts.  All monitoring checks are within normal thresholds.")
+        return
+
+    for a in alerts:
+        tc, bg, bd = _SEV_COLORS.get(a["severity"], ("#475569", "#f1f5f9", "#e2e8f0"))
+        with st.expander(
+            f"{a['severity']}  ·  {a['title']}  [{a['source']}]",
+            expanded=(a["severity"] in ("CRITICAL", "HIGH")),
+        ):
+            st.markdown(
+                f"<div style='background:{bg};border:1px solid {bd};"
+                f"border-left:4px solid {tc};border-radius:8px;"
+                f"padding:0.75rem 1rem;'>"
+
+                f"<div style='display:flex;justify-content:space-between;"
+                f"align-items:center;margin-bottom:0.6rem;'>"
+                f"{_sev_badge(a['severity'])}"
+                f"<span style='font-size:0.68rem;color:#94a3b8;'>"
+                f"Alert ID: {a['alert_id']}  ·  {a['triggered_at']}</span>"
+                f"</div>"
+
+                f"<div style='display:grid;grid-template-columns:1fr 1fr 1fr;"
+                f"gap:10px;margin-bottom:0.6rem;'>"
+
+                f"<div style='background:#ffffff;border-radius:6px;padding:8px 10px;"
+                f"border:1px solid {bd};'>"
+                f"<div style='font-size:0.63rem;color:#94a3b8;font-weight:700;"
+                f"letter-spacing:0.5px;margin-bottom:3px;'>REASON</div>"
+                f"<div style='font-size:0.74rem;color:#374151;line-height:1.5;'>"
+                f"{a['reason']}</div></div>"
+
+                f"<div style='background:#ffffff;border-radius:6px;padding:8px 10px;"
+                f"border:1px solid {bd};'>"
+                f"<div style='font-size:0.63rem;color:#94a3b8;font-weight:700;"
+                f"letter-spacing:0.5px;margin-bottom:3px;'>BUSINESS IMPACT</div>"
+                f"<div style='font-size:0.74rem;color:#374151;line-height:1.5;'>"
+                f"{a['business_impact']}</div></div>"
+
+                f"<div style='background:#ffffff;border-radius:6px;padding:8px 10px;"
+                f"border:1px solid {bd};'>"
+                f"<div style='font-size:0.63rem;color:#94a3b8;font-weight:700;"
+                f"letter-spacing:0.5px;margin-bottom:3px;'>RECOMMENDED ACTION</div>"
+                f"<div style='font-size:0.74rem;color:{tc};font-weight:600;line-height:1.5;'>"
+                f"{a['recommended_action']}</div></div>"
+                f"</div>"
+
+                f"<div style='display:flex;gap:16px;'>"
+                f"<span style='font-size:0.68rem;color:#64748b;'>"
+                f"Expected urgency: <b>{a['expected_urgency']}</b></span>"
+                + (f"<span style='font-size:0.68rem;color:#64748b;'>"
+                   f"Metric: <b>{a['metric_value']:,.1f}</b></span>"
+                   if a.get("metric_value") is not None else "")
+                + (f"<span style='font-size:0.68rem;color:#64748b;'>"
+                   f"Threshold: <b>{a['threshold_value']:,.1f}</b></span>"
+                   if a.get("threshold_value") is not None else "")
+                + f"</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+
+def _pse7a_render_watchlist(watchlist: list) -> None:
+    if not watchlist:
+        st.caption("Watchlist is clear — nothing requires immediate attention.")
+        return
+
+    for w in watchlist:
+        tc, bg, bd = _SEV_COLORS.get(w["severity"], ("#475569", "#f1f5f9", "#e2e8f0"))
+        icon = _CAT_ICON.get(w["category"], "&#9679;")
+        days_s = (
+            f"<span style='font-size:0.68rem;font-weight:700;color:{tc};"
+            f"background:{bg};border:1px solid {bd};border-radius:8px;"
+            f"padding:1px 7px;margin-left:6px;'>"
+            f"in {w['days_until_event']}d</span>"
+            if w.get("days_until_event") is not None else ""
+        )
+        st.markdown(
+            f"<div style='display:flex;gap:8px;padding:7px 0;"
+            f"border-bottom:1px solid #f1f5f9;align-items:flex-start;'>"
+            f"<span style='color:{tc};font-size:0.85rem;flex-shrink:0;"
+            f"margin-top:1px;'>{icon}</span>"
+            f"<div>"
+            f"<div style='font-size:0.78rem;color:#0f172a;font-weight:600;'>"
+            f"{w['headline']}{days_s}</div>"
+            f"<div style='font-size:0.7rem;color:#64748b;margin-top:1px;'>"
+            f"{w['detail']}</div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _pse7a_render_upcoming_events(events: list) -> None:
+    if not events:
+        st.caption("No upcoming procurement events.")
+        return
+
+    for ev in events:
+        urg  = ev.get("urgency", "LOW")
+        tc   = _U_COLOR.get(urg, ("#475569", "#f1f5f9", "#e2e8f0"))[0]
+        days = ev.get("days_from_now", 0)
+        days_s = "today" if days <= 0 else f"in {days} days"
+        arr_s  = (f"  ·  Arrival: {ev['arrival_date']}"
+                  if ev.get("arrival_date") else "")
+        st.markdown(
+            f"<div style='display:flex;justify-content:space-between;"
+            f"align-items:center;padding:7px 10px;"
+            f"background:#f8fafc;border-radius:7px;margin-bottom:6px;"
+            f"border-left:3px solid {tc};'>"
+            f"<div>"
+            f"<div style='font-size:0.78rem;font-weight:700;color:#0f172a;'>"
+            f"{ev.get('description','')}</div>"
+            f"<div style='font-size:0.68rem;color:#64748b;margin-top:1px;'>"
+            f"Source: {ev.get('source','')}  ·  {ev.get('quantity_tons',0):,.0f} t"
+            f"{arr_s}</div>"
+            f"</div>"
+            f"<div style='text-align:right;'>"
+            f"<div style='font-size:0.78rem;font-weight:700;color:{tc};'>{days_s}</div>"
+            f"<div style='font-size:0.65rem;color:#94a3b8;'>{urg}</div>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _pse7a_render_risk_events(risk_events: list) -> None:
+    if not risk_events:
+        st.caption("No high or critical risk events.")
+        return
+
+    for re in risk_events:
+        rl = re.get("risk_level", "INFO")
+        tc, bg, bd = _SEV_COLORS.get(rl, ("#475569", "#f1f5f9", "#e2e8f0"))
+        st.markdown(
+            f"<div style='background:{bg};border:1px solid {bd};"
+            f"border-left:4px solid {tc};border-radius:7px;"
+            f"padding:8px 12px;margin-bottom:6px;'>"
+            f"<div style='display:flex;justify-content:space-between;"
+            f"align-items:center;margin-bottom:3px;'>"
+            f"<span style='font-size:0.78rem;font-weight:700;color:{tc};'>"
+            f"{re.get('headline','')}</span>"
+            f"{_sev_badge(rl)}"
+            f"</div>"
+            f"<div style='font-size:0.72rem;color:#374151;'>{re.get('detail','')}</div>"
+            f"<div style='font-size:0.68rem;color:#94a3b8;margin-top:3px;'>"
+            f"If ignored: {re.get('if_ignored','')}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _pse7a_render_savings(savings_opps: list) -> None:
+    if not savings_opps:
+        st.caption("No significant savings opportunities currently identified.")
+        return
+
+    for op in savings_opps:
+        amt = op.get("amount_usd") or 0
+        amt_s = f"USD {amt:,.0f}" if amt else "—"
+        tc, bg, bd = _SEV_COLORS.get("NOTICE", ("#1d4ed8", "#eff6ff", "#bfdbfe"))
+        opp_type_color = (
+            "#059669" if op.get("type") == "PRICE_DEFERRAL" else "#1d4ed8"
+        )
+        st.markdown(
+            f"<div style='background:{bg};border:1px solid {bd};"
+            f"border-left:4px solid {opp_type_color};border-radius:7px;"
+            f"padding:8px 12px;margin-bottom:6px;'>"
+            f"<div style='display:flex;justify-content:space-between;"
+            f"align-items:center;margin-bottom:3px;'>"
+            f"<span style='font-size:0.78rem;font-weight:700;"
+            f"color:#0f172a;'>{op.get('headline','')}</span>"
+            f"<span style='font-size:0.88rem;font-weight:900;"
+            f"color:{opp_type_color};'>{amt_s}</span>"
+            f"</div>"
+            f"<div style='font-size:0.72rem;color:#374151;'>{op.get('detail','')}</div>"
+            f"<div style='font-size:0.68rem;color:{opp_type_color};"
+            f"font-weight:600;margin-top:4px;'>&#10003; {op.get('action','')}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Master entry point
+# ---------------------------------------------------------------------------
+
+def render_pse7a_monitoring_panel() -> None:
+    """
+    PSE-7A — Executive Monitoring & Early Warning System.
+
+    Consumes PSE-5A/5B outputs (cached) and generates:
+      1. Alert severity summary strip
+      2. Current alerts (sorted by severity, expandable)
+      3. Executive watchlist
+      4. Upcoming procurement events
+      5. Upcoming risk events
+      6. Savings opportunities
+    """
+    import datetime as _dt
+
+    workbook = str(_PSE6A_WORKBOOK) if _PSE6A_WORKBOOK.exists() else None
+    if not workbook:
+        st.info(
+            "Inventory workbook not found. "
+            "Expected: `data/strategy/Strategies.xlsx`"
+        )
+        return
+
+    today_str = _dt.date.today().isoformat()
+
+    # Best saved simulation score from session state (optional)
+    best_sim  = None
+    prod_scr  = None
+    saved_sims = st.session_state.get("pse6b_saved", [])
+    if saved_sims:
+        best_sim = max(s["score"] for s in saved_sims)
+        # Compute a rough production score from PSE-6A report
+        prod_er = (_run_pse5b_cached(workbook, today_str) or {}).get("report", {})
+        if prod_er:
+            pc_l = _pse6b_score(prod_er.get("local", {}),    "Balanced")
+            pc_i = _pse6b_score(prod_er.get("imported", {}), "Balanced")
+            prod_scr = int((pc_l["overall"] + pc_i["overall"]) / 2)
+
+    with st.spinner("Running monitoring checks…"):
+        result = _run_pse7a_cached(
+            workbook, today_str,
+            best_sim_score=best_sim,
+            prod_score=prod_scr,
+        )
+
+    if not result.get("ok"):
+        st.error(
+            f"**Monitoring engine error.**\n\n"
+            f"```\n{result.get('error','Unknown error')}\n```"
+        )
+        return
+
+    rpt      = result["report"]
+    alerts   = rpt.get("alerts", [])
+    watchlist = rpt.get("watchlist", [])
+    events   = rpt.get("upcoming_procurement_events", [])
+    risks    = rpt.get("upcoming_risk_events", [])
+    savings  = rpt.get("upcoming_savings_opportunities", [])
+    summary  = rpt.get("summary", "")
+    highest  = rpt.get("highest_severity", "INFO")
+    counts   = rpt.get("alert_count_by_severity", {})
+
+    # ── Portfolio status banner ───────────────────────────────────────────────
+    tc, bg, bd = _SEV_COLORS.get(highest, ("#475569", "#f1f5f9", "#e2e8f0"))
+    st.markdown(
+        f"<div style='background:{bg};border:1px solid {bd};"
+        f"border-left:5px solid {tc};border-radius:10px;"
+        f"padding:0.75rem 1.2rem;margin-bottom:0.75rem;'>"
+        f"<div style='font-size:0.68rem;font-weight:700;color:{tc};"
+        f"letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;'>"
+        f"Monitoring Status: {highest}</div>"
+        f"<div style='font-size:0.82rem;color:#374151;line-height:1.55;'>"
+        f"{summary}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Severity summary strip ────────────────────────────────────────────────
+    _pse7a_render_severity_strip(counts, highest)
+
+    # ── Active alerts ─────────────────────────────────────────────────────────
+    st.markdown(
+        "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+        "letter-spacing:0.8px;text-transform:uppercase;"
+        "margin:0 0 0.4rem 0;'>Current Alerts</div>",
+        unsafe_allow_html=True,
+    )
+    _pse7a_render_alerts(alerts)
+
+    # ── Watchlist + Events (two columns) ─────────────────────────────────────
+    st.markdown(
+        "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+        "letter-spacing:0.8px;text-transform:uppercase;"
+        "margin:1rem 0 0.4rem 0;'>Executive Watchlist</div>",
+        unsafe_allow_html=True,
+    )
+    _pse7a_render_watchlist(watchlist)
+
+    col_ev, col_ri = st.columns(2, gap="medium")
+    with col_ev:
+        st.markdown(
+            "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+            "letter-spacing:0.8px;text-transform:uppercase;"
+            "margin:1rem 0 0.4rem 0;'>Upcoming Procurement Events</div>",
+            unsafe_allow_html=True,
+        )
+        _pse7a_render_upcoming_events(events)
+
+    with col_ri:
+        st.markdown(
+            "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+            "letter-spacing:0.8px;text-transform:uppercase;"
+            "margin:1rem 0 0.4rem 0;'>Upcoming Risk Events</div>",
+            unsafe_allow_html=True,
+        )
+        _pse7a_render_risk_events(risks)
+
+    # ── Savings opportunities ─────────────────────────────────────────────────
+    st.markdown(
+        "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
+        "letter-spacing:0.8px;text-transform:uppercase;"
+        "margin:1rem 0 0.4rem 0;'>Savings Opportunities</div>",
+        unsafe_allow_html=True,
+    )
+    _pse7a_render_savings(savings)
+
+    st.caption(
+        f"PSE-7A Monitoring  ·  {rpt.get('run_date',today_str)}  ·  "
+        f"{len(alerts)} alert(s) active  ·  Cache TTL: 15 min"
+    )

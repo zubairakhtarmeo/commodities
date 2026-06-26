@@ -2045,20 +2045,20 @@ st.markdown("""
         --c-text:       #0f172a;
         --c-subtext:    #64748b;
         --c-muted:      #94a3b8;
-        --c-border:     #e2e8f0;
-        --c-bg:         #f8fafc;
-        --c-surface:    #ffffff;
+        --c-border:     #dbe2ea;
+        --c-bg:         #f6f8fb;
+        --c-surface:    #fbfcfe;
 
         --radius-sm: 6px;
         --radius-md: 10px;
         --radius-lg: 12px;
-        --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
-        --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        --shadow-sm: 0 1px 2px rgba(15,23,42,0.035);
+        --shadow-md: 0 6px 18px rgba(15,23,42,0.055);
     }
 
     /* ── Base Layout ──────────────────────────── */
     [data-testid="stAppViewContainer"] {
-        background: #f8fafc;
+        background: #f6f8fb;
         padding-top: 0 !important;
     }
 
@@ -2135,12 +2135,12 @@ st.markdown("""
        lighter border, responsive value font size.
     ============================================ */
     .metric-card {
-        background: #ffffff;
-        border-radius: var(--radius-md);
+        background: #fbfcfe;
+        border-radius: var(--radius-sm);
         padding: 0.875rem 1.125rem;
-        border: 1px solid var(--c-border);
+        border: 1px solid #dbe2ea;
         margin-bottom: 0.625rem;
-        box-shadow: var(--shadow-sm);
+        box-shadow: none;
         transition: box-shadow 0.15s ease;
         min-height: 88px;
         display: flex;
@@ -2149,7 +2149,7 @@ st.markdown("""
     }
 
     .metric-card:hover {
-        box-shadow: var(--shadow-md);
+        box-shadow: 0 2px 8px rgba(15,23,42,0.045);
         /* No translateY — enterprise cards do not levitate */
     }
 
@@ -2180,13 +2180,29 @@ st.markdown("""
         line-height: 1.45;
     }
 
+    .metric-card,
+    .exec-kpi,
+    [data-testid="stDataFrame"] {
+        border-color: #dbe2ea !important;
+    }
+
+    .metric-card,
+    .exec-kpi {
+        background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+    }
+
+    .metric-card:hover,
+    .exec-kpi:hover {
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.045);
+    }
+
     /* Compact executive KPI — alias for metric-card in tighter layouts */
     .exec-kpi {
-        background: #ffffff;
+        background: #fbfcfe;
         border-radius: var(--radius-sm);
         padding: 0.75rem 1rem;
-        border: 1px solid var(--c-border);
-        box-shadow: var(--shadow-sm);
+        border: 1px solid #dbe2ea;
+        box-shadow: none;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
@@ -2368,273 +2384,296 @@ st.markdown("""
     }
     
     .stTabs [data-baseweb="tab-panel"] {
-        padding-top: 1.5rem;
-        border-top: 2px solid #e2e8f0;
+        padding-top: 1.25rem;
+        border-top: 1px solid #dbe2ea;
     }
     
     /* ============================================
-       SIDEBAR — UX-3D.3B  Premium Executive Dark
-       Palette: Bloomberg · FactSet · Refinitiv
-       Concept B — warm financial navy, not dev-tool dark
+       SIDEBAR - UX-3H Executive Visual Refinement
     ============================================ */
-
-    /* ─────────────────────────────────────────────
-       PALETTE REFERENCE
-       Background:      #111e2d  warm deep navy
-       Brand divider:   #1a2d40  subtle internal line
-       Group labels:    #4d7a9a  readable warm muted blue
-       Nav inactive:    #5d8aaa  warm muted — legible, quiet
-       Nav hover:       #8ab4cc  brighter, directional
-       Nav active text: #e8f2fa  near-white, warm blue cast
-       Nav active line: #5cacd4  professional sky (Refinitiv-family)
-       Nav active bg:   transparent  — NO fill, per directive
-       Sidebar border:  #e2e8f0  matches content card borders
-    ───────────────────────────────────────────── */
-
-    /* ── Base ─────────────────────────────────────
-       Background: #111e2d
-       Not #0f172a (cold developer black).
-       The RGB difference: R+2, G+7, B+3 creates a
-       warm blue-navy cast that reads as financial
-       analytics, not source control or terminal.
-
-       Right border: #e2e8f0 matches the content area's
-       card border token. The sidebar/content transition
-       becomes a clean architectural line — not a dark wall.
-    ─────────────────────────────────────────── */
     [data-testid="stSidebar"] {
-        background: #111e2d !important;
-        border-right: 1px solid #e2e8f0 !important;
+        background: #17202c !important;
+        border-right: 1px solid #d5dde7 !important;
     }
-
-    /* Fixed-width sidebar — 220px
-       All selectors below are scoped to stSidebar to
-       prevent ANY bleed into the main #f8fafc canvas. */
     section[data-testid="stSidebar"] > div:first-child {
-        min-width: 220px !important;
-        max-width: 220px !important;
-        width:     220px !important;
-        background: #111e2d !important;
+        min-width: 248px !important;
+        max-width: 248px !important;
+        width: 248px !important;
+        background: #17202c !important;
+        transition: width 0.18s ease, min-width 0.18s ease, max-width 0.18s ease;
     }
-
-    /* ── Wrapper margin suppression (sidebar-scoped) ──
-       Streamlit adds ~8px bottom margin per st.markdown()
-       call. These rules are scoped to [stSidebar] and
-       will not affect the main content canvas. */
     [data-testid="stSidebar"] .block-container {
-        padding-top:    0 !important;
-        padding-bottom: 0 !important;
-        padding-left:   0 !important;
-        padding-right:  0 !important;
+        padding: 0 !important;
     }
     [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
-        margin-bottom: 0 !important;
-        padding:       0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
     [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
     [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] span {
-        color:         #4d7a9a;
         margin-bottom: 0 !important;
     }
-    [data-testid="stSidebar"] [data-testid="stRadio"] {
-        margin-bottom: 0 !important;
-        padding:       0 !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stRadio"] > div,
-    [data-testid="stSidebar"] [data-testid="stRadio"] > div > div {
-        margin-bottom: 0 !important;
-        gap:           0 !important;
-    }
-    [data-testid="stSidebar"] .stToggle {
-        margin-bottom: 0 !important;
-        padding:       0 !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stExpander"] {
-        margin-bottom: 0 !important;
-    }
-
-    /* ── Brand wordmark ───────────────────────────
-       Text-only. No monogram box.
-       The decorative box was a SaaS startup convention.
-       Premium financial platforms (Bloomberg, FactSet,
-       Refinitiv) identify via wordmark, not icon badge.
-       Stacked layout: product identity above, descriptor below.
-    ─────────────────────────────────────────── */
-    .nav-brand {
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-        padding: 15px 16px 14px 16px;
-        border-bottom: 1px solid #1a2d40;
-        margin-bottom: 2px;
-    }
-    .nav-brand-name {
-        font-size: 0.75rem;
-        font-weight: 700;
-        color: #dce9f5;
-        line-height: 1.2;
-        letter-spacing: -0.2px;
-        font-family: 'Inter', sans-serif;
-    }
-    .nav-brand-sub {
-        font-size: 0.5625rem;
-        font-weight: 400;
-        color: #3e6485;
-        line-height: 1;
-        letter-spacing: 0.1px;
-        font-family: 'Inter', sans-serif;
-    }
-
-    /* ── Group labels ─────────────────────────────
-       Color: #4d7a9a — deliberately readable.
-       These are navigation anchors, not decoration.
-       A CFO scanning for "Procurement" must find it
-       in under 500ms. Labels must do real work.
-    ─────────────────────────────────────────── */
-    .nav-section {
-        display: block;
-        font-size: 0.5625rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        color: #4d7a9a;
-        padding: 12px 16px 3px 16px;
-        margin: 0;
-        font-family: 'Inter', sans-serif;
-    }
-
-    /* ── Active nav item — HTML div, not a button ────────────────────────────
-       The current page is rendered as a styled div (no click affordance —
-       the user is already here). Shares the spatial grammar of inactive buttons
-       so the two states differ only in color, weight, and the accent line.
-    ─────────────────────────────────────────── */
-    .nav-item-active {
-        display:        flex;
-        align-items:    center;
-        gap:            8px;
-        border-left:    3px solid #5cacd4;
-        padding:        7px 14px 7px 13px;
-        font-size:      0.8125rem;
-        font-weight:    600;
-        color:          #e8f2fa;
-        line-height:    1.4;
-        cursor:         default;
-        font-family:    'Inter', sans-serif;
-        letter-spacing: 0;
-    }
-    .nav-item-icon {
-        font-size:   0.875rem;
-        line-height: 1;
-        flex-shrink: 0;
-        width:       16px;
-        text-align:  center;
-        opacity:     0.85;
-    }
-
-    /* ── Inactive nav buttons — strip ALL Streamlit defaults ─────────────────
-       Every st.button() inside the sidebar shares this base.
-       border-left: 3px transparent always reserves the accent slot —
-       no layout shift when the active item (a sibling div) shows the accent.
-    ─────────────────────────────────────────── */
     [data-testid="stSidebar"] .stButton {
-        margin-bottom: 0 !important;
-        padding:       0 !important;
+        margin: 0 !important;
+        padding: 0 12px 5px 12px !important;
     }
     [data-testid="stSidebar"] .stButton > button {
-        background-color: transparent !important;
-        color:            #5d8aaa !important;
-        border:           none !important;
-        border-left:      3px solid transparent !important;
-        border-radius:    0 !important;
-        padding:          7px 14px 7px 13px !important;
-        font-size:        0.8125rem !important;
-        font-weight:      400 !important;
-        font-family:      'Inter', sans-serif !important;
-        text-align:       left !important;
-        width:            100% !important;
-        box-shadow:       none !important;
-        cursor:           pointer !important;
-        line-height:      1.4 !important;
-        letter-spacing:   0 !important;
-        min-height:       unset !important;
-        height:           auto !important;
-        transition:       color 0.12s ease, border-color 0.12s ease !important;
-        display:          flex !important;
-        align-items:      center !important;
+        min-height: 36px !important;
+        height: 36px !important;
+        width: 100% !important;
+        border: none !important;
+        border-radius: 5px !important;
+        background: transparent !important;
+        color: #a8b2c0 !important;
+        box-shadow: none !important;
+        padding: 0 10px !important;
+        text-align: left !important;
+        justify-content: flex-start !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.79rem !important;
+        font-weight: 520 !important;
+        letter-spacing: 0 !important;
+        line-height: 1 !important;
+        transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, padding 0.14s ease !important;
     }
-
-    /* ── Button hover — color brightens, no fill ─────────────────────────── */
     [data-testid="stSidebar"] .stButton > button:hover {
-        background-color:  transparent !important;
-        color:             #8ab4cc !important;
-        border-left-color: #2a4a68 !important;
-        box-shadow:        none !important;
+        background: rgba(226, 232, 240, 0.055) !important;
+        color: #dce5ef !important;
     }
-
-    /* ── Keyboard focus — thin outline, no filled bg ─────────────────────── */
     [data-testid="stSidebar"] .stButton > button:focus-visible {
-        outline:        1px solid rgba(92, 172, 212, 0.4) !important;
-        outline-offset: -2px !important;
-        color:          #8ab4cc !important;
-        box-shadow:     none !important;
+        outline: 1px solid rgba(148, 163, 184, 0.42) !important;
+        outline-offset: 2px !important;
+        background: rgba(226, 232, 240, 0.07) !important;
+        color: #eef4fa !important;
     }
-
-    /* ── Pressed state ────────────────────────────────────────────────────── */
     [data-testid="stSidebar"] .stButton > button:active {
-        background-color: transparent !important;
-        color:            #a8ccdd !important;
-        box-shadow:       none !important;
+        background: rgba(226, 232, 240, 0.095) !important;
+        color: #eef4fa !important;
     }
-
-    /* ── Collapse/expand toggle ───────────────────────────────────────────────
-       Narrower, centred, slightly dimmer than nav items.
-       Reads as a utility control, not a destination.
-       Targeted via last-child column in the brand row layout.
-    ─────────────────────────────────────────── */
-    [data-testid="stSidebar"] [data-testid="column"]:last-child .stButton > button {
-        padding:         5px 6px !important;
-        justify-content: center !important;
-        text-align:      center !important;
-        color:           #3d607f !important;
-        font-size:       0.875rem !important;
-        border-left:     none !important;
+    [data-testid="stSidebar"] .stButton > button p,
+    [data-testid="stSidebar"] .stButton > button span,
+    [data-testid="stSidebar"] .stButton > button svg {
+        color: inherit !important;
+        fill: currentColor !important;
     }
-    [data-testid="stSidebar"] [data-testid="column"]:last-child .stButton > button:hover {
-        color:             #6b9ab8 !important;
-        border-left-color: transparent !important;
+    .nav-collapsed section[data-testid="stSidebar"] > div:first-child,
+    section[data-testid="stSidebar"].nav-collapsed > div:first-child {
+        min-width: 76px !important;
+        max-width: 76px !important;
+        width: 76px !important;
     }
-
-    /* ── Footer separator ─────────────────────────
-       Matches the brand block's internal divider (#1a2d40).
-       Creates a coherent structural grid within the sidebar —
-       top divider (brand), bottom divider (settings) are the same tone.
-    ─────────────────────────────────────────── */
-    .nav-footer {
-        border-top: 1px solid #1a2d40;
-        padding:    6px 0 0 0;
+    .nav-masthead {
+        padding: 17px 14px 14px 14px;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.10);
+    }
+    .nav-kicker {
+        color: #9fb0c5;
+        font-size: 0.58rem;
+        font-weight: 800;
+        letter-spacing: 1.25px;
+        line-height: 1;
+        text-transform: uppercase;
+    }
+    .nav-product {
+        color: #eef3f8;
+        font-size: 0.90rem;
+        font-weight: 720;
+        line-height: 1.2;
+        margin-top: 7px;
+        letter-spacing: 0;
+    }
+    .nav-subtitle {
+        color: #8f9bad;
+        font-size: 0.68rem;
+        font-weight: 500;
+        line-height: 1.4;
+        margin-top: 4px;
+    }
+    .nav-utility-row {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 12px;
+    }
+    .nav-collapse-label {
+        color: #818d9e;
+        font-size: 0.64rem;
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+    }
+    .nav-status {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: center;
         margin-top: 8px;
+        padding: 8px 9px;
+        border: 1px solid rgba(226, 232, 240, 0.10);
+        border-radius: 6px;
+        background: rgba(11, 18, 32, 0.20);
     }
-
-    /* ── Settings controls ────────────────────────
-       Same color as group labels (#4d7a9a).
-       The Settings expander reads as part of the same
-       structural family as Overview/Markets/Forecasting/Procurement.
-    ─────────────────────────────────────────── */
-    [data-testid="stSidebar"] .stToggle label,
-    [data-testid="stSidebar"] .stToggle label p {
-        color:       #4d7a9a !important;
-        font-size:   0.6875rem !important;
-        font-weight: 400 !important;
+    .nav-status-label {
+        color: #c8d2dd;
+        font-size: 0.70rem;
+        font-weight: 700;
+        line-height: 1.25;
+    }
+    .nav-status-sub {
+        color: #8d99aa;
+        font-size: 0.62rem;
+        font-weight: 500;
+        margin-top: 2px;
+    }
+    .nav-status-pill {
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 999px;
+        color: #b8c7d8;
+        background: rgba(226, 232, 240, 0.055);
+        font-size: 0.58rem;
+        font-weight: 800;
+        letter-spacing: 0.7px;
+        padding: 4px 7px;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+    .nav-section {
+        color: #7f8b9c;
+        display: block;
+        font-size: 0.57rem;
+        font-weight: 800;
+        letter-spacing: 1.1px;
+        line-height: 1;
+        padding: 14px 14px 6px 14px;
+        text-transform: uppercase;
+    }
+    .nav-item-active {
+        align-items: center;
+        background: rgba(226, 232, 240, 0.065);
+        border: none;
+        border-left: 2px solid #8fb4d8;
+        border-radius: 5px;
+        color: #eef3f8;
+        display: flex;
+        font-family: 'Inter', sans-serif;
+        font-size: 0.79rem;
+        font-weight: 680;
+        gap: 9px;
+        line-height: 1;
+        margin: 0 12px 5px 12px;
+        min-height: 36px;
+        padding: 0 9px;
+        box-shadow: none;
+    }
+    .nav-item-icon {
+        align-items: center;
+        background: transparent;
+        border: none;
+        color: #bec9d6;
+        display: inline-flex;
+        flex: 0 0 22px;
+        font-size: 1.0rem;
+        font-weight: 700;
+        height: 22px;
+        justify-content: center;
+        letter-spacing: 0.5px;
+        line-height: 1;
+        width: 22px;
+    }
+    .nav-item-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .nav-divider {
+        border-top: 1px solid rgba(226, 232, 240, 0.10);
+        margin: 12px 14px 0 14px;
+        padding-top: 10px;
+    }
+    .nav-admin-title {
+        color: #8d99aa;
+        font-size: 0.62rem;
+        font-weight: 800;
+        letter-spacing: 1px;
+        margin-bottom: 7px;
+        text-transform: uppercase;
+    }
+    .nav-meta-row {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: #a8b2c0;
+        font-size: 0.68rem;
+        font-weight: 600;
+        line-height: 1.35;
+        padding: 4px 0;
+    }
+    .nav-meta-value {
+        color: #d7e0ea;
+        font-family: 'IBM Plex Mono', 'Courier New', monospace;
+        font-size: 0.68rem;
+        white-space: nowrap;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] {
+        margin: 0 12px 12px 12px !important;
+        border: 1px solid rgba(226, 232, 240, 0.10) !important;
+        border-radius: 6px !important;
+        background: rgba(11, 18, 32, 0.18) !important;
     }
     [data-testid="stSidebar"] [data-testid="stExpander"] summary {
-        font-size:   0.6875rem !important;
-        color:       #4d7a9a !important;
-        font-weight: 400 !important;
-        padding:     5px 16px !important;
+        color: #a8b2c0 !important;
+        font-size: 0.70rem !important;
+        font-weight: 650 !important;
+        padding: 8px 10px !important;
     }
     [data-testid="stSidebar"] [data-testid="stExpander"] summary svg {
-        color: #4d7a9a !important;
-        fill:  #4d7a9a !important;
+        color: #8f9bad !important;
+        fill: #8f9bad !important;
+    }
+    [data-testid="stSidebar"] .stToggle label,
+    [data-testid="stSidebar"] .stToggle label p {
+        color: #a8b2c0 !important;
+        font-size: 0.70rem !important;
+        font-weight: 600 !important;
+    }
+    .nav-rail-collapsed section[data-testid="stSidebar"] > div:first-child {
+        min-width: 76px !important;
+        max-width: 76px !important;
+        width: 76px !important;
+    }
+    .nav-rail-collapsed [data-testid="stSidebar"] .stButton {
+        padding: 0 10px 6px 10px !important;
+    }
+    .nav-rail-collapsed [data-testid="stSidebar"] .stButton > button {
+        justify-content: center !important;
+        padding: 0 !important;
+        text-align: center !important;
+        font-size: 1.0rem !important;
+    }
+    .nav-rail-collapsed .nav-masthead {
+        padding: 14px 10px 12px 10px;
+        text-align: center;
+    }
+    .nav-rail-collapsed .nav-kicker,
+    .nav-rail-collapsed .nav-subtitle,
+    .nav-rail-collapsed .nav-section,
+    .nav-rail-collapsed .nav-item-label,
+    .nav-rail-collapsed .nav-collapse-label,
+    .nav-rail-collapsed .nav-divider,
+    .nav-rail-collapsed [data-testid="stSidebar"] [data-testid="stExpander"] {
+        display: none !important;
+    }
+    .nav-rail-collapsed .nav-product {
+        font-size: 0.72rem;
+        margin-top: 0;
+    }
+    .nav-rail-collapsed .nav-item-active {
+        justify-content: center;
+        margin: 0 10px 6px 10px;
+        padding: 0;
+        border-left: 3px solid #60a5fa;
     }
 
     /* ============================================
@@ -8372,132 +8411,213 @@ def get_critical_alerts(events: dict) -> list:
 def main():
     """Main application with 3-page structure."""
 
-    # ── Sidebar — UX-3E Interactive Enterprise Navigation ────────────────────
+    # Sidebar - UX-3G Executive Navigation Rail
     # Navigation driven by st.session_state["current_page"].
     # Active page = styled HTML div (no click affordance).
     # Inactive pages = st.button() styled as nav items via CSS.
-    # Collapse/expand persisted in st.session_state["nav_collapsed"].
 
-    # Icons: Geometric Shapes block (U+25A0-U+25FF) — zero emoji risk.
-    _NAV_ICONS = {
-        "Executive Summary":         "◈",   # ◈ WHITE DIAMOND CONTAINING BLACK SMALL DIAMOND
-        "International Market":      "○",   # ○ WHITE CIRCLE
-        "Pakistan Market":           "●",   # ● BLACK CIRCLE
-        "Market Intelligence":       "◎",   # ◎ BULLSEYE
-        "AI Predictions":            "≈",   # ≈ ALMOST EQUAL TO
-        "Procurement Intelligence":  "▣",   # ▣ WHITE SQUARE CONTAINING BLACK SMALL SQUARE
-    }
     _NAV_STRUCTURE = [
-        ("Overview",    ["Executive Summary"]),
-        ("Markets",     ["International Market", "Pakistan Market", "Market Intelligence"]),
+        ("Command", ["Executive Summary"]),
+        ("Markets", ["International Market", "Pakistan Market", "Market Intelligence"]),
         ("Forecasting", ["AI Predictions"]),
         ("Procurement", ["Procurement Intelligence"]),
     ]
+    _NAV_ITEMS = {
+        "Executive Summary": {
+            "icon": ":material/business_center:",
+            "symbol": "▥",
+            "label": "Executive Summary",
+            "hint": "Board view",
+        },
+        "International Market": {
+            "icon": ":material/public:",
+            "symbol": "◎",
+            "label": "International Market",
+            "hint": "Global benchmarks",
+        },
+        "Pakistan Market": {
+            "icon": ":material/location_on:",
+            "symbol": "⌖",
+            "label": "Pakistan Market",
+            "hint": "Local exposure",
+        },
+        "Market Intelligence": {
+            "icon": ":material/analytics:",
+            "symbol": "◇",
+            "label": "Market Intelligence",
+            "hint": "Signals and alerts",
+        },
+        "AI Predictions": {
+            "icon": ":material/memory:",
+            "symbol": "⌬",
+            "label": "AI Predictions",
+            "hint": "Forecast models",
+        },
+        "Procurement Intelligence": {
+            "icon": ":material/shopping_cart:",
+            "symbol": "▣",
+            "label": "Procurement Intelligence",
+            "hint": "Coverage and timing",
+        },
+    }
 
-    # ── State initialisation ─────────────────────────────────────────────
-    if "nav_collapsed" not in st.session_state:
-        st.session_state["nav_collapsed"] = False
+    # State initialisation
     if "current_page" not in st.session_state:
         st.session_state["current_page"] = "Executive Summary"
+    if "nav_collapsed" not in st.session_state:
+        st.session_state["nav_collapsed"] = False
 
-    _collapsed   = st.session_state["nav_collapsed"]
     current_page = st.session_state["current_page"]
+    nav_collapsed = st.session_state["nav_collapsed"]
 
     with st.sidebar:
-        # ── Dynamic width CSS — injected only when collapsed ──────────────
-        if _collapsed:
-            st.markdown("""<style>
-            section[data-testid="stSidebar"]>div:first-child{
-                width:64px!important;min-width:64px!important;max-width:64px!important;
-            }
-            .nav-item-label,.nav-section,.nav-brand-sub{display:none!important}
-            .nav-brand-name{font-size:0.625rem!important;letter-spacing:0!important;}
-            .nav-brand{padding:10px 8px 10px 8px!important;justify-content:center!important;gap:0!important;}
-            </style>""", unsafe_allow_html=True)
+        cfg = get_supabase_config()
+        pipeline_label = "Connected" if cfg else "Local"
+        pipeline_sub = "Supabase sync enabled" if cfg else "Secrets not configured"
 
-        # ── Brand wordmark + collapse toggle ─────────────────────────────
-        if not _collapsed:
-            _b_col, _c_col = st.columns([5, 1])
-            with _b_col:
-                st.markdown("""
-                <div class='nav-brand'>
-                    <div class='nav-brand-name'>MG Apparel</div>
-                    <div class='nav-brand-sub'>Commodity Intelligence</div>
-                </div>""", unsafe_allow_html=True)
-            with _c_col:
-                if st.button("‹", key="nav_collapse", help="Collapse navigation"):
-                    st.session_state["nav_collapsed"] = True
-                    st.rerun()
-        else:
-            st.markdown("""
-            <div class='nav-brand'>
-                <div class='nav-brand-name'>MG</div>
-            </div>""", unsafe_allow_html=True)
-            if st.button("›", key="nav_collapse",
-                         help="Expand navigation", use_container_width=True):
+        if nav_collapsed:
+            st.markdown(
+                """
+                <style>
+                section[data-testid="stSidebar"] > div:first-child {
+                    min-width: 76px !important;
+                    max-width: 76px !important;
+                    width: 76px !important;
+                }
+                [data-testid="stSidebar"] .stButton {
+                    padding: 0 10px 6px 10px !important;
+                }
+                [data-testid="stSidebar"] .stButton > button {
+                    justify-content: center !important;
+                    padding: 0 !important;
+                    text-align: center !important;
+                    font-size: 1.0rem !important;
+                }
+                .nav-kicker,
+                .nav-subtitle,
+                .nav-section,
+                .nav-item-label,
+                .nav-collapse-label,
+                .nav-divider,
+                [data-testid="stSidebar"] [data-testid="stExpander"] {
+                    display: none !important;
+                }
+                .nav-masthead {
+                    padding: 14px 10px 12px 10px !important;
+                    text-align: center;
+                }
+                .nav-product {
+                    font-size: 0.72rem !important;
+                    margin-top: 0 !important;
+                }
+                .nav-item-active {
+                    justify-content: center;
+                    margin: 0 10px 6px 10px;
+                    padding: 0;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            """
+            <div class="nav-masthead">
+                <div class="nav-kicker">MG Apparel</div>
+                <div class="nav-product">Commodity Intelligence</div>
+                <div class="nav-subtitle">Executive procurement analytics</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if nav_collapsed:
+            if st.button("▶", key="nav_expand", help="Expand navigation", width="stretch"):
                 st.session_state["nav_collapsed"] = False
                 st.rerun()
+        else:
+            st.markdown(
+                "<div class='nav-utility-row'><span class='nav-collapse-label'>Navigation</span></div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("◀ Collapse", key="nav_collapse", help="Collapse navigation", width="stretch"):
+                st.session_state["nav_collapsed"] = True
+                st.rerun()
 
-        # ── Navigation items ─────────────────────────────────────────────
         for _grp, _pages in _NAV_STRUCTURE:
-            if not _collapsed:
+            if not nav_collapsed:
                 st.markdown(
                     f"<span class='nav-section'>{_grp}</span>",
                     unsafe_allow_html=True,
                 )
             for _pg in _pages:
-                _icon      = _NAV_ICONS.get(_pg, "·")
+                _meta = _NAV_ITEMS[_pg]
                 _is_active = (current_page == _pg)
-                # Collapsed label = icon only; expanded = icon + EN SPACE + name
-                _btn_label = _icon if _collapsed else f"{_icon} {_pg}"
-
                 if _is_active:
-                    # Active page — static div, not a button
-                    _inner = (
-                        f"<span class='nav-item-icon'>{_icon}</span>"
-                        if _collapsed else
-                        f"<span class='nav-item-icon'>{_icon}</span>"
-                        f"<span class='nav-item-label'>{_pg}</span>"
+                    _active_inner = (
+                        f"<span class='nav-item-icon'>{_meta['symbol']}</span>"
+                        if nav_collapsed else
+                        f"<span class='nav-item-icon'>{_meta['symbol']}</span>"
+                        f"<span class='nav-item-label'>{_meta['label']}</span>"
                     )
                     st.markdown(
-                        f"<div class='nav-item-active'>{_inner}</div>",
+                        f"""
+                        <div class="nav-item-active" title="{_meta['label']}">
+                            {_active_inner}
+                        </div>
+                        """,
                         unsafe_allow_html=True,
                     )
                 else:
-                    if st.button(_btn_label, key=f"nav_{_pg}",
-                                 use_container_width=True):
+                    _btn_label = " " if nav_collapsed else _meta["label"]
+                    if st.button(
+                        _btn_label,
+                        key=f"nav_{_pg}",
+                        help=_meta["hint"],
+                        icon=_meta["icon"],
+                        width="stretch",
+                    ):
                         st.session_state["current_page"] = _pg
                         st.rerun()
 
-        # ── Settings footer ───────────────────────────────────────────────
-        st.markdown("<div class='nav-footer'></div>", unsafe_allow_html=True)
-        _settings_label = "⚙" if _collapsed else "Settings"   # ⚙ when collapsed
-        with st.expander(_settings_label, expanded=False):
-            st.session_state["demo_mode_forecast"] = st.toggle(
-                "Demo mode", value=False
-            )
-            cfg = get_supabase_config()
-            if cfg:
-                from supabase import create_client
-                base_url, key = cfg
-                supa_client = create_client(base_url, key)
+        if not nav_collapsed:
+            st.markdown("<div class='nav-divider'>", unsafe_allow_html=True)
+            with st.expander("⚙ Settings", expanded=False):
+                st.session_state["demo_mode_forecast"] = st.toggle(
+                    "Forecast demo data", value=False
+                )
                 st.markdown(
-                    "<div style='font-size:0.5625rem;font-weight:600;text-transform:uppercase;"
-                    "letter-spacing:0.6px;color:#3f5168;padding:6px 0 3px 0;'>"
-                    "Data freshness</div>",
+                    f"""
+                    <div class="nav-admin-title">System Health</div>
+                    <div class="nav-status">
+                        <div>
+                            <div class="nav-status-label">Data Platform</div>
+                            <div class="nav-status-sub">{pipeline_sub}</div>
+                        </div>
+                        <div class="nav-status-pill">{pipeline_label}</div>
+                    </div>
+                    """,
                     unsafe_allow_html=True,
                 )
-                freshness = check_data_freshness(supa_client)
-                if not freshness:
-                    st.caption("No data yet.")
-                else:
-                    for commodity, days in freshness.items():
-                        if days <= 7:
-                            st.caption(f"+ {commodity}: {days}d ago")
-                        elif days <= 30:
-                            st.caption(f"~ {commodity}: {days}d ago")
-                        else:
-                            st.caption(f"! {commodity}: {days}d ago — stale")
+                if cfg:
+                    from supabase import create_client
+                    base_url, key = cfg
+                    supa_client = create_client(base_url, key)
+                    freshness = check_data_freshness(supa_client)
+                    if not freshness:
+                        st.caption("No data freshness records.")
+                    else:
+                        for commodity, days in freshness.items():
+                            st.markdown(
+                                f"""
+                                <div class="nav-meta-row">
+                                    <span>{commodity}</span>
+                                    <span class="nav-meta-value">{days}d</span>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+            st.markdown("</div>", unsafe_allow_html=True)
 
     # Auto-sync predictions (silent, once per session)
     _auto_sync_predictions_to_supabase()
@@ -8507,21 +8627,21 @@ def main():
     # current_page is set by session state (driven by sidebar buttons).
     st.markdown(f"""
     <div style='display:flex;align-items:center;justify-content:space-between;
-                background:#ffffff;padding:0.625rem 1.25rem;border-radius:6px;
-                border:1px solid #e2e8f0;margin-bottom:0.875rem;
-                box-shadow:0 1px 2px rgba(0,0,0,0.04);'>
+                background:#fbfcfe;padding:0.625rem 1.125rem;border-radius:6px;
+                border:1px solid #dbe2ea;margin-bottom:0.875rem;
+                box-shadow:none;'>
         <div>
             <div style='font-size:0.5625rem;font-weight:600;text-transform:uppercase;
-                         letter-spacing:0.8px;color:#64748b;margin-bottom:2px;'>
+                          letter-spacing:0.7px;color:#6b7788;margin-bottom:2px;'>
                 MG Apparel &nbsp;/&nbsp; Commodity Intelligence
             </div>
-            <div style='font-size:1.0rem;font-weight:700;color:#0f172a;
-                        letter-spacing:-0.3px;line-height:1.2;'>
+            <div style='font-size:0.96rem;font-weight:680;color:#172033;
+                        letter-spacing:0;line-height:1.2;'>
                 {current_page}
             </div>
         </div>
         <div style='text-align:right;'>
-            <div style='font-size:0.625rem;color:#94a3b8;font-weight:400;'>
+            <div style='font-size:0.625rem;color:#8792a2;font-weight:450;'>
                 Procurement Analytics Platform
             </div>
         </div>
