@@ -2152,51 +2152,103 @@ def render_pse6a_executive_panel() -> None:
       2. LOCAL + IMPORTED source decision cards
       3. Action timeline
       4. Expandable executive insights
+
+    Local:  reads live data from Strategies.xlsx via PSE-5B; writes
+            reports/executive_decision.json as a deployment cache.
+    Cloud:  if workbook is absent, falls back to reports/executive_decision.json.
     """
     import datetime as _dt
+    import json as _json
 
-    # ── Run / load PSE-5B ────────────────────────────────────────────────────
+    _EXEC_JSON = _PROJECT_ROOT / "reports" / "executive_decision.json"
+
+    # ── Resolve data source ──────────────────────────────────────────────────
     workbook = str(_PSE6A_WORKBOOK) if _PSE6A_WORKBOOK.exists() else None
+    er = None
+    caption_suffix = ""
 
-    if not workbook:
-        st.info(
-            "Inventory workbook not found. "
-            "Expected: `data/strategy/Strategies.xlsx`  \n"
-            "Place the workbook file there and refresh the page."
+    if workbook:
+        # ── Local path: live workbook via PSE-5B ─────────────────────────────
+        today_str = _dt.date.today().isoformat()
+
+        with st.spinner("Loading procurement decision engine…"):
+            result = _run_pse5b_cached(workbook, today_str)
+
+        if not result.get("ok"):
+            err = result.get("error", "Unknown error")
+            st.error(
+                f"**PSE-5B pipeline error.**  \n"
+                f"The decision engine could not run.  \n\n"
+                f"```\n{err}\n```"
+            )
+            st.caption(
+                "Check that `data/strategy/Strategies.xlsx` is current and the "
+                "procurement engine dependencies are installed."
+            )
+            return
+
+        er = result["report"]
+        caption_suffix = (
+            f"Data: {_PSE6A_WORKBOOK.name}  ·  "
+            f"Refreshed: {today_str}  ·  Cache TTL: 30 min"
         )
-        return
 
-    today_str = _dt.date.today().isoformat()
+        # Write deployment cache so Streamlit Cloud can render without workbook.
+        # Non-fatal: a filesystem error must never break local execution.
+        try:
+            _EXEC_JSON.parent.mkdir(parents=True, exist_ok=True)
+            payload = dict(er)
+            payload["_generated"] = today_str
+            _EXEC_JSON.write_text(
+                _json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
-    with st.spinner("Loading procurement decision engine…"):
-        result = _run_pse5b_cached(workbook, today_str)
+    else:
+        # ── Cloud path: fall back to cached JSON snapshot ────────────────────
+        if _EXEC_JSON.exists():
+            try:
+                payload = _json.loads(_EXEC_JSON.read_text(encoding="utf-8"))
+                # Validate required top-level keys before accepting the cache
+                if (
+                    isinstance(payload, dict)
+                    and "local" in payload
+                    and "imported" in payload
+                    and "portfolio_urgency" in payload
+                ):
+                    generated = payload.pop("_generated", "unknown")
+                    er = payload
+                    caption_suffix = (
+                        f"Data: cached snapshot  ·  "
+                        f"Generated: {generated}  ·  "
+                        f"Source: reports/executive_decision.json"
+                    )
+            except Exception:
+                pass  # malformed cache → fall through to info message
 
-    if not result.get("ok"):
-        err = result.get("error", "Unknown error")
-        st.error(
-            f"**PSE-5B pipeline error.**  \n"
-            f"The decision engine could not run.  \n\n"
-            f"```\n{err}\n```"
-        )
-        st.caption(
-            "Check that `data/strategy/Strategies.xlsx` is current and the "
-            "procurement engine dependencies are installed."
-        )
-        return
+        if er is None:
+            st.info(
+                "Inventory workbook not found. "
+                "Expected: `data/strategy/Strategies.xlsx`  \n"
+                "Place the workbook file there and refresh the page."
+            )
+            return
 
-    er = result["report"]
+    # ── Render (identical path regardless of data source) ────────────────────
 
-    # ── 1. Portfolio summary ──────────────────────────────────────────────────
+    # 1. Portfolio summary
     _pse6a_portfolio_card(er)
 
-    # ── 2. Source decision cards ──────────────────────────────────────────────
+    # 2. Source decision cards
     c1, c2 = st.columns(2, gap="medium")
     with c1:
         _pse6a_source_card(er.get("local",    {}), "LOCAL COTTON")
     with c2:
         _pse6a_source_card(er.get("imported", {}), "IMPORTED COTTON")
 
-    # ── 3. Action timeline ────────────────────────────────────────────────────
+    # 3. Action timeline
     st.markdown(
         "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
         "letter-spacing:0.8px;text-transform:uppercase;"
@@ -2205,7 +2257,7 @@ def render_pse6a_executive_panel() -> None:
     )
     _pse6a_timeline(er)
 
-    # ── 4. Executive insights (expandable) ───────────────────────────────────
+    # 4. Executive insights (expandable)
     st.markdown(
         "<div style='font-size:0.72rem;font-weight:700;color:#94a3b8;"
         "letter-spacing:0.8px;text-transform:uppercase;"
@@ -2214,10 +2266,7 @@ def render_pse6a_executive_panel() -> None:
     )
     _pse6a_insights(er)
 
-    st.caption(
-        f"Decision engine: PSE-5B  ·  Data: {_PSE6A_WORKBOOK.name}  ·  "
-        f"Refreshed: {today_str}  ·  Cache TTL: 30 min"
-    )
+    st.caption(f"Decision engine: PSE-5B  ·  {caption_suffix}")
 
 
 # ===========================================================================
