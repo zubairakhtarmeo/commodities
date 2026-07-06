@@ -283,6 +283,25 @@ class TestSnapshotContract:
         with pytest.raises(Exception):
             snap.overall_procurement_posture = "DEFENSIVE_PROCUREMENT"
 
+
+class TestPhase3StrategyIntelligence:
+    def test_survival_strategy_never_recommends_waiting(self, critical_portfolio):
+        snap = assess_strategy(critical_portfolio, _market("low_falling"))
+        assert snap.recommended_strategy == "SURVIVAL_COVERAGE"
+        assert snap.execution_bias == "IMMEDIATE"
+        assert snap.delay_risk == "HIGH"
+
+    def test_strategy_explains_review_and_rejected_alternative(self, comfortable_portfolio):
+        snap = assess_strategy(comfortable_portfolio, _market("neutral"))
+        assert snap.strategy_reason
+        assert snap.review_trigger
+        assert snap.alternative_strategy_considered
+        assert snap.alternative_rejection_reason
+
+    def test_strategy_layer_still_produces_no_execution_quantity(self, comfortable_portfolio):
+        snap = assess_strategy(comfortable_portfolio, _market("neutral"))
+        assert not any("quantity" in key for key in snap.to_dict())
+
     def test_dimension_is_frozen(self, comfortable_portfolio):
         snap = assess_strategy(comfortable_portfolio, _market("neutral"))
         with pytest.raises(Exception):

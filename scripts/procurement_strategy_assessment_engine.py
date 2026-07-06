@@ -136,6 +136,16 @@ class StrategicProcurementAssessment:
     secondary_strategic_objective: str
     secondary_objective_rule_fired: int
 
+    # Phase 3 decision-quality contract.  These fields describe strategic
+    # intent only; quantities and tranches remain the execution layer's job.
+    recommended_strategy: str
+    strategy_reason: str
+    delay_risk: str
+    execution_bias: str
+    review_trigger: str
+    alternative_strategy_considered: str
+    alternative_rejection_reason: str
+
     operational_pressure_summary: dict
     market_opportunity_summary: dict
 
@@ -310,7 +320,13 @@ def _eval_flexibility_position(portfolio: PortfolioOptimizationSnapshot) -> Stra
 #   6. DEFERRED_PROCUREMENT      : portfolio posture is OPPORTUNISTIC and
 #                                   market opportunity is LOW -> no urgent
 #                                   need and market is unfavourable.
-#   7. BALANCED_ACCUMULATION     : default -- steady, policy-driven
+#   7. DEFERRED_PROCUREMENT      : portfolio posture is BALANCED and market
+#                                   opportunity is LOW with a PRICE_FALLING
+#                                   direction confirmed by FULL-quality data
+#                                   -> no structural urgency, prices clearly
+#                                   heading lower; defer discretionary volume
+#                                   as an experienced director would.
+#   8. BALANCED_ACCUMULATION     : default -- steady, policy-driven
 #                                   accumulation; neither urgency nor
 #                                   opportunism dominates.
 # ===========================================================================
@@ -340,7 +356,15 @@ def _determine_posture(
     if portfolio.overall_portfolio_posture == "OPPORTUNISTIC" and market.opportunity_level == "LOW":
         return "DEFERRED_PROCUREMENT", 6
 
-    return "BALANCED_ACCUMULATION", 7
+    if (
+        portfolio.overall_portfolio_posture == "BALANCED"
+        and market.opportunity_level == "LOW"
+        and market.forecast_direction == "PRICE_FALLING"
+        and market.market_data_quality == "FULL"
+    ):
+        return "DEFERRED_PROCUREMENT", 7
+
+    return "BALANCED_ACCUMULATION", 8
 
 
 # ===========================================================================
@@ -386,6 +410,59 @@ def _score_strategy_confidence(
     return round(_clamp(score), 2)
 
 
+def _build_strategy_intelligence(
+    posture: str,
+    portfolio: PortfolioOptimizationSnapshot,
+    market: MarketOpportunitySnapshot,
+) -> dict:
+    """Translate the selected posture into director-level strategic intent.
+
+    This is deliberately qualitative.  The execution layer remains solely
+    responsible for turning the intent into quantities and timing.
+    """
+    mapping = {
+        "DEFENSIVE_PROCUREMENT": ("SURVIVAL_COVERAGE", "IMMEDIATE", "HIGH"),
+        "INVENTORY_PRESERVATION": ("WAIT", "WAIT", "LOW"),
+        "FORWARD_COVERAGE": ("STRATEGIC_FORWARD_PROCUREMENT", "PHASED", "MEDIUM"),
+        "PRICE_CAPTURE": ("OPPORTUNITY_CAPTURE", "IMMEDIATE", "MEDIUM"),
+        "OPPORTUNISTIC_ACCUMULATION": ("GRADUAL_ACCUMULATION", "PHASED", "LOW"),
+        "DEFERRED_PROCUREMENT": ("WAIT", "DEFER_DISCRETIONARY", "LOW"),
+        "BALANCED_ACCUMULATION": ("GRADUAL_ACCUMULATION", "PHASED", "MEDIUM"),
+    }
+    strategy, bias, risk = mapping[posture]
+
+    opportunity = market.opportunity_level or "UNAVAILABLE"
+    direction = market.forecast_direction or "UNAVAILABLE"
+    reason = (
+        f"{strategy.replace('_', ' ').title()} fits portfolio posture "
+        f"{portfolio.overall_portfolio_posture} with market opportunity "
+        f"{opportunity} and forecast direction {direction}."
+    )
+
+    if bias == "IMMEDIATE":
+        trigger = "Review after the immediate coverage action or if market conditions reverse."
+        alternative = "WAIT"
+        rejection = "Waiting was rejected because inventory security, lead-time exposure, or a time-sensitive price opportunity dominates."
+    elif bias == "PHASED":
+        trigger = "Review at the next planning cycle or when forecast direction, confidence, or inventory safety changes."
+        alternative = "FULL_IMMEDIATE_BUY"
+        rejection = "A full immediate buy was rejected to preserve flexibility while the position remains manageable."
+    else:
+        trigger = "Review when price opportunity improves, forecast direction changes, or safety/lead-time coverage deteriorates."
+        alternative = "BUY_NOW"
+        rejection = "Buying discretionary volume now was rejected because current coverage permits waiting and the market does not justify early commitment."
+
+    return {
+        "recommended_strategy": strategy,
+        "strategy_reason": reason,
+        "delay_risk": risk,
+        "execution_bias": bias,
+        "review_trigger": trigger,
+        "alternative_strategy_considered": alternative,
+        "alternative_rejection_reason": rejection,
+    }
+
+
 # ===========================================================================
 # ASSESSMENT
 # ===========================================================================
@@ -426,6 +503,7 @@ def assess_strategy(
     posture, posture_rule = _determine_posture(portfolio, market)
     secondary_objective, secondary_rule = _determine_secondary_objective(portfolio)
     primary_objective = _PRIMARY_OBJECTIVE_BY_POSTURE[posture]
+    intelligence = _build_strategy_intelligence(posture, portfolio, market)
 
     confidence_score = _score_strategy_confidence(portfolio, market)
     confidence_level = _score_to_level(confidence_score, CONFIDENCE_LEVEL_LOW_MAX, CONFIDENCE_LEVEL_MEDIUM_MAX)
@@ -476,6 +554,13 @@ def assess_strategy(
         primary_strategic_objective=primary_objective,
         secondary_strategic_objective=secondary_objective,
         secondary_objective_rule_fired=secondary_rule,
+        recommended_strategy=intelligence["recommended_strategy"],
+        strategy_reason=intelligence["strategy_reason"],
+        delay_risk=intelligence["delay_risk"],
+        execution_bias=intelligence["execution_bias"],
+        review_trigger=intelligence["review_trigger"],
+        alternative_strategy_considered=intelligence["alternative_strategy_considered"],
+        alternative_rejection_reason=intelligence["alternative_rejection_reason"],
         operational_pressure_summary=operational_pressure_summary,
         market_opportunity_summary=market_opportunity_summary,
         inventory_pressure=inventory_pressure,

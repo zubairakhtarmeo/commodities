@@ -366,3 +366,31 @@ class TestPlanContract:
         pos, portfolio, market, strategy = critical
         plan = build_execution_plan(pos, portfolio, market, strategy, as_of=date(2026, 1, 1))
         assert plan.as_of == "2026-01-01"
+
+
+class TestPhase3StrategicExecution:
+    def test_survival_requirement_is_never_deferred(self, critical):
+        pos, portfolio, market, strategy = critical
+        plan = build_execution_plan(pos, portfolio, market, strategy)
+        assert plan.recommended_strategy == "SURVIVAL_COVERAGE"
+        assert plan.deferred_quantity_tons == 0.0
+        assert plan.immediate_quantity_tons == plan.total_planned_quantity_tons
+
+    def test_discretionary_mix_correction_is_split_under_phased_strategy(self):
+        pos, portfolio, market, strategy = _build_all(3000.0, 17000.0)
+        plan = build_execution_plan(pos, portfolio, market, strategy)
+        assert strategy.execution_bias == "PHASED"
+        assert plan.immediate_quantity_tons > 0.0
+        assert plan.deferred_quantity_tons > 0.0
+        assert plan.immediate_quantity_tons + plan.deferred_quantity_tons == pytest.approx(6000.0)
+
+    def test_plan_answers_phase3_decision_questions(self, critical):
+        pos, portfolio, market, strategy = critical
+        plan = build_execution_plan(pos, portfolio, market, strategy)
+        assert plan.strategy_reason
+        assert plan.opportunity_window in EXECUTION_WINDOWS
+        assert plan.risk_if_delayed in ("LOW", "MEDIUM", "HIGH")
+        assert plan.review_trigger
+        assert plan.next_review_date
+        assert plan.alternative_strategy_considered
+        assert plan.alternative_rejection_reason

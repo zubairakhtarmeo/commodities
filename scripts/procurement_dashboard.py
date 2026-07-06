@@ -1605,7 +1605,364 @@ def render_exec_procurement_header_v2(
 
 
 # ---------------------------------------------------------------------------
-# Main page entry point
+# Phase 2 business-oriented page composition
+# ---------------------------------------------------------------------------
+
+def _load_execution_plan_for_display() -> tuple[dict, dict, str]:
+    """Return (execution_plan, decision_impact, caption) from the shared cache.
+
+    Returns empty dicts when the workbook is absent or the pipeline fails so
+    callers never need to guard against None.
+    """
+    if not _PSE6A_WORKBOOK.exists():
+        return {}, {}, "Inventory workbook unavailable"
+
+    today_str = datetime.date.today().isoformat()
+    result = _run_pse5b_cached(str(_PSE6A_WORKBOOK), today_str)
+    if not result.get("ok"):
+        return {}, {}, result.get("error", "Execution plan unavailable")
+    return (
+        result.get("execution_plan", {}),
+        result.get("decision_impact", {}),
+        f"As of {today_str}",
+    )
+
+
+def _render_plan_unavailable(message: str) -> None:
+    st.info(
+        "The current procurement plan is unavailable. "
+        "Please verify the latest inventory workbook and refresh."
+    )
+    if message and message != "Inventory workbook unavailable":
+        with st.expander("Technical details"):
+            st.code(message)
+
+
+# ---------------------------------------------------------------------------
+# PSE-4.1 — Decision Impact rendering helpers (presentation only, no logic)
+# ---------------------------------------------------------------------------
+
+_IMPACT_RISK_STYLE = {
+    "HIGH":    ("#dc2626", "#fee2e2", "#fca5a5"),
+    "MEDIUM":  ("#d97706", "#fef3c7", "#fcd34d"),
+    "LOW":     ("#059669", "#d1fae5", "#6ee7b7"),
+    "UNKNOWN": ("#64748b", "#f1f5f9", "#cbd5e1"),
+}
+
+_IMPACT_UNKNOWN_LABEL = {
+    "inventory_outlook":          "Insufficient data to assess inventory outcome.",
+    "procurement_progress_impact": "No annual procurement target is configured — progress cannot be assessed.",
+    "mix_outlook":                "Portfolio mix impact cannot be determined.",
+    "market_exposure":            "Not enough market information is currently available.",
+}
+
+
+def _impact_card(label: str, text: str, detail: str = "", accent: str = "#1e40af") -> str:
+    """Styled card matching the existing dashboard metric-card aesthetic."""
+    # Friendly fallback if value is flagged UNKNOWN by the engine
+    if text.startswith("UNKNOWN"):
+        text = _IMPACT_UNKNOWN_LABEL.get(label.lower().replace(" ", "_"), "Not enough data is available.")
+        accent = "#94a3b8"
+    detail_html = (
+        f"<div style='margin-top:8px;font-size:0.72rem;color:#64748b;"
+        f"line-height:1.45;border-top:1px solid #f1f5f9;padding-top:6px;'>{detail}</div>"
+        if detail and not detail.startswith("UNKNOWN") else ""
+    )
+    return (
+        f"<div style='background:#ffffff;border-radius:8px;padding:16px 18px;"
+        f"border:1px solid #e2e8f0;border-left:3px solid {accent};"
+        f"height:100%;box-sizing:border-box;'>"
+        f"<div style='font-size:0.63rem;font-weight:700;letter-spacing:0.9px;"
+        f"color:{accent};text-transform:uppercase;margin-bottom:8px;'>{label}</div>"
+        f"<div style='font-size:0.86rem;font-weight:500;color:#1e293b;line-height:1.55;'>{text}</div>"
+        f"{detail_html}"
+        f"</div>"
+    )
+
+
+def _impact_risk_card(level: str, reason: str) -> str:
+    """Operational Risk card with a coloured badge for the risk level."""
+    text_col, bg_col, border_col = _IMPACT_RISK_STYLE.get(level, _IMPACT_RISK_STYLE["UNKNOWN"])
+    badge = (
+        f"<span style='display:inline-block;padding:3px 12px;border-radius:20px;"
+        f"font-size:0.72rem;font-weight:700;letter-spacing:0.6px;"
+        f"color:{text_col};background:{bg_col};border:1.5px solid {border_col};"
+        f"margin-bottom:8px;'>{level}</span>"
+    )
+    reason_html = (
+        f"<div style='font-size:0.80rem;color:#475569;line-height:1.5;margin-top:4px;'>{reason}</div>"
+        if reason and not reason.startswith("UNKNOWN") else ""
+    )
+    return (
+        f"<div style='background:#ffffff;border-radius:8px;padding:16px 18px;"
+        f"border:1px solid #e2e8f0;border-left:3px solid {text_col};"
+        f"height:100%;box-sizing:border-box;'>"
+        f"<div style='font-size:0.63rem;font-weight:700;letter-spacing:0.9px;"
+        f"color:{text_col};text-transform:uppercase;margin-bottom:8px;'>Operational Risk</div>"
+        f"{badge}"
+        f"{reason_html}"
+        f"</div>"
+    )
+
+
+def _render_decision_impact(impact: dict) -> None:
+    """Render the Expected Business Impact section from a DecisionImpact dict.
+
+    Purely presentational — reads fields from the already-computed impact dict.
+    No business logic, no recalculation, no engine calls.
+    """
+    if not impact:
+        return
+
+    st.markdown("---")
+    st.markdown(
+        "<h3 style='color:#1e40af;font-size:1.05rem;font-weight:700;"
+        "margin-bottom:4px;'>Expected Business Impact</h3>"
+        "<p style='color:#64748b;font-size:0.78rem;margin-top:0;margin-bottom:16px;'>"
+        "If this recommendation is followed, the organisation can expect the outcomes below.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # --- Row 1: Inventory · Procurement Progress · Mix ---
+    c1, c2, c3 = st.columns(3, gap="small")
+    with c1:
+        st.markdown(
+            _impact_card(
+                "Inventory Outlook",
+                impact.get("inventory_outlook", "UNKNOWN"),
+                impact.get("inventory_outlook_detail", ""),
+                "#1e40af",
+            ),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        prog = impact.get("procurement_progress_impact", "UNKNOWN")
+        prog_accent = "#94a3b8" if prog.startswith("UNKNOWN") else "#0891b2"
+        st.markdown(
+            _impact_card("Procurement Progress", prog, "", prog_accent),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            _impact_card(
+                "Portfolio Mix Outlook",
+                impact.get("mix_outlook", "UNKNOWN"),
+                "",
+                "#7c3aed",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)
+
+    # --- Row 2: Market Exposure · Operational Risk · Review Guidance ---
+    c4, c5, c6 = st.columns(3, gap="small")
+    with c4:
+        mkt = impact.get("market_exposure", "UNKNOWN")
+        mkt_accent = "#94a3b8" if mkt.startswith("UNKNOWN") else "#d97706"
+        st.markdown(
+            _impact_card("Market Exposure", mkt, "", mkt_accent),
+            unsafe_allow_html=True,
+        )
+    with c5:
+        st.markdown(
+            _impact_risk_card(
+                impact.get("operational_risk_level", "UNKNOWN"),
+                impact.get("operational_risk_reason", ""),
+            ),
+            unsafe_allow_html=True,
+        )
+    with c6:
+        st.markdown(
+            _impact_card(
+                "Review Guidance",
+                impact.get("review_guidance", "Review timing not available."),
+                "",
+                "#059669",
+            ),
+            unsafe_allow_html=True,
+        )
+
+
+def render_procurement_decision_page() -> None:
+    """Executive landing page, composed only from ProcurementExecutionPlan."""
+    _section_header(
+        "Procurement Decision",
+        "What to buy · how much · when · and why",
+        colour="#1e40af",
+    )
+    plan, impact, caption = _load_execution_plan_for_display()
+    if not plan:
+        _render_plan_unavailable(caption)
+        return
+
+    events = plan.get("procurement_events", [])
+    first = events[0] if events else {}
+    action = plan.get("recommended_strategy", "BUY" if events else "WAIT")
+    window = first.get("preferred_execution_window", "No action required")
+    benefit = plan.get("expected_benefits", {})
+    benefit_text = benefit.get("expected_inventory_stability", "NOT ASSESSED")
+
+    cols = st.columns(5)
+    cards = (
+        ("RECOMMENDED STRATEGY", str(action).replace("_", " "), f"{len(events)} planned event(s)", _C_BUY if events else _C_HOLD),
+        ("IMMEDIATE QUANTITY", f"{plan.get('immediate_quantity_tons', plan.get('total_planned_quantity_tons', 0)):,.0f} t", "Commit now", "#7c3aed"),
+        ("DEFERRED QUANTITY", f"{plan.get('deferred_quantity_tons', 0):,.0f} t", str(plan.get('opportunity_window', window)).replace("_", " "), _C_MONITOR),
+        ("CONFIDENCE", plan.get("planning_confidence_level", "N/A"), f"Score {plan.get('planning_confidence_score', 0):.0f}", "#059669"),
+        ("EXPECTED BENEFIT", str(benefit_text).replace("_", " "), "Inventory stability", "#0891b2"),
+    )
+    for col, card in zip(cols, cards):
+        with col:
+            st.markdown(_kpi_card(*card), unsafe_allow_html=True)
+
+    st.markdown("### Current procurement status")
+    st.write(plan.get("plan_summary", "No plan summary available."))
+    st.caption(plan.get("strategy_reason", ""))
+
+    # PSE-4.1 — Expected Business Impact (read from decision_impact, never recomputed)
+    _render_decision_impact(impact)
+
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        st.markdown("### Recommended actions")
+        if not events:
+            st.success("No procurement events are required in the current planning cycle.")
+        for index, event in enumerate(events, 1):
+            st.markdown(
+                f"**{index}. {event.get('source', 'Unknown').title()} — "
+                f"{event.get('planned_quantity_tons', 0):,.0f} tons now Â· "
+                f"{event.get('deferred_quantity_tons', 0):,.0f} tons deferred**  \n"
+                f"{event.get('preferred_execution_window', 'N/A').replace('_', ' ')}"
+            )
+            st.caption(event.get("reason", ""))
+
+    with right:
+        st.markdown("### Constraint validation")
+        constraints = plan.get("constraint_validation", {})
+        if constraints:
+            constraint_df = pd.DataFrame(
+                [(key.replace("_", " ").title(), value) for key, value in constraints.items()],
+                columns=["Constraint", "Status"],
+            )
+            st.dataframe(constraint_df, hide_index=True, use_container_width=True)
+        else:
+            st.caption("No constraint results available.")
+
+    st.markdown("### Top reasons")
+    for reason in plan.get("reasoning", [])[:4]:
+        st.markdown(f"- {reason}")
+    st.markdown("### Decision safeguards")
+    financial = plan.get("expected_benefits", {})
+    financial_usd = financial.get("expected_cost_avoidance_usd")
+    financial_basis = financial.get("expected_cost_avoidance_pct_basis")
+    if financial_usd is not None:
+        st.markdown(f"**Expected financial benefit:** ${financial_usd:,.0f}")
+    elif financial_basis is not None:
+        st.markdown(
+            f"**Expected financial benefit:** {financial_basis:+.2f}% price basis; "
+            "USD benefit unavailable pending a verified price and FX basis."
+        )
+    else:
+        st.markdown("**Expected financial benefit:** Not reliably quantifiable from current market inputs.")
+    st.markdown(f"**Risk if delayed:** {plan.get('risk_if_delayed', 'N/A')}")
+    st.markdown(
+        f"**Review:** {plan.get('next_review_date', 'N/A')} â€” "
+        f"{plan.get('review_trigger', 'No trigger available.')}"
+    )
+    st.markdown(
+        f"**Alternative considered:** {str(plan.get('alternative_strategy_considered', 'N/A')).replace('_', ' ')}  \n"
+        f"{plan.get('alternative_rejection_reason', '')}"
+    )
+    st.caption(f"Procurement Execution Planning Engine · {caption}")
+
+
+def render_procurement_plan_page() -> None:
+    """Ordered ProcurementExecutionPlan events and their traceability."""
+    _section_header(
+        "Procurement Plan",
+        "Execution sequence · planning windows · dependencies · reasons",
+        colour="#7c3aed",
+    )
+    plan, _, caption = _load_execution_plan_for_display()
+    if not plan:
+        _render_plan_unavailable(caption)
+        return
+
+    events = plan.get("procurement_events", [])
+    if not events:
+        st.success(plan.get("plan_summary", "No procurement events are required."))
+        return
+
+    rows = []
+    for index, event in enumerate(events, 1):
+        rows.append({
+            "Sequence": index,
+            "Event": event.get("event_id"),
+            "Source": event.get("source"),
+            "Quantity (t)": event.get("planned_quantity_tons"),
+            "Deferred (t)": event.get("deferred_quantity_tons", 0),
+            "Planning window": str(event.get("preferred_execution_window", "")).replace("_", " "),
+            "Priority": event.get("planning_priority_level"),
+            "Confidence": event.get("confidence_level"),
+            "Depends on": ", ".join(event.get("dependencies", [])) or "None",
+        })
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    st.markdown("### Event detail")
+    for event in events:
+        label = (
+            f"{event.get('event_id')} · {event.get('source', '').title()} · "
+            f"{event.get('planned_quantity_tons', 0):,.0f} tons"
+        )
+        with st.expander(label):
+            st.write(event.get("reason", ""))
+            st.markdown("**Dependencies:** " + (", ".join(event.get("dependencies", [])) or "None"))
+            st.markdown("**Reasoning chain**")
+            for reason in event.get("reasoning_chain", []):
+                st.markdown(f"- {reason}")
+    st.caption(f"Procurement Execution Planning Engine · {caption}")
+
+
+def render_procurement_analytics_page() -> None:
+    """Analyst workspace composed from the established rendering helpers."""
+    _section_header(
+        "Analytics",
+        "Inventory position · mix · gap analysis · risk · supporting metrics",
+        colour="#475569",
+    )
+    df, meta = load_procurement_strategy()
+    if df.empty:
+        st.info("Procurement analytics are unavailable for the current period.")
+        return
+
+    _render_overview(df, meta)
+    with st.expander("BUY — Action required", expanded=True):
+        _render_buy(df)
+    with st.expander("HOLD — Adequate stock"):
+        _render_hold(df)
+    with st.expander("MONITOR — Attention"):
+        _render_monitor(df)
+    with st.expander("Inventory risk", expanded=True):
+        _render_risk(df)
+    with st.expander("Full supporting report"):
+        _render_summary(df, meta)
+    with st.expander("Monitoring and alerts"):
+        render_pse7a_monitoring_panel()
+
+
+def render_procurement_settings_page() -> None:
+    """Operational settings and the preserved scenario-analysis workspace."""
+    _section_header(
+        "Settings",
+        "Scenario analysis and platform controls",
+        colour="#64748b",
+    )
+    st.markdown("### What-if scenario lab")
+    render_pse6b_whatif_panel()
+
+
+# ---------------------------------------------------------------------------
+# Legacy page entry point (kept as a compatibility wrapper)
 # ---------------------------------------------------------------------------
 
 def render_procurement_intelligence_page() -> None:
@@ -1728,6 +2085,14 @@ def _run_pse5b_cached(workbook_path: str, today_str: str) -> dict:
         from procurement_orchestrator import run_orchestration
         from procurement_scenario_engine import run_pse5a
         from procurement_decision_engine import generate_executive_report
+        from procurement_position_engine import assess_position
+        from procurement_target_engine import define_strategy_target
+        from procurement_gap_engine import analyze_gap
+        from procurement_optimization_engine import optimize_portfolio
+        from procurement_market_engine import assess_market_opportunity
+        from procurement_strategy_assessment_engine import assess_strategy
+        from procurement_execution_planning_engine import build_execution_plan
+        from procurement_impact_engine import interpret_impact
 
         _today = _date.fromisoformat(today_str)
 
@@ -1750,10 +2115,31 @@ def _run_pse5b_cached(workbook_path: str, today_str: str) -> dict:
             imported_status=_so.imported_status,
         )
 
+        # PSE-3.6 execution plan: reuse the same orchestration result.  Every
+        # value exposed below is produced by an engine layer; the dashboard
+        # only serialises and presents it.
+        _position = assess_position(_so, as_of=_today)
+        _target = define_strategy_target(as_of=_today)
+        _gap = analyze_gap(_position, _target)
+        _portfolio = optimize_portfolio(_position, _target, _gap)
+        _market = assess_market_opportunity(
+            market_price_inputs=_sr.price_inputs_used,
+            as_of=_today,
+        )
+        _strategy = assess_strategy(_portfolio, _market, as_of=_today)
+        _execution_plan = build_execution_plan(
+            _position, _portfolio, _market, _strategy, as_of=_today
+        )
+        _impact = interpret_impact(
+            _execution_plan, _strategy, _portfolio, _market, _position, as_of=_today
+        )
+
         return {
             "ok": True,
             "report":   _er.to_dict(),
             "scenario": _sr.to_dict(),
+            "execution_plan": _execution_plan.to_dict(),
+            "decision_impact": _impact.to_dict(),
             "inventory": {
                 "local_inventory_tons":    float(_so.local_inventory_tons),
                 "imported_inventory_tons": float(_so.imported_inventory_tons),

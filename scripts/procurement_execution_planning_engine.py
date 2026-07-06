@@ -77,7 +77,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -137,6 +137,7 @@ class ProcurementEvent:
     confidence_score: float
     confidence_level: str
     reasoning_chain: tuple[str, ...]
+    deferred_quantity_tons: float
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,17 @@ class ProcurementExecutionPlan:
     market_data_quality_flags: tuple[str, ...]
     strategy_data_quality_flags: tuple[str, ...]
     data_quality_flags: tuple[str, ...]
+
+    recommended_strategy: str
+    strategy_reason: str
+    immediate_quantity_tons: float
+    deferred_quantity_tons: float
+    opportunity_window: str
+    risk_if_delayed: str
+    review_trigger: str
+    next_review_date: str
+    alternative_strategy_considered: str
+    alternative_rejection_reason: str
 
     def to_dict(self) -> dict:
         return _tuples_to_lists(asdict(self))
@@ -300,6 +312,62 @@ def _determine_execution_window(
     return "FUTURE_OPPORTUNITY", 7
 
 
+# Fraction of discretionary volume to execute immediately during PHASED
+# procurement, keyed by (forecast_direction, forecast_confidence).
+# Mandatory reorder coverage is never part of this fraction -- it is always
+# immediate regardless of market direction (survival > timing).
+# Engineering defaults: candidates for business sign-off.
+_PHASED_FRACTION_BY_MARKET: dict[tuple[str, str], float] = {
+    ("PRICE_RISING",  "HIGH"):   0.65,   # prices clearly rising -- act sooner
+    ("PRICE_RISING",  "MEDIUM"): 0.50,
+    ("PRICE_RISING",  "LOW"):    0.50,
+    ("PRICE_NEUTRAL", "HIGH"):   0.40,
+    ("PRICE_NEUTRAL", "MEDIUM"): 0.40,
+    ("PRICE_NEUTRAL", "LOW"):    0.40,
+    ("PRICE_FALLING", "HIGH"):   0.20,   # prices clearly falling -- wait
+    ("PRICE_FALLING", "MEDIUM"): 0.30,
+    ("PRICE_FALLING", "LOW"):    0.35,
+}
+_PHASED_FRACTION_DEFAULT = 0.40          # used when data quality is UNAVAILABLE
+
+
+def _phased_discretionary_fraction(market: Optional[MarketOpportunitySnapshot]) -> float:
+    """Return the immediate fraction of discretionary volume for PHASED execution.
+
+    When market data is unavailable, returns the neutral default so the
+    engine never makes a more aggressive split based on missing evidence.
+    """
+    if market is None or market.market_data_quality == "UNAVAILABLE":
+        return _PHASED_FRACTION_DEFAULT
+    key = (market.forecast_direction, market.forecast_confidence)
+    return _PHASED_FRACTION_BY_MARKET.get(key, _PHASED_FRACTION_DEFAULT)
+
+
+def _split_quantity_for_strategy(
+    total_quantity: float,
+    mandatory_quantity: float,
+    execution_bias: str,
+    market: Optional[MarketOpportunitySnapshot] = None,
+) -> tuple[float, float]:
+    """Translate strategic intent into immediate and deferred tranches.
+
+    Mandatory reorder coverage is never deferred.  Only the discretionary
+    amount above that floor may be phased or postponed, and the fraction
+    that goes immediately depends on market direction when the bias is PHASED.
+    """
+    mandatory = min(total_quantity, max(0.0, mandatory_quantity))
+    discretionary = max(0.0, total_quantity - mandatory)
+    if execution_bias == "IMMEDIATE":
+        immediate = total_quantity
+    elif execution_bias == "PHASED":
+        fraction = _phased_discretionary_fraction(market)
+        immediate = mandatory + (discretionary * fraction)
+    else:  # WAIT / DEFER_DISCRETIONARY
+        immediate = mandatory
+    immediate = round(min(total_quantity, immediate), 2)
+    return immediate, round(total_quantity - immediate, 2)
+
+
 # ===========================================================================
 # EVENT CONSTRUCTION
 # ===========================================================================
@@ -307,6 +375,7 @@ def _determine_execution_window(
 def _build_event(
     source: str,
     quantity_tons: float,
+    deferred_quantity_tons: float,
     quantity_facts: dict,
     cap_flags: list[str],
     position: PositionSnapshot,
@@ -329,7 +398,8 @@ def _build_event(
 
     driver = "mandatory reorder shortfall" if quantity_facts["mandatory_qty_tons"] >= quantity_facts["mix_correction_tons"] else "portfolio mix correction"
     reason = (
-        f"{source.title()} procurement of {quantity_tons:,.2f} tons driven by {driver} "
+        f"{source.title()} procurement: {quantity_tons:,.2f} tons now and "
+        f"{deferred_quantity_tons:,.2f} tons deferred, driven by {driver} "
         f"(mandatory={quantity_facts['mandatory_qty_tons']:,.2f}t, "
         f"mix_correction={quantity_facts['mix_correction_tons']:,.2f}t); "
         f"window={window} (rule {window_rule}); strategy posture={strategy.overall_procurement_posture}."
@@ -380,6 +450,7 @@ def _build_event(
         confidence_score=strategy.strategy_confidence_score,
         confidence_level=strategy.strategy_confidence_level,
         reasoning_chain=reasoning_chain,
+        deferred_quantity_tons=deferred_quantity_tons,
     )
 
 
@@ -414,6 +485,7 @@ def _sequence_events(events: list[ProcurementEvent]) -> list[ProcurementEvent]:
                 dependencies=tuple(preceding_ids), constraint_validation=ev.constraint_validation,
                 confidence_score=ev.confidence_score, confidence_level=ev.confidence_level,
                 reasoning_chain=ev.reasoning_chain,
+                deferred_quantity_tons=ev.deferred_quantity_tons,
             )
         )
         preceding_ids = preceding_ids + [ev.event_id]
@@ -484,11 +556,18 @@ def build_execution_plan(
     local_qty, imported_qty, cap_flags = _apply_caps(local_facts, imported_facts, position)
     flags.extend(cap_flags)
 
+    local_now, local_deferred = _split_quantity_for_strategy(
+        local_qty, local_facts["mandatory_qty_tons"], strategy.execution_bias, market
+    )
+    imported_now, imported_deferred = _split_quantity_for_strategy(
+        imported_qty, imported_facts["mandatory_qty_tons"], strategy.execution_bias, market
+    )
+
     events: list[ProcurementEvent] = []
     if local_qty > 0:
-        events.append(_build_event(SOURCE_LOCAL, local_qty, local_facts, cap_flags, position, portfolio, market, strategy))
+        events.append(_build_event(SOURCE_LOCAL, local_now, local_deferred, local_facts, cap_flags, position, portfolio, market, strategy))
     if imported_qty > 0:
-        events.append(_build_event(SOURCE_IMPORTED, imported_qty, imported_facts, cap_flags, position, portfolio, market, strategy))
+        events.append(_build_event(SOURCE_IMPORTED, imported_now, imported_deferred, imported_facts, cap_flags, position, portfolio, market, strategy))
 
     events = _sequence_events(events)
     execution_sequence = tuple(ev.event_id for ev in events)
@@ -496,17 +575,19 @@ def build_execution_plan(
     total_local = round(sum(ev.planned_quantity_tons for ev in events if ev.source == SOURCE_LOCAL), 2)
     total_imported = round(sum(ev.planned_quantity_tons for ev in events if ev.source == SOURCE_IMPORTED), 2)
     total_planned = round(total_local + total_imported, 2)
+    total_deferred = round(sum(ev.deferred_quantity_tons for ev in events), 2)
+    total_recommended = round(total_planned + total_deferred, 2)
 
     if not events:
         flags.append("NO_PROCUREMENT_EVENTS_REQUIRED")
 
     constraint_validation = dict(strategy.constraint_validation)
     constraint_validation["planned_quantity_within_storage_capacity"] = (
-        "SATISFIED" if total_planned <= max(0.0, position.remaining_storage_capacity_tons) + 0.01 else "BREACHED"
+        "SATISFIED" if total_recommended <= max(0.0, position.remaining_storage_capacity_tons) + 0.01 else "BREACHED"
     )
     if position.remaining_procurement_tons is not None:
         constraint_validation["planned_quantity_within_annual_target"] = (
-            "SATISFIED" if total_planned <= max(0.0, position.remaining_procurement_tons) + 0.01 else "BREACHED"
+            "SATISFIED" if total_recommended <= max(0.0, position.remaining_procurement_tons) + 0.01 else "BREACHED"
         )
     else:
         constraint_validation["planned_quantity_within_annual_target"] = "UNAVAILABLE"
@@ -519,10 +600,21 @@ def build_execution_plan(
         planning_confidence_score = round(max(0.0, planning_confidence_score - 5.0), 2)
         flags.append("PLANNING_CONFIDENCE_REDUCED_BY_CAPPING")
     planning_confidence_level = strategy.strategy_confidence_level
+    opportunity_window = "DEFERRED_OPPORTUNITY" if total_deferred > 0 else (
+        events[0].preferred_execution_window if events else "NEXT_PLANNING_CYCLE"
+    )
+    mandatory_total = round(
+        min(local_qty, local_facts["mandatory_qty_tons"])
+        + min(imported_qty, imported_facts["mandatory_qty_tons"]),
+        2,
+    )
+    risk_if_delayed = "HIGH" if mandatory_total > 0 else strategy.delay_risk
+    review_days = 7 if mandatory_total > 0 or strategy.execution_bias == "IMMEDIATE" else 30
+    next_review_date = (as_of + timedelta(days=review_days)).isoformat()
 
     plan_summary = (
-        f"{strategy.overall_procurement_posture}: {len(events)} procurement event(s) "
-        f"totaling {total_planned:,.2f} tons (local={total_local:,.2f}t, imported={total_imported:,.2f}t)."
+        f"{strategy.recommended_strategy}: buy {total_planned:,.2f} tons now and "
+        f"defer {total_deferred:,.2f} tons across {len(events)} procurement event(s)."
         if events else
         f"{strategy.overall_procurement_posture}: no procurement events required at this time."
     )
@@ -560,6 +652,16 @@ def build_execution_plan(
             + tuple(strategy.data_quality_flags)
         ),
         data_quality_flags=tuple(flags),
+        recommended_strategy=strategy.recommended_strategy,
+        strategy_reason=strategy.strategy_reason,
+        immediate_quantity_tons=total_planned,
+        deferred_quantity_tons=total_deferred,
+        opportunity_window=opportunity_window,
+        risk_if_delayed=risk_if_delayed,
+        review_trigger=strategy.review_trigger,
+        next_review_date=next_review_date,
+        alternative_strategy_considered=strategy.alternative_strategy_considered,
+        alternative_rejection_reason=strategy.alternative_rejection_reason,
     )
 
 

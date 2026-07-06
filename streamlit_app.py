@@ -23,6 +23,10 @@ sys.path.append(str(Path(__file__).parent / "scripts"))
 from processing.units import ton_to_kg, kg_to_ton_price, LB_PER_MAUND, KG_PER_TON
 from procurement_dashboard import (
     render_procurement_intelligence_page,
+    render_procurement_decision_page,
+    render_procurement_plan_page,
+    render_procurement_analytics_page,
+    render_procurement_settings_page,
     render_exec_procurement_header,
     render_exec_procurement_header_v2,
     load_procurement_strategy,
@@ -8417,10 +8421,8 @@ def main():
     # Inactive pages = st.button() styled as nav items via CSS.
 
     _NAV_STRUCTURE = [
-        ("Command", ["Executive Summary"]),
-        ("Markets", ["International Market", "Pakistan Market", "Market Intelligence"]),
-        ("Forecasting", ["AI Predictions"]),
-        ("Procurement", ["Procurement Intelligence"]),
+        ("Workspace", ["Procurement Decision", "Market Intelligence",
+                       "Procurement Plan", "Analytics", "Settings"]),
     ]
     _NAV_ITEMS = {
         "Executive Summary": {
@@ -8460,10 +8462,37 @@ def main():
             "hint": "Coverage and timing",
         },
     }
+    _NAV_ITEMS.update({
+        "Procurement Decision": {
+            "icon": ":material/business_center:", "symbol": "D",
+            "label": "Procurement Decision", "hint": "Today's recommended action",
+        },
+        "Procurement Plan": {
+            "icon": ":material/shopping_cart:", "symbol": "P",
+            "label": "Procurement Plan", "hint": "Events, sequence and timing",
+        },
+        "Analytics": {
+            "icon": ":material/monitoring:", "symbol": "A",
+            "label": "Analytics", "hint": "Supporting analysis",
+        },
+        "Settings": {
+            "icon": ":material/settings:", "symbol": "S",
+            "label": "Settings", "hint": "Scenarios and controls",
+        },
+    })
 
     # State initialisation
     if "current_page" not in st.session_state:
-        st.session_state["current_page"] = "Executive Summary"
+        st.session_state["current_page"] = "Procurement Decision"
+    _legacy_page_map = {
+        "Executive Summary": "Procurement Decision",
+        "Procurement Intelligence": "Procurement Decision",
+        "International Market": "Market Intelligence",
+        "Pakistan Market": "Market Intelligence",
+        "AI Predictions": "Analytics",
+    }
+    if st.session_state["current_page"] in _legacy_page_map:
+        st.session_state["current_page"] = _legacy_page_map[st.session_state["current_page"]]
     if "nav_collapsed" not in st.session_state:
         st.session_state["nav_collapsed"] = False
 
@@ -8662,17 +8691,48 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-    if current_page == "Executive Summary":
+    # Market Intelligence keeps the proven market renderers and reorganises
+    # them beneath one business page instead of three sidebar destinations.
+    effective_page = current_page
+    if current_page == "Market Intelligence":
+        market_scope = st.radio(
+            "Market view",
+            ["Global Markets", "Pakistan Market", "Signals & Events"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="market_intelligence_scope",
+        )
+        effective_page = {
+            "Global Markets": "International Market",
+            "Pakistan Market": "Pakistan Market",
+            "Signals & Events": "Market Intelligence",
+        }[market_scope]
+
+    if current_page == "Procurement Decision":
+        render_procurement_decision_page()
+
+    elif current_page == "Procurement Plan":
+        render_procurement_plan_page()
+
+    elif current_page == "Analytics":
+        render_procurement_analytics_page()
+        with st.expander("Forecast model validation and supporting predictions"):
+            render_ai_predictions_page()
+
+    elif current_page == "Settings":
+        render_procurement_settings_page()
+
+    elif current_page == "Executive Summary":
         render_executive_summary()
 
-    elif current_page == "International Market":
+    elif effective_page == "International Market":
         render_market_page(
             INTERNATIONAL_COMMODITIES,
             "International Market Indicators",
             "Global benchmarks for trend analysis and strategic planning"
         )
 
-    elif current_page == "Pakistan Market":
+    elif effective_page == "Pakistan Market":
         # Show live data section with predictions
         st.markdown("### 💹 Live Market Data & Forecasts")
         
@@ -8859,7 +8919,7 @@ def main():
                 with cols[idx]:
                     render_pending_data_card(name, info)
     
-    elif current_page == "Market Intelligence":
+    elif effective_page == "Market Intelligence":
         render_intelligence_page(events)
 
     elif current_page == "Procurement Intelligence":
