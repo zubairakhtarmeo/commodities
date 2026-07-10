@@ -2048,10 +2048,71 @@ def render_procurement_intelligence_page() -> None:
 # ===========================================================================
 
 def _build_default_repository():
-    """Build the default inventory repository for this deployment."""
-    from procurement_data_repository import WorkbookInventoryRepository
+    """Repository factory — selects the correct backend for this deployment.
+
+    Priority:
+        1. Supabase  — when st.secrets contains SUPABASE_URL and
+                       SUPABASE_SERVICE_ROLE_KEY (Streamlit Cloud / production).
+        2. Workbook  — when data/strategy/Strategies.xlsx exists on disk
+                       (local development / pipeline runner).
+        3. Neither   — returns a stub repository whose get_snapshot() raises
+                       RepositoryUnavailableError so ProcurementRuntimeService
+                       surfaces is_available=False without crashing the app.
+
+    The fallback NEVER raises here; the error propagates inside RuntimeService.run()
+    so to_legacy_dict() returns {"ok": False, "error": "..."} and every dashboard
+    section renders its unavailable state rather than showing a Streamlit traceback.
+    """
+    from procurement_data_repository import (
+        ProcurementInventoryRepository,
+        WorkbookInventoryRepository,
+        SupabaseInventoryRepository,
+        RepositoryHealth,
+        RepositoryUnavailableError,
+    )
+
+    # ── 1. Supabase (production / Streamlit Cloud) ───────────────────────────
+    try:
+        url = st.secrets.get("SUPABASE_URL", "") or ""
+        key = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "") or ""
+        if url and key:
+            return SupabaseInventoryRepository(url=url, key=key)
+    except Exception:
+        # st.secrets unavailable (e.g. local dev without secrets.toml); fall through
+        pass
+
+    # ── 2. Workbook (local development) ─────────────────────────────────────
     _workbook_path = _PROJECT_ROOT / "data" / "strategy" / "Strategies.xlsx"
-    return WorkbookInventoryRepository(_workbook_path)
+    if _workbook_path.exists():
+        return WorkbookInventoryRepository(_workbook_path)
+
+    # ── 3. No backend available — return a stub so the error flows through
+    #        RuntimeService.run() as is_available=False, not a Streamlit crash.
+    _workbook_path_str = str(_workbook_path)
+
+    class _NoBackendRepository(ProcurementInventoryRepository):
+        _msg = (
+            "No inventory backend is configured for this deployment. "
+            "Production: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Streamlit secrets. "
+            f"Development: place Strategies.xlsx at {_workbook_path_str}"
+        )
+
+        def get_snapshot(self, as_of=None):
+            raise RepositoryUnavailableError(self._msg)
+
+        def health(self):
+            return RepositoryHealth(
+                backend="unavailable",
+                status="unavailable",
+                is_available=False,
+                last_refresh=None,
+                latency_ms=None,
+                record_count=None,
+                freshness_hours=None,
+                message=self._msg,
+            )
+
+    return _NoBackendRepository()
 
 
 def _build_runtime_service():
