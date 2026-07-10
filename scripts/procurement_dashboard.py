@@ -1614,11 +1614,8 @@ def _load_execution_plan_for_display() -> tuple[dict, dict, str]:
     Returns empty dicts when the workbook is absent or the pipeline fails so
     callers never need to guard against None.
     """
-    if not _PSE6A_WORKBOOK.exists():
-        return {}, {}, "Inventory workbook unavailable"
-
     today_str = datetime.date.today().isoformat()
-    result = _run_pse5b_cached(str(_PSE6A_WORKBOOK), today_str)
+    result = _run_pse5b_cached(today_str)
     if not result.get("ok"):
         return {}, {}, result.get("error", "Execution plan unavailable")
     return (
@@ -2050,7 +2047,18 @@ def render_procurement_intelligence_page() -> None:
 # No quantities are recomputed here — display layer only.
 # ===========================================================================
 
-_PSE6A_WORKBOOK = _PROJECT_ROOT / "data" / "strategy" / "Strategies.xlsx"
+def _build_default_repository():
+    """Build the default inventory repository for this deployment."""
+    from procurement_data_repository import WorkbookInventoryRepository
+    _workbook_path = _PROJECT_ROOT / "data" / "strategy" / "Strategies.xlsx"
+    return WorkbookInventoryRepository(_workbook_path)
+
+
+def _build_runtime_service():
+    """Return a configured ProcurementRuntimeService."""
+    from procurement_runtime_service import ProcurementRuntimeService
+    return ProcurementRuntimeService(_build_default_repository())
+
 
 _U_COLOR = {
     "CRITICAL": ("#dc2626", "#fef2f2", "#fca5a5"),  # (text, bg, border)
@@ -2073,86 +2081,17 @@ _FI_COLOR = {
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def _run_pse5b_cached(workbook_path: str, today_str: str) -> dict:
+def _run_pse5b_cached(today_str: str) -> dict:
     """Single shared cache for the full PSE pipeline.  Cached 30 min.
 
-    Performs ONE workbook read and shares the result across PSE-6A, PSE-6B,
-    and PSE-7A via the 'report', 'scenario', and 'inventory' keys so that no
-    downstream caller needs to re-read the workbook.
+    Delegates to ProcurementRuntimeService.run() and converts the result to
+    the legacy dict format so all dashboard rendering helpers work unchanged.
+    The dashboard never imports a repository or calls an engine directly.
     """
-    try:
-        from datetime import date as _date
-        from procurement_orchestrator import run_orchestration
-        from procurement_scenario_engine import run_pse5a
-        from procurement_decision_engine import generate_executive_report
-        from procurement_position_engine import assess_position
-        from procurement_target_engine import define_strategy_target
-        from procurement_gap_engine import analyze_gap
-        from procurement_optimization_engine import optimize_portfolio
-        from procurement_market_engine import assess_market_opportunity
-        from procurement_strategy_assessment_engine import assess_strategy
-        from procurement_execution_planning_engine import build_execution_plan
-        from procurement_impact_engine import interpret_impact
-
-        _today = _date.fromisoformat(today_str)
-
-        # Single workbook read for the entire dashboard session
-        _orch = run_orchestration(workbook_path=workbook_path)
-        _so   = _orch["strategy_output"]
-
-        # PSE-5A: reuses the already-loaded orch (no second workbook read)
-        _sr = run_pse5a(
-            workbook_path=workbook_path,
-            live_prices=False,
-            today=_today,
-            _orch=_orch,
-        )
-
-        # PSE-5B executive layer: pure computation, no I/O
-        _er = generate_executive_report(
-            scenario_report=_sr,
-            local_status=_so.local_status,
-            imported_status=_so.imported_status,
-        )
-
-        # PSE-3.6 execution plan: reuse the same orchestration result.  Every
-        # value exposed below is produced by an engine layer; the dashboard
-        # only serialises and presents it.
-        _position = assess_position(_so, as_of=_today)
-        _target = define_strategy_target(as_of=_today)
-        _gap = analyze_gap(_position, _target)
-        _portfolio = optimize_portfolio(_position, _target, _gap)
-        _market = assess_market_opportunity(
-            market_price_inputs=_sr.price_inputs_used,
-            as_of=_today,
-        )
-        _strategy = assess_strategy(_portfolio, _market, as_of=_today)
-        _execution_plan = build_execution_plan(
-            _position, _portfolio, _market, _strategy, as_of=_today
-        )
-        _impact = interpret_impact(
-            _execution_plan, _strategy, _portfolio, _market, _position, as_of=_today
-        )
-
-        return {
-            "ok": True,
-            "report":   _er.to_dict(),
-            "scenario": _sr.to_dict(),
-            "execution_plan": _execution_plan.to_dict(),
-            "decision_impact": _impact.to_dict(),
-            "inventory": {
-                "local_inventory_tons":    float(_so.local_inventory_tons),
-                "imported_inventory_tons": float(_so.imported_inventory_tons),
-                "total_inventory_tons":    float(_so.total_inventory_tons),
-                "local_status":            _so.local_status,
-                "imported_status":         _so.imported_status,
-                "local_days_cover":        float(_so.local_days_cover),
-                "imported_days_cover":     float(_so.imported_days_cover),
-            },
-        }
-    except Exception as exc:
-        import traceback
-        return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
+    from datetime import date as _date
+    svc = _build_runtime_service()
+    result = svc.run(as_of=_date.fromisoformat(today_str))
+    return result.to_legacy_dict()
 
 
 def _badge(text: str, text_color: str, bg: str, border: str, size: str = "0.72rem") -> str:
@@ -2549,33 +2488,17 @@ def render_pse6a_executive_panel() -> None:
     _EXEC_JSON = _PROJECT_ROOT / "reports" / "executive_decision.json"
 
     # ── Resolve data source ──────────────────────────────────────────────────
-    workbook = str(_PSE6A_WORKBOOK) if _PSE6A_WORKBOOK.exists() else None
+    today_str = _dt.date.today().isoformat()
     er = None
     caption_suffix = ""
 
-    if workbook:
-        # ── Local path: live workbook via PSE-5B ─────────────────────────────
-        today_str = _dt.date.today().isoformat()
+    with st.spinner("Loading procurement decision engine…"):
+        result = _run_pse5b_cached(today_str)
 
-        with st.spinner("Loading procurement decision engine…"):
-            result = _run_pse5b_cached(workbook, today_str)
-
-        if not result.get("ok"):
-            err = result.get("error", "Unknown error")
-            st.error(
-                f"**PSE-5B pipeline error.**  \n"
-                f"The decision engine could not run.  \n\n"
-                f"```\n{err}\n```"
-            )
-            st.caption(
-                "Check that `data/strategy/Strategies.xlsx` is current and the "
-                "procurement engine dependencies are installed."
-            )
-            return
-
+    if result.get("ok"):
+        # ── Live path: Runtime Service produced a result ─────────────────────
         er = result["report"]
         caption_suffix = (
-            f"Data: {_PSE6A_WORKBOOK.name}  ·  "
             f"Refreshed: {today_str}  ·  Cache TTL: 30 min"
         )
 
@@ -2591,7 +2514,6 @@ def render_pse6a_executive_panel() -> None:
             )
         except Exception:
             pass
-
     else:
         # ── Cloud path: fall back to cached JSON snapshot ────────────────────
         if _EXEC_JSON.exists():
@@ -2693,13 +2615,12 @@ def _pse6b_load_defaults() -> dict:
 _PSE6B_PROD_DEFAULTS = _pse6b_load_defaults()
 
 
-def _pse6b_get_prod_so(workbook_path: str, today_str: str) -> dict:
+def _pse6b_get_prod_so(today_str: str) -> dict:
     """Return inventory/status data from the shared PSE-5B cache.
 
-    No workbook read here — data is extracted from _run_pse5b_cached() which
-    already holds it.  Not separately cached because there is no I/O cost.
+    No I/O here — data comes from _run_pse5b_cached() which already holds it.
     """
-    result = _run_pse5b_cached(workbook_path, today_str)
+    result = _run_pse5b_cached(today_str)
     if not result.get("ok"):
         return {"ok": False, "error": result.get("error", "Pipeline error")}
     return {"ok": True, **result["inventory"]}
@@ -3360,28 +3281,20 @@ def render_pse6b_whatif_panel() -> None:
     """
     import datetime as _dt
 
-    workbook = str(_PSE6A_WORKBOOK) if _PSE6A_WORKBOOK.exists() else None
-    if not workbook:
-        st.info(
-            "Inventory workbook not found. "
-            "Expected: `data/strategy/Strategies.xlsx`"
-        )
-        return
-
     today_str = _dt.date.today().isoformat()
 
     with st.spinner("Loading production baseline…"):
-        prod_so = _pse6b_get_prod_so(workbook, today_str)
+        prod_so = _pse6b_get_prod_so(today_str)
 
     if not prod_so.get("ok"):
-        st.error(
-            f"**Could not load production data.**\n\n"
-            f"```\n{prod_so.get('error','Unknown error')}\n```"
+        st.info(
+            "Inventory data unavailable. "
+            "Verify the inventory workbook and refresh."
         )
         return
 
     with st.spinner("Loading production decisions…"):
-        prod_pse6a = _run_pse5b_cached(workbook, today_str)
+        prod_pse6a = _run_pse5b_cached(today_str)
 
     if not prod_pse6a.get("ok"):
         st.error(
@@ -3629,7 +3542,7 @@ def render_pse6b_whatif_panel() -> None:
     _pse6b_render_saved_scenarios()
 
     st.caption(
-        f"PSE-6B What-If Lab  ·  Production data: {_PSE6A_WORKBOOK.name}  ·  {today_str}  ·  "
+        f"PSE-6B What-If Lab  ·  Production data: live inventory  ·  {today_str}  ·  "
         f"Engine: PSE-5A/5B (simulation mode — production values unchanged)"
     )
 
@@ -3662,7 +3575,6 @@ _CAT_ICON = {
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _run_pse7a_cached(
-    workbook_path: str,
     today_str: str,
     best_sim_score: Optional[int] = None,
     prod_score: Optional[int] = None,
@@ -3670,14 +3582,14 @@ def _run_pse7a_cached(
     """Run PSE-7A monitoring pipeline.  Cached 15 min (fresher than PSE-6A).
 
     All upstream data (executive report, scenario report, inventory) is read
-    from _run_pse5b_cached() — no additional workbook read occurs here.
+    from _run_pse5b_cached() — no additional I/O occurs here.
     """
     try:
         from datetime import date as _date
         from procurement_monitoring_engine import generate_monitoring_report
 
         # All data comes from the shared 30-min cache — zero additional I/O
-        prod_result = _run_pse5b_cached(workbook_path, today_str)
+        prod_result = _run_pse5b_cached(today_str)
 
         if not prod_result.get("ok"):
             return {"ok": False, "error": prod_result.get("error")}
@@ -3939,14 +3851,6 @@ def render_pse7a_monitoring_panel() -> None:
     """
     import datetime as _dt
 
-    workbook = str(_PSE6A_WORKBOOK) if _PSE6A_WORKBOOK.exists() else None
-    if not workbook:
-        st.info(
-            "Inventory workbook not found. "
-            "Expected: `data/strategy/Strategies.xlsx`"
-        )
-        return
-
     today_str = _dt.date.today().isoformat()
 
     # Best saved simulation score from session state (optional)
@@ -3956,7 +3860,7 @@ def render_pse7a_monitoring_panel() -> None:
     if saved_sims:
         best_sim = max(s["score"] for s in saved_sims)
         # Compute a rough production score from PSE-6A report
-        prod_er = (_run_pse5b_cached(workbook, today_str) or {}).get("report", {})
+        prod_er = (_run_pse5b_cached(today_str) or {}).get("report", {})
         if prod_er:
             pc_l = _pse6b_score(prod_er.get("local", {}),    "Balanced")
             pc_i = _pse6b_score(prod_er.get("imported", {}), "Balanced")
@@ -3964,7 +3868,7 @@ def render_pse7a_monitoring_panel() -> None:
 
     with st.spinner("Running monitoring checks…"):
         result = _run_pse7a_cached(
-            workbook, today_str,
+            today_str,
             best_sim_score=best_sim,
             prod_score=prod_scr,
         )
